@@ -44,9 +44,9 @@ class DashboardDataViewModel extends StateNotifier<DashboardDataState> {
 
   final Ref _ref;
 
-  Future<void> load(AdminAccessProfile profile, {SalesDateFilter? filter}) async {
+  Future<void> load(AdminAccessProfile profile, {required SalesDateFilter filter}) async {
     final currentlyHasData = state.summary != null;
-    
+
     if (currentlyHasData) {
       state = state.copyWith(isRefreshing: true, clearError: false);
     } else {
@@ -56,15 +56,30 @@ class DashboardDataViewModel extends StateNotifier<DashboardDataState> {
     try {
       final summary = await _ref.read(dashboardDataServiceProvider).loadSummary(
         profile,
-        filter: filter ?? state.summary?.filter ?? SalesDateFilter.month,
+        filter: filter,
       );
-      state = state.copyWith(isLoading: false, isRefreshing: false, summary: summary, error: null);
+      state = state.copyWith(
+        isLoading: false,
+        isRefreshing: false,
+        summary: summary,
+        error: null,
+      );
     } catch (e) {
-      state = state.copyWith(isLoading: false, isRefreshing: false, error: 'No se pudo cargar el dashboard: $e');
+      state = state.copyWith(
+        isLoading: false,
+        isRefreshing: false,
+        error: 'No se pudo cargar el dashboard: $e',
+      );
     }
   }
 }
 
-final dashboardDataViewModelProvider = StateNotifierProvider<DashboardDataViewModel, DashboardDataState>(
+final dashboardHomeDataViewModelProvider =
+    StateNotifierProvider<DashboardDataViewModel, DashboardDataState>(
+  (ref) => DashboardDataViewModel(ref),
+);
+
+final salesDataViewModelProvider =
+    StateNotifierProvider<DashboardDataViewModel, DashboardDataState>(
   (ref) => DashboardDataViewModel(ref),
 );

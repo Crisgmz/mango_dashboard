@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../theme/theme_data_factory.dart';
 
 class DashboardTopSeller extends StatelessWidget {
-  const DashboardTopSeller({super.key, required this.seller});
+  const DashboardTopSeller({super.key, required this.seller, this.onTap});
 
   final TopSeller seller;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -15,7 +17,7 @@ class DashboardTopSeller extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final initial = seller.name.isNotEmpty ? seller.name[0].toUpperCase() : '?';
 
-    return Container(
+    final child = Container(
       width: double.infinity,
       padding: EdgeInsets.all(dpi.space(18)),
       decoration: BoxDecoration(
@@ -117,7 +119,7 @@ class DashboardTopSeller extends StatelessWidget {
                     ),
                     SizedBox(height: dpi.space(4)),
                     Text(
-                      '${seller.orderCount} órdenes atendidas',
+                      '${MangoFormatters.number(seller.orderCount)} órdenes atendidas',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -141,7 +143,7 @@ class DashboardTopSeller extends StatelessWidget {
                   Icon(Icons.attach_money_rounded, color: MangoThemeFactory.success, size: dpi.icon(20)),
                   SizedBox(width: dpi.space(4)),
                   Text(
-                    'RD\$ ${seller.totalSales.toStringAsFixed(2)}',
+                    MangoFormatters.currency(seller.totalSales),
                     style: TextStyle(
                       fontSize: dpi.font(18),
                       fontWeight: FontWeight.w800,
@@ -162,6 +164,17 @@ class DashboardTopSeller extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+
+    if (onTap == null) return child;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(dpi.radius(16)),
+        child: child,
       ),
     );
   }

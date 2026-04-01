@@ -1,10 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/di/providers.dart';
 import '../../../domain/auth/admin_access_profile.dart';
+
+const _keepSessionKey = 'keep_session';
 
 class AuthGateState {
   const AuthGateState({
@@ -62,6 +65,16 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
         return;
       }
 
+      // Si el usuario no quiso mantener sesión, cerrar al reabrir la app.
+      final prefs = await SharedPreferences.getInstance();
+      final keepSession = prefs.getBool(_keepSessionKey) ?? true;
+      if (!keepSession) {
+        await service.signOut();
+        await prefs.remove(_keepSessionKey);
+        state = const AuthGateState.initial().copyWith(isLoading: false);
+        return;
+      }
+
       final profile = await service.resolveCurrentAccess();
       state = AuthGateState(
         isLoading: false,
@@ -79,25 +92,17 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
     }
   }
 
-  Future<void> signIn({required String email, required String password}) async {
+  Future<void> signIn({required String email, required String password, bool keepSession = true}) async {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_keepSessionKey, keepSession);
       await _ref.read(adminAccessServiceProvider).signIn(email: email, password: password);
       await bootstrap();
     } on AuthException catch (e) {
-      state = AuthGateState(
-        isLoading: false,
-        isAuthenticated: false,
-        profile: null,
-        error: e.message,
-      );
+      state = state.copyWith(isLoading: false, error: e.message);
     } catch (e) {
-      state = AuthGateState(
-        isLoading: false,
-        isAuthenticated: false,
-        profile: null,
-        error: 'No se pudo iniciar sesión: $e',
-      );
+      state = state.copyWith(isLoading: false, error: 'No se pudo iniciar sesión: $e');
     }
   }
 

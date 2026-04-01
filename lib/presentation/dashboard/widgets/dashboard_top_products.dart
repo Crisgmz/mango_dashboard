@@ -1,20 +1,22 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../theme/theme_data_factory.dart';
 
 class DashboardTopProducts extends StatelessWidget {
-  const DashboardTopProducts({super.key, required this.products});
+  const DashboardTopProducts({super.key, required this.products, this.onTap});
 
   final List<TopProduct> products;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Container(
+    final child = Container(
       width: double.infinity,
       padding: EdgeInsets.all(dpi.space(18)),
       decoration: BoxDecoration(
@@ -71,6 +73,17 @@ class DashboardTopProducts extends StatelessWidget {
               return _ProductRow(product: product, rank: index + 1, isLast: index == products.length - 1);
             }),
         ],
+      ),
+    );
+
+    if (onTap == null) return child;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(dpi.radius(16)),
+        child: child,
       ),
     );
   }
@@ -141,7 +154,7 @@ class _ProductRow extends StatelessWidget {
                 ),
                 SizedBox(height: dpi.space(2)),
                 Text(
-                  '${product.quantity.toStringAsFixed(0)} vendidos',
+                  '${MangoFormatters.number(product.quantity.round())} vendidos',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: dpi.font(11)),
                 ),
               ],
@@ -153,7 +166,7 @@ class _ProductRow extends StatelessWidget {
             child: FittedBox(
               fit: BoxFit.scaleDown,
               child: Text(
-                'RD\$ ${product.amount.toStringAsFixed(2)}',
+                MangoFormatters.currency(product.amount),
                 style: TextStyle(
                   fontSize: dpi.font(13),
                   fontWeight: FontWeight.w700,

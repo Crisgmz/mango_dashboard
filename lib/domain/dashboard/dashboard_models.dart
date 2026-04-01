@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../auth/admin_access_profile.dart';
 
-enum SalesDateFilter { today, yesterday, week, month }
+enum SalesDateFilter { today, yesterday, week, month, lastMonth, last3Months }
 
 @immutable
 class DashboardSummary {
@@ -20,6 +20,8 @@ class DashboardSummary {
     this.hourlySales = const [],
     this.topSeller,
     this.filter = SalesDateFilter.month,
+    this.tickets = const [],
+    this.pendingTables = const [],
   });
 
   final AdminAccessProfile profile;
@@ -35,6 +37,8 @@ class DashboardSummary {
   final List<CatalogItem> catalogItems;
   final List<LiveOrderItem> liveOrders;
   final SalesDateFilter filter;
+  final List<TicketItem> tickets;
+  final List<PendingTable> pendingTables;
 
   double get salesChangePercent {
     if (previousDaySales == 0) return 0;
@@ -85,6 +89,40 @@ class CatalogItem {
   final String status;
   final double? price;
   final String? category;
+}
+
+@immutable
+class TicketItem {
+  const TicketItem({
+    required this.orderId,
+    required this.amount,
+    required this.createdAt,
+    this.tableName,
+    this.customerName,
+  });
+
+  final String orderId;
+  final double amount;
+  final DateTime createdAt;
+  final String? tableName;
+  final String? customerName;
+}
+
+@immutable
+class PendingTable {
+  const PendingTable({
+    required this.tableName,
+    required this.customerName,
+    required this.total,
+    required this.status,
+    required this.itemCount,
+  });
+
+  final String tableName;
+  final String customerName;
+  final double total;
+  final String status;
+  final int itemCount;
 }
 
 @immutable

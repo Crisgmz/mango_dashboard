@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/auth/role_mapper.dart';
+import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/auth/admin_access_profile.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
@@ -15,6 +16,7 @@ import '../widgets/dashboard_sales_chart.dart';
 import '../widgets/dashboard_skeleton.dart';
 import '../widgets/dashboard_top_products.dart';
 import '../widgets/dashboard_top_seller.dart';
+import 'kpi_detail_views.dart';
 
 class DashboardRootView extends ConsumerStatefulWidget {
   const DashboardRootView({super.key});
@@ -27,6 +29,11 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
   int _currentIndex = 0;
   String? _loadedBusinessId;
 
+  void _goToTab(int index) {
+    if (_currentIndex == index) return;
+    setState(() => _currentIndex = index);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -36,7 +43,8 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authGateViewModelProvider);
-    final dataState = ref.watch(dashboardDataViewModelProvider);
+    final homeDataState = ref.watch(dashboardHomeDataViewModelProvider);
+    final salesDataState = ref.watch(salesDataViewModelProvider);
     final themeMode = ref.watch(themeModeProvider);
 
     if (authState.isLoading) {
@@ -54,19 +62,34 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
 
     if (_loadedBusinessId != profile.businessId) {
       _loadedBusinessId = profile.businessId;
-      Future.microtask(() => ref.read(dashboardDataViewModelProvider.notifier).load(profile));
+      Future.microtask(() async {
+        await ref.read(dashboardHomeDataViewModelProvider.notifier).load(
+          profile,
+          filter: SalesDateFilter.today,
+        );
+        await ref.read(salesDataViewModelProvider.notifier).load(
+          profile,
+          filter: SalesDateFilter.month,
+        );
+      });
     }
 
     final pages = [
-      HomeView(profile: profile, dataState: dataState),
-      SalesView(dataState: dataState),
-      ItemsView(dataState: dataState),
-      OrdersView(dataState: dataState),
+      HomeView(
+        profile: profile,
+        dataState: homeDataState,
+        onOpenSales: () => _goToTab(1),
+        onOpenItems: () => _goToTab(2),
+        onOpenOrders: () => _goToTab(3),
+      ),
+      SalesView(profile: profile, dataState: salesDataState),
+      ItemsView(dataState: homeDataState),
+      OrdersView(dataState: homeDataState),
       SettingsView(themeMode: themeMode, profile: profile),
     ];
 
     return Scaffold(
-      appBar: dataState.isRefreshing
+      appBar: (_currentIndex == 0 ? homeDataState.isRefreshing : salesDataState.isRefreshing)
           ? PreferredSize(
               preferredSize: const Size.fromHeight(2),
               child: LinearProgressIndicator(
@@ -172,10 +195,20 @@ class AccessDeniedView extends ConsumerWidget {
 }
 
 class HomeView extends StatelessWidget {
-  const HomeView({super.key, required this.profile, required this.dataState});
+  const HomeView({
+    super.key,
+    required this.profile,
+    required this.dataState,
+    required this.onOpenSales,
+    required this.onOpenItems,
+    required this.onOpenOrders,
+  });
 
   final AdminAccessProfile profile;
   final DashboardDataState dataState;
+  final VoidCallback onOpenSales;
+  final VoidCallback onOpenItems;
+  final VoidCallback onOpenOrders;
 
   @override
   Widget build(BuildContext context) {
@@ -215,11 +248,28 @@ class HomeView extends StatelessWidget {
       children: [
         _HomeHeader(profile: profile),
         gap,
-        BusinessSelectorCard(profile: profile),
+        DashboardKpiCards(
+          summary: summary,
+          onSalesTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => SalesDetailView(summary: summary)),
+          ),
+          onOrdersTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => OrdersDetailView(summary: summary)),
+          ),
+          onPendingTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => PendingDetailView(summary: summary)),
+          ),
+          onAverageTicketTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => AverageTicketDetailView(summary: summary)),
+          ),
+        ),
         gap,
-        DashboardKpiCards(summary: summary),
-        gap,
-        DashboardSalesChart(hourlySales: summary.hourlySales),
+        DashboardSalesChart(
+          hourlySales: summary.hourlySales,
+          title: 'Ventas por hora',
+          subtitle: 'Flujo de ventas del día',
+          onTap: onOpenSales,
+        ),
         gap,
         LayoutBuilder(
           builder: (context, constraints) {
@@ -227,11 +277,19 @@ class HomeView extends StatelessWidget {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(child: DashboardTopProducts(products: summary.topProducts)),
+                  Expanded(
+                    child: DashboardTopProducts(
+                      products: summary.topProducts,
+                      onTap: onOpenItems,
+                    ),
+                  ),
                   SizedBox(width: dpi.space(14)),
                   Expanded(
                     child: summary.topSeller != null
-                        ? DashboardTopSeller(seller: summary.topSeller!)
+                        ? DashboardTopSeller(
+                            seller: summary.topSeller!,
+                            onTap: onOpenSales,
+                          )
                         : const EmptyStateCard(
                             title: 'Mejor vendedor',
                             message: 'Sin datos de vendedores aún.',
@@ -242,10 +300,16 @@ class HomeView extends StatelessWidget {
             }
             return Column(
               children: [
-                DashboardTopProducts(products: summary.topProducts),
+                DashboardTopProducts(
+                  products: summary.topProducts,
+                  onTap: onOpenItems,
+                ),
                 gap,
                 if (summary.topSeller != null)
-                  DashboardTopSeller(seller: summary.topSeller!)
+                  DashboardTopSeller(
+                    seller: summary.topSeller!,
+                    onTap: onOpenSales,
+                  )
                 else
                   const EmptyStateCard(
                     title: 'Mejor vendedor',
@@ -261,32 +325,75 @@ class HomeView extends StatelessWidget {
   }
 }
 
-class _HomeHeader extends StatelessWidget {
+class _HomeHeader extends ConsumerWidget {
   const _HomeHeader({required this.profile});
 
   final AdminAccessProfile profile;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final dpi = DpiScale.of(context);
     final greeting = _greetingByTime();
+    final hasMultiple = profile.memberships.length > 1;
+    final businessName = profile.branchName?.trim().isNotEmpty == true
+        ? profile.branchName!
+        : (profile.businessName ?? 'Sin nombre');
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(greeting, style: Theme.of(context).textTheme.bodySmall),
-                  SizedBox(height: dpi.space(2)),
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text(profile.userName, style: Theme.of(context).textTheme.headlineMedium),
+              child: InkWell(
+                onTap: hasMultiple ? () => _showBusinessSelector(context, ref) : null,
+                borderRadius: BorderRadius.circular(dpi.radius(12)),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: dpi.space(4)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        greeting,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.w500,
+                              color: MangoThemeFactory.mutedText(context),
+                            ),
+                      ),
+                      SizedBox(height: dpi.space(2)),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              profile.userName,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .headlineMedium
+                                  ?.copyWith(fontWeight: FontWeight.w900),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (hasMultiple) ...[
+                            SizedBox(width: dpi.space(4)),
+                            Icon(
+                              Icons.keyboard_arrow_down_rounded,
+                              color: MangoThemeFactory.mango,
+                              size: dpi.icon(24),
+                            ),
+                          ],
+                        ],
+                      ),
+                      Text(
+                        businessName,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              letterSpacing: 0.5,
+                            ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
             SizedBox(width: dpi.space(8)),
@@ -303,16 +410,22 @@ class _HomeHeader extends StatelessWidget {
             ),
           ],
         ),
-        SizedBox(height: dpi.space(4)),
-        Text(
-          profile.branchName?.trim().isNotEmpty == true
-              ? profile.branchName!
-              : (profile.businessName ?? 'Negocio sin nombre'),
-          style: Theme.of(context).textTheme.bodySmall,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
       ],
+    );
+  }
+
+  void _showBusinessSelector(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => _BusinessSelectorSheet(
+        profile: profile,
+        onSelected: (id) {
+          Navigator.pop(context);
+          ref.read(authGateViewModelProvider.notifier).switchBusiness(id);
+        },
+      ),
     );
   }
 
@@ -324,9 +437,111 @@ class _HomeHeader extends StatelessWidget {
   }
 }
 
-class SalesView extends ConsumerWidget {
-  const SalesView({super.key, required this.dataState});
+class _BusinessSelectorSheet extends StatelessWidget {
+  const _BusinessSelectorSheet({required this.profile, required this.onSelected});
+  final AdminAccessProfile profile;
+  final Function(String) onSelected;
 
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Container(
+      padding: EdgeInsets.all(dpi.space(22)),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(dpi.radius(28))),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Seleccionar Sucursal', style: Theme.of(context).textTheme.titleLarge),
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ],
+          ),
+          SizedBox(height: dpi.space(16)),
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              physics: const BouncingScrollPhysics(),
+              itemCount: profile.memberships.length,
+              itemBuilder: (context, index) {
+                final membership = profile.memberships[index];
+                final isSelected = membership.businessId == profile.businessId;
+                final name = membership.branchName?.trim().isNotEmpty == true
+                    ? membership.branchName!
+                    : (membership.businessName ?? 'Sin nombre');
+
+                return Padding(
+                  padding: EdgeInsets.only(bottom: dpi.space(10)),
+                  child: InkWell(
+                    onTap: () => onSelected(membership.businessId),
+                    borderRadius: BorderRadius.circular(dpi.radius(16)),
+                    child: Container(
+                      padding: EdgeInsets.all(dpi.space(16)),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? MangoThemeFactory.mango.withValues(alpha: 0.1)
+                            : MangoThemeFactory.cardColor(context),
+                        borderRadius: BorderRadius.circular(dpi.radius(16)),
+                        border: Border.all(
+                          color: isSelected
+                              ? MangoThemeFactory.mango
+                              : MangoThemeFactory.borderColor(context),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.storefront_rounded,
+                            color: isSelected ? MangoThemeFactory.mango : MangoThemeFactory.mutedText(context),
+                          ),
+                          SizedBox(width: dpi.space(14)),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name,
+                                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                        fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
+                                        color: isSelected ? MangoThemeFactory.mango : null,
+                                      ),
+                                ),
+                                Text(
+                                  membership.normalizedRole,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (isSelected)
+                            Icon(Icons.check_circle_rounded, color: MangoThemeFactory.mango),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          SizedBox(height: dpi.space(10)),
+        ],
+      ),
+    );
+  }
+}
+
+class SalesView extends ConsumerWidget {
+  const SalesView({super.key, required this.profile, required this.dataState});
+
+  final AdminAccessProfile profile;
   final DashboardDataState dataState;
 
   @override
@@ -377,33 +592,49 @@ class SalesView extends ConsumerWidget {
               _SalesFilterChip(
                 label: 'Hoy',
                 selected: summary.filter == SalesDateFilter.today,
-                onSelected: () => ref.read(dashboardDataViewModelProvider.notifier).load(
-                      dataState.summary!.profile,
+                onSelected: () => ref.read(salesDataViewModelProvider.notifier).load(
+                      profile,
                       filter: SalesDateFilter.today,
                     ),
               ),
               _SalesFilterChip(
                 label: 'Ayer',
                 selected: summary.filter == SalesDateFilter.yesterday,
-                onSelected: () => ref.read(dashboardDataViewModelProvider.notifier).load(
-                      dataState.summary!.profile,
+                onSelected: () => ref.read(salesDataViewModelProvider.notifier).load(
+                      profile,
                       filter: SalesDateFilter.yesterday,
                     ),
               ),
               _SalesFilterChip(
                 label: '7 días',
                 selected: summary.filter == SalesDateFilter.week,
-                onSelected: () => ref.read(dashboardDataViewModelProvider.notifier).load(
-                      dataState.summary!.profile,
+                onSelected: () => ref.read(salesDataViewModelProvider.notifier).load(
+                      profile,
                       filter: SalesDateFilter.week,
                     ),
               ),
               _SalesFilterChip(
                 label: 'Mes',
                 selected: summary.filter == SalesDateFilter.month,
-                onSelected: () => ref.read(dashboardDataViewModelProvider.notifier).load(
-                      dataState.summary!.profile,
+                onSelected: () => ref.read(salesDataViewModelProvider.notifier).load(
+                      profile,
                       filter: SalesDateFilter.month,
+                    ),
+              ),
+              _SalesFilterChip(
+                label: 'Mes Pasado',
+                selected: summary.filter == SalesDateFilter.lastMonth,
+                onSelected: () => ref.read(salesDataViewModelProvider.notifier).load(
+                      profile,
+                      filter: SalesDateFilter.lastMonth,
+                    ),
+              ),
+              _SalesFilterChip(
+                label: '90 días',
+                selected: summary.filter == SalesDateFilter.last3Months,
+                onSelected: () => ref.read(salesDataViewModelProvider.notifier).load(
+                      profile,
+                      filter: SalesDateFilter.last3Months,
                     ),
               ),
             ],
@@ -416,7 +647,7 @@ class SalesView extends ConsumerWidget {
             Expanded(
               child: _SmallKpi(
                 label: 'Ventas Totales',
-                value: _formatCurrency(summary.totalSales),
+                value: MangoFormatters.currency(summary.totalSales),
                 color: MangoThemeFactory.success,
               ),
             ),
@@ -424,7 +655,7 @@ class SalesView extends ConsumerWidget {
             Expanded(
               child: _SmallKpi(
                 label: 'Tickets',
-                value: summary.totalTickets.toString(),
+                value: MangoFormatters.number(summary.totalTickets),
                 color: MangoThemeFactory.info,
               ),
             ),
@@ -433,11 +664,11 @@ class SalesView extends ConsumerWidget {
         SizedBox(height: dpi.space(10)),
         _SmallKpi(
           label: 'Ticket Promedio',
-          value: _formatCurrency(summary.averageTicket),
+          value: MangoFormatters.currency(summary.averageTicket),
           color: MangoThemeFactory.mango,
         ),
         gap,
-        DashboardSalesChart(hourlySales: summary.hourlySales),
+        DashboardSalesChart(hourlySales: summary.hourlySales, title: 'Ventas por hora', subtitle: 'Flujo de ventas del día'),
         gap,
         Text('Rendimiento por Producto', style: Theme.of(context).textTheme.titleLarge),
         SizedBox(height: dpi.space(12)),
@@ -464,6 +695,8 @@ class _FilterBadge extends StatelessWidget {
       case SalesDateFilter.yesterday: label = 'Ayer'; break;
       case SalesDateFilter.week: label = '7 días'; break;
       case SalesDateFilter.month: label = 'Mensual'; break;
+      case SalesDateFilter.lastMonth: label = 'Mes Pasado'; break;
+      case SalesDateFilter.last3Months: label = 'Trimestral'; break;
     }
     return Container(
       padding: EdgeInsets.symmetric(horizontal: dpi.space(12), vertical: dpi.space(6)),
@@ -616,7 +849,7 @@ class _ProductSaleRow extends StatelessWidget {
               ),
               SizedBox(width: dpi.space(12)),
               Text(
-                _formatCurrency(product.amount),
+                MangoFormatters.currency(product.amount),
                 style: TextStyle(
                   fontSize: dpi.font(13),
                   fontWeight: FontWeight.w700,
@@ -757,7 +990,7 @@ class _ProductCard extends StatelessWidget {
           ),
           if (item.price != null)
             Text(
-              _formatCurrency(item.price!),
+              MangoFormatters.currency(item.price!),
               style: TextStyle(
                 fontSize: dpi.font(15),
                 fontWeight: FontWeight.w800,
@@ -845,7 +1078,7 @@ class _OrderCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    _formatCurrency(order.total),
+                    MangoFormatters.currency(order.total),
                     style: TextStyle(
                       fontSize: dpi.font(16),
                       fontWeight: FontWeight.w800,
@@ -940,7 +1173,7 @@ class _OrderDetailsSheet extends StatelessWidget {
                         child: Text(it.name, style: Theme.of(context).textTheme.titleSmall),
                       ),
                       Text(
-                        _formatCurrency(it.total),
+                        MangoFormatters.currency(it.total),
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                     ],
@@ -954,7 +1187,7 @@ class _OrderDetailsSheet extends StatelessWidget {
             children: [
               Text('Total de la Orden', style: Theme.of(context).textTheme.titleMedium),
               Text(
-                _formatCurrency(order.total),
+                MangoFormatters.currency(order.total),
                 style: TextStyle(fontSize: dpi.font(20), fontWeight: FontWeight.w900, color: MangoThemeFactory.mango),
               ),
             ],
@@ -1246,4 +1479,3 @@ class EmptyStateCard extends StatelessWidget {
   }
 }
 
-String _formatCurrency(double value) => 'RD\$ ${value.toStringAsFixed(2)}';

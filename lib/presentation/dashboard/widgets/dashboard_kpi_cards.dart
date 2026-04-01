@@ -1,13 +1,25 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../theme/theme_data_factory.dart';
 
 class DashboardKpiCards extends StatelessWidget {
-  const DashboardKpiCards({super.key, required this.summary});
+  const DashboardKpiCards({
+    super.key,
+    required this.summary,
+    this.onSalesTap,
+    this.onOrdersTap,
+    this.onPendingTap,
+    this.onAverageTicketTap,
+  });
 
   final DashboardSummary summary;
+  final VoidCallback? onSalesTap;
+  final VoidCallback? onOrdersTap;
+  final VoidCallback? onPendingTap;
+  final VoidCallback? onAverageTicketTap;
 
   @override
   Widget build(BuildContext context) {
@@ -16,7 +28,6 @@ class DashboardKpiCards extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        // More height on mobile (smaller ratio = taller card)
         final crossAxisCount = constraints.maxWidth > 600 ? 4 : 2;
         final childAspectRatio = constraints.maxWidth > 600 ? 1.6 : 1.05;
 
@@ -30,38 +41,42 @@ class DashboardKpiCards extends StatelessWidget {
           children: [
             _KpiCard(
               label: 'Ventas del día',
-              value: _formatCurrency(summary.totalSales),
+              value: MangoFormatters.currency(summary.totalSales),
               icon: Icons.trending_up_rounded,
               color: MangoThemeFactory.success,
               accentBackground: true,
               subtitle: changePercent == 0
                   ? 'Sin datos de ayer'
                   : '${isPositive ? '+' : ''}${changePercent.toStringAsFixed(1)}% vs ayer',
-              subtitleColor: isPositive ? Colors.white70 : Colors.white70,
+              subtitleColor: Colors.white70,
+              onTap: onSalesTap,
             ),
             _KpiCard(
               label: 'Órdenes',
-              value: summary.totalTickets.toString(),
+              value: MangoFormatters.number(summary.totalTickets),
               icon: Icons.receipt_long_rounded,
               color: MangoThemeFactory.mango,
               accentBackground: true,
-              subtitle: '${summary.activeOrders} activas',
+              subtitle: '${MangoFormatters.number(summary.activeOrders)} activas',
+              onTap: onOrdersTap,
             ),
             _KpiCard(
               label: 'Por Cobrar',
-              value: _formatCurrency(summary.pendingAmount),
+              value: MangoFormatters.currency(summary.pendingAmount),
               icon: Icons.schedule_rounded,
               color: MangoThemeFactory.warning,
               accentBackground: false,
-              subtitle: '${summary.activeOrders} abiertas',
+              subtitle: '${MangoFormatters.number(summary.activeOrders)} abiertas',
+              onTap: onPendingTap,
             ),
             _KpiCard(
               label: 'Ticket Promedio',
-              value: _formatCurrency(summary.averageTicket),
+              value: MangoFormatters.currency(summary.averageTicket),
               icon: Icons.shopping_bag_rounded,
               color: MangoThemeFactory.info,
               accentBackground: false,
               subtitle: 'Por completada',
+              onTap: onAverageTicketTap,
             ),
           ],
         );
@@ -79,6 +94,7 @@ class _KpiCard extends StatelessWidget {
     required this.accentBackground,
     this.subtitle,
     this.subtitleColor,
+    this.onTap,
   });
 
   final String label;
@@ -88,6 +104,7 @@ class _KpiCard extends StatelessWidget {
   final bool accentBackground;
   final String? subtitle;
   final Color? subtitleColor;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -103,7 +120,7 @@ class _KpiCard extends StatelessWidget {
         : color.withValues(alpha: isDark ? 0.2 : 0.12);
     final iconColor = accentBackground ? Colors.white : color;
 
-    return Container(
+    final content = Container(
       padding: EdgeInsets.symmetric(horizontal: dpi.space(16), vertical: dpi.space(14)),
       decoration: BoxDecoration(
         color: cardBg,
@@ -174,7 +191,16 @@ class _KpiCard extends StatelessWidget {
         ],
       ),
     );
+
+    if (onTap == null) return content;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(dpi.radius(16)),
+        child: content,
+      ),
+    );
   }
 }
-
-String _formatCurrency(double value) => 'RD\$ ${value.toStringAsFixed(2)}';

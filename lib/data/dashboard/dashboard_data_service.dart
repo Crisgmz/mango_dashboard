@@ -63,6 +63,18 @@ class DashboardDataService {
         prevStart = DateTime(now.year, now.month - 1, 1);
         prevEnd = start;
         break;
+      case SalesDateFilter.lastMonth:
+        start = DateTime(now.year, now.month - 1, 1);
+        end = DateTime(now.year, now.month, 1);
+        prevStart = DateTime(now.year, now.month - 2, 1);
+        prevEnd = start;
+        break;
+      case SalesDateFilter.last3Months:
+        start = DateTime(now.year, now.month - 3, 1);
+        end = DateTime(now.year, now.month + 1, 1);
+        prevStart = DateTime(now.year, now.month - 6, 1);
+        prevEnd = start;
+        break;
     }
 
     final periodStart = start.toUtc().toIso8601String();
@@ -101,13 +113,21 @@ class DashboardDataService {
 
     double totalSales = 0;
     int totalTickets = 0;
+    final tickets = <TicketItem>[];
     for (final row in paymentRows) {
       if (!scopedOrderIds.contains(row['order_id']?.toString())) continue;
       final status = row['status']?.toString();
       if (status == 'void' || status == 'cancelled') continue;
-      totalSales += _netAmount(row['amount'], row['change_amount']);
+      final net = _netAmount(row['amount'], row['change_amount']);
+      totalSales += net;
       totalTickets += 1;
+      tickets.add(TicketItem(
+        orderId: row['order_id']?.toString() ?? '',
+        amount: net,
+        createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+      ));
     }
+    tickets.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     final activeOrdersRaw = await _client
         .from('orders')
@@ -258,10 +278,18 @@ class DashboardDataService {
       previousDaySales += _netAmount(row['amount'], row['change_amount']);
     }
 
-    // --- Pending amount (open orders total) ---
+    // --- Pending amount & pending tables ---
     double pendingAmount = 0;
+    final pendingTables = <PendingTable>[];
     for (final order in liveOrders) {
       pendingAmount += order.total;
+      pendingTables.add(PendingTable(
+        tableName: order.title,
+        customerName: order.subtitle,
+        total: order.total,
+        status: order.status,
+        itemCount: order.items.length,
+      ));
     }
 
     // --- Top seller (waiter/cashier with most sales today) ---
@@ -313,6 +341,8 @@ class DashboardDataService {
       hourlySales: hourlySales,
       topSeller: topSeller,
       filter: filter,
+      tickets: tickets,
+      pendingTables: pendingTables,
     );
   }
 

@@ -83,11 +83,25 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
         error: profile == null ? 'No se pudo resolver el negocio o rol del usuario.' : null,
       );
     } catch (e) {
+      final errorStr = e.toString();
+      // Error 500 mismatch in GoTrue/DB: unblock by clearing session
+      if (errorStr.contains('500') || errorStr.contains('refresh_token_hmac_key')) {
+        final service = _ref.read(adminAccessServiceProvider);
+        await service.signOut();
+        state = AuthGateState(
+          isLoading: false,
+          isAuthenticated: false,
+          profile: null,
+          error: 'Su sesión ha expirado o requiere re-autenticación ($errorStr). Por favor inicie sesión de nuevo.',
+        );
+        return;
+      }
+
       state = AuthGateState(
         isLoading: false,
         isAuthenticated: false,
         profile: null,
-        error: e.toString(),
+        error: errorStr,
       );
     }
   }

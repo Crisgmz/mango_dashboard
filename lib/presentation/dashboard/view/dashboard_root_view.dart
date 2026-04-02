@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -10,6 +12,7 @@ import '../../auth/view/login_view.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_controller.dart';
 import '../../theme/theme_data_factory.dart';
+import '../viewmodel/cash_register_view_model.dart';
 import '../viewmodel/dashboard_data_view_model.dart';
 import '../widgets/dashboard_kpi_cards.dart';
 import '../widgets/dashboard_sales_chart.dart';
@@ -28,6 +31,8 @@ class DashboardRootView extends ConsumerStatefulWidget {
 class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
   int _currentIndex = 0;
   String? _loadedBusinessId;
+  Timer? _refreshTimer;
+  bool _isRefreshing = false;
 
   void _goToTab(int index) {
     if (_currentIndex == index) return;
@@ -38,6 +43,80 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
   void initState() {
     super.initState();
     Future.microtask(() => ref.read(authGateViewModelProvider.notifier).bootstrap());
+    _startTimer();
+  }
+
+  void _startTimer() {
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (!mounted || _isRefreshing) return;
+      final authState = ref.read(authGateViewModelProvider);
+      final profile = authState.profile;
+      if (authState.isAuthenticated && profile != null && profile.allowed) {
+        unawaited(_refreshActive(profile));
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Refresca solo el tab activo (usado por el timer periódico).
+  Future<void> _refreshActive(AdminAccessProfile profile) async {
+    if (_isRefreshing) return;
+    _isRefreshing = true;
+    try {
+      switch (_currentIndex) {
+        case 0:
+        case 2:
+        case 3:
+          await ref.read(dashboardHomeDataViewModelProvider.notifier).load(
+            profile, filter: SalesDateFilter.today);
+          break;
+        case 1:
+          final f = ref.read(salesDataViewModelProvider).summary?.filter ?? SalesDateFilter.month;
+          await ref.read(salesDataViewModelProvider.notifier).load(profile, filter: f);
+          break;
+        case 4:
+          await ref.read(cashRegisterViewModelProvider.notifier).load(profile.businessId);
+          break;
+      }
+    } finally {
+      _isRefreshing = false;
+    }
+  }
+
+  /// Carga todo (pull-to-refresh manual).
+  Future<void> _refreshAll(AdminAccessProfile profile) async {
+    if (_isRefreshing) return;
+    _isRefreshing = true;
+    _startTimer();
+    try {
+      final currentSalesFilter = ref.read(salesDataViewModelProvider).summary?.filter ?? SalesDateFilter.month;
+      await Future.wait([
+        ref.read(dashboardHomeDataViewModelProvider.notifier).load(
+          profile, filter: SalesDateFilter.today),
+        ref.read(salesDataViewModelProvider.notifier).load(
+          profile, filter: currentSalesFilter),
+        ref.read(cashRegisterViewModelProvider.notifier).load(profile.businessId),
+      ]);
+    } finally {
+      _isRefreshing = false;
+    }
+  }
+
+  /// Cambio de negocio: limpia datos viejos y recarga todo.
+  void _onBusinessChanged(AdminAccessProfile profile) {
+    _loadedBusinessId = profile.businessId;
+    ref.read(dashboardHomeDataViewModelProvider.notifier).reset();
+    ref.read(salesDataViewModelProvider.notifier).reset();
+    ref.read(cashRegisterViewModelProvider.notifier).reset();
+    _isRefreshing = false;
+    _startTimer();
+    Future.microtask(() => _refreshAll(profile));
   }
 
   @override
@@ -45,6 +124,7 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
     final authState = ref.watch(authGateViewModelProvider);
     final homeDataState = ref.watch(dashboardHomeDataViewModelProvider);
     final salesDataState = ref.watch(salesDataViewModelProvider);
+    final cashRegisterState = ref.watch(cashRegisterViewModelProvider);
     final themeMode = ref.watch(themeModeProvider);
 
     if (authState.isLoading) {
@@ -61,17 +141,7 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
     }
 
     if (_loadedBusinessId != profile.businessId) {
-      _loadedBusinessId = profile.businessId;
-      Future.microtask(() async {
-        await ref.read(dashboardHomeDataViewModelProvider.notifier).load(
-          profile,
-          filter: SalesDateFilter.today,
-        );
-        await ref.read(salesDataViewModelProvider.notifier).load(
-          profile,
-          filter: SalesDateFilter.month,
-        );
-      });
+      Future.microtask(() => _onBusinessChanged(profile));
     }
 
     final pages = [
@@ -81,15 +151,16 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
         onOpenSales: () => _goToTab(1),
         onOpenItems: () => _goToTab(2),
         onOpenOrders: () => _goToTab(3),
+        onRefresh: () => _refreshAll(profile),
       ),
-      SalesView(profile: profile, dataState: salesDataState),
-      ItemsView(dataState: homeDataState),
-      OrdersView(dataState: homeDataState),
-      SettingsView(themeMode: themeMode, profile: profile),
+      SalesView(profile: profile, dataState: salesDataState, onRefresh: () => _refreshAll(profile)),
+      ItemsView(dataState: homeDataState, onRefresh: () => _refreshAll(profile)),
+      OrdersView(dataState: homeDataState, onRefresh: () => _refreshAll(profile)),
+      SettingsView(themeMode: themeMode, profile: profile, cashState: cashRegisterState, onRefresh: () => _refreshAll(profile)),
     ];
 
     return Scaffold(
-      appBar: (_currentIndex == 0 ? homeDataState.isRefreshing : salesDataState.isRefreshing)
+      appBar: (homeDataState.isRefreshing || salesDataState.isRefreshing || cashRegisterState.isLoading)
           ? PreferredSize(
               preferredSize: const Size.fromHeight(2),
               child: LinearProgressIndicator(
@@ -99,7 +170,9 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
               ),
             )
           : null,
-      body: SafeArea(child: IndexedStack(index: _currentIndex, children: pages)),
+      body: SafeArea(
+        child: IndexedStack(index: _currentIndex, children: pages),
+      ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (value) => setState(() => _currentIndex = value),
@@ -162,8 +235,22 @@ class AccessDeniedView extends ConsumerWidget {
                   spacing: dpi.space(10),
                   runSpacing: dpi.space(10),
                   children: [
-                    FilledButton.icon(
-                      onPressed: () => ref.read(themeModeProvider.notifier).state = _nextMode(themeMode),
+                    if (profile != null &&
+                        profile!.memberships.any(
+                          (m) => m.allowed && m.businessId != profile!.businessId,
+                        ))
+                      FilledButton.icon(
+                        onPressed: () {
+                          final allowed = profile!.memberships.firstWhere(
+                            (m) => m.allowed && m.businessId != profile!.businessId,
+                          );
+                          ref.read(authGateViewModelProvider.notifier).switchBusiness(allowed.businessId);
+                        },
+                        icon: const Icon(Icons.swap_horiz_rounded),
+                        label: const Text('Cambiar negocio'),
+                      ),
+                    OutlinedButton.icon(
+                      onPressed: () => ref.read(themeModeProvider.notifier).setMode(_nextMode(themeMode)),
                       icon: const Icon(Icons.palette_rounded),
                       label: const Text('Cambiar tema'),
                     ),
@@ -202,6 +289,7 @@ class HomeView extends StatelessWidget {
     required this.onOpenSales,
     required this.onOpenItems,
     required this.onOpenOrders,
+    required this.onRefresh,
   });
 
   final AdminAccessProfile profile;
@@ -209,6 +297,7 @@ class HomeView extends StatelessWidget {
   final VoidCallback onOpenSales;
   final VoidCallback onOpenItems;
   final VoidCallback onOpenOrders;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -216,34 +305,42 @@ class HomeView extends StatelessWidget {
     if (dataState.isLoading) return const DashboardSkeleton();
 
     if (dataState.error != null) {
-      return ListView(
-        physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.all(dpi.space(18)),
-        children: [
-          _HomeHeader(profile: profile),
-          SizedBox(height: dpi.space(18)),
-          EmptyStateCard(title: 'Error', message: dataState.error!),
-        ],
+      return RefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+          padding: EdgeInsets.all(dpi.space(18)),
+          children: [
+            _HomeHeader(profile: profile),
+            SizedBox(height: dpi.space(18)),
+            EmptyStateCard(title: 'Error', message: dataState.error!),
+          ],
+        ),
       );
     }
 
     if (dataState.summary == null) {
-      return ListView(
-        physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.all(dpi.space(18)),
-        children: [
-          _HomeHeader(profile: profile),
-          SizedBox(height: dpi.space(18)),
-          const EmptyStateCard(title: 'Sin datos', message: 'No se pudo cargar el resumen.'),
-        ],
+      return RefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+          padding: EdgeInsets.all(dpi.space(18)),
+          children: [
+            _HomeHeader(profile: profile),
+            SizedBox(height: dpi.space(18)),
+            const EmptyStateCard(title: 'Sin datos', message: 'No se pudo cargar el resumen.'),
+          ],
+        ),
       );
     }
 
     final summary = dataState.summary!;
     final gap = SizedBox(height: dpi.space(18));
 
-    return ListView(
-      physics: const BouncingScrollPhysics(),
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+      physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
       padding: EdgeInsets.all(dpi.space(18)),
       children: [
         _HomeHeader(profile: profile),
@@ -321,6 +418,7 @@ class HomeView extends StatelessWidget {
         ),
         SizedBox(height: dpi.space(22)),
       ],
+    ),
     );
   }
 }
@@ -469,10 +567,10 @@ class _BusinessSelectorSheet extends StatelessWidget {
           Flexible(
             child: ListView.builder(
               shrinkWrap: true,
-              physics: const BouncingScrollPhysics(),
-              itemCount: profile.memberships.length,
+              physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+              itemCount: profile.memberships.where((m) => m.allowed).length,
               itemBuilder: (context, index) {
-                final membership = profile.memberships[index];
+                final membership = profile.memberships.where((m) => m.allowed).elementAt(index);
                 final isSelected = membership.businessId == profile.businessId;
                 final name = membership.branchName?.trim().isNotEmpty == true
                     ? membership.branchName!
@@ -539,10 +637,11 @@ class _BusinessSelectorSheet extends StatelessWidget {
 }
 
 class SalesView extends ConsumerWidget {
-  const SalesView({super.key, required this.profile, required this.dataState});
+  const SalesView({super.key, required this.profile, required this.dataState, required this.onRefresh});
 
   final AdminAccessProfile profile;
   final DashboardDataState dataState;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -554,36 +653,41 @@ class SalesView extends ConsumerWidget {
     }
 
     if (summary == null) {
-      return ListView(
-        physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.all(dpi.space(18)),
-        children: [
-          Text('Ventas', style: Theme.of(context).textTheme.headlineMedium),
-          SizedBox(height: dpi.space(20)),
-          EmptyStateCard(title: 'Sin datos', message: dataState.error ?? 'No hay resumen de ventas disponible.'),
-        ],
+      return RefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+          padding: EdgeInsets.all(dpi.space(18)),
+          children: [
+            Text('Ventas', style: Theme.of(context).textTheme.headlineMedium),
+            SizedBox(height: dpi.space(20)),
+            EmptyStateCard(title: 'Sin datos', message: dataState.error ?? 'No hay resumen de ventas disponible.'),
+          ],
+        ),
       );
     }
 
     final gap = SizedBox(height: dpi.space(18));
 
-    return ListView(
-      physics: const BouncingScrollPhysics(),
-      padding: EdgeInsets.all(dpi.space(18)),
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Reporte de Ventas', style: Theme.of(context).textTheme.headlineMedium),
-                Text('Resumen mensual y diario', style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ),
-            _FilterBadge(filter: summary.filter),
-          ],
-        ),
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+        padding: EdgeInsets.all(dpi.space(18)),
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Reporte de Ventas', style: Theme.of(context).textTheme.headlineMedium),
+                  Text('Resumen mensual y diario', style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
+              _FilterBadge(filter: summary.filter),
+            ],
+          ),
         SizedBox(height: dpi.space(16)),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
@@ -676,8 +780,9 @@ class SalesView extends ConsumerWidget {
           const EmptyStateCard(title: 'Sin productos', message: 'No hay ventas registradas aún.')
         else
           ...summary.topProducts.map((p) => _ProductSaleRow(product: p, maxAmount: summary.topProducts.first.amount)),
-        SizedBox(height: dpi.space(22)),
-      ],
+          SizedBox(height: dpi.space(22)),
+        ],
+      ),
     );
   }
 }
@@ -833,7 +938,7 @@ class _ProductSaleRow extends StatelessWidget {
                       ),
                     ),
                     FractionallySizedBox(
-                      widthFactor: percent.clamp(0, 1),
+                      widthFactor: percent.clamp(0.0, 1.0),
                       child: Container(
                         height: dpi.space(8),
                         decoration: BoxDecoration(
@@ -864,89 +969,152 @@ class _ProductSaleRow extends StatelessWidget {
   }
 }
 
-class ItemsView extends StatelessWidget {
-  const ItemsView({super.key, required this.dataState});
+class ItemsView extends StatefulWidget {
+  const ItemsView({super.key, required this.dataState, required this.onRefresh});
 
   final DashboardDataState dataState;
+  final Future<void> Function() onRefresh;
+
+  @override
+  State<ItemsView> createState() => _ItemsViewState();
+}
+
+class _ItemsViewState extends State<ItemsView> {
+  String _selectedCategory = 'Todas';
 
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
-    final items = dataState.summary?.catalogItems ?? const <CatalogItem>[];
-    
-    if (dataState.isLoading) return const Center(child: CircularProgressIndicator());
+    final items = widget.dataState.summary?.catalogItems ?? const <CatalogItem>[];
+
+    if (widget.dataState.isLoading) return const Center(child: CircularProgressIndicator());
 
     if (items.isEmpty) {
-      return ListView(
-        physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.all(dpi.space(18)),
-        children: [
-          Text('Catálogo de Productos', style: Theme.of(context).textTheme.headlineMedium),
-          SizedBox(height: dpi.space(20)),
-          EmptyStateCard(title: 'Sin artículos', message: dataState.error ?? 'No se encontraron productos.'),
-        ],
+      return RefreshIndicator(
+        onRefresh: widget.onRefresh,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+          padding: EdgeInsets.all(dpi.space(18)),
+          children: [
+            Text('Catálogo de Productos', style: Theme.of(context).textTheme.headlineMedium),
+            SizedBox(height: dpi.space(20)),
+            EmptyStateCard(title: 'Sin artículos', message: widget.dataState.error ?? 'No se encontraron productos.'),
+          ],
+        ),
       );
     }
 
-    // Group items by category
     final Map<String, List<CatalogItem>> grouped = {};
     for (final item in items) {
-      final cat = item.category ?? 'General';
+      final cat = (item.category?.trim().isNotEmpty == true) ? item.category!.trim() : 'General';
       grouped.putIfAbsent(cat, () => []).add(item);
     }
 
-    return ListView(
-      physics: const BouncingScrollPhysics(),
-      padding: EdgeInsets.all(dpi.space(18)),
-      children: [
-        Text('Catálogo de Productos', style: Theme.of(context).textTheme.headlineMedium),
-        SizedBox(height: dpi.space(4)),
-        Text('Organizado por categorías', style: Theme.of(context).textTheme.bodySmall),
-        SizedBox(height: dpi.space(20)),
-        ...grouped.entries.map((e) => _CategoryGroup(category: e.key, items: e.value)),
-        SizedBox(height: dpi.space(30)),
-      ],
+    final categories = ['Todas', ...grouped.keys.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()))];
+    if (!categories.contains(_selectedCategory)) {
+      _selectedCategory = 'Todas';
+    }
+
+    final visibleItems = _selectedCategory == 'Todas'
+        ? items
+        : (grouped[_selectedCategory] ?? const <CatalogItem>[]);
+
+    return RefreshIndicator(
+      onRefresh: widget.onRefresh,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+        padding: EdgeInsets.all(dpi.space(18)),
+        children: [
+          Text('Catálogo de Productos', style: Theme.of(context).textTheme.headlineMedium),
+          SizedBox(height: dpi.space(4)),
+          Text('Filtra por categoría y revisa todos los productos', style: Theme.of(context).textTheme.bodySmall),
+          SizedBox(height: dpi.space(16)),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: categories.map((cat) {
+                final isSelected = cat == _selectedCategory;
+                return Padding(
+                  padding: EdgeInsets.only(right: dpi.space(8)),
+                  child: ChoiceChip(
+                    label: Text(cat),
+                    selected: isSelected,
+                    onSelected: (_) => setState(() => _selectedCategory = cat),
+                    selectedColor: MangoThemeFactory.mango.withValues(alpha: 0.2),
+                    labelStyle: TextStyle(
+                      color: isSelected ? MangoThemeFactory.mango : null,
+                      fontWeight: isSelected ? FontWeight.w700 : null,
+                      fontSize: dpi.font(12),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          SizedBox(height: dpi.space(14)),
+          _CategorySummaryCard(
+            selectedCategory: _selectedCategory,
+            totalCategories: grouped.length,
+            totalProducts: visibleItems.length,
+          ),
+          SizedBox(height: dpi.space(16)),
+          ...visibleItems.map((item) => _ProductCard(item: item)),
+          SizedBox(height: dpi.space(30)),
+        ],
+      ),
     );
   }
 }
 
-class _CategoryGroup extends StatelessWidget {
-  const _CategoryGroup({required this.category, required this.items});
-  final String category;
-  final List<CatalogItem> items;
+class _CategorySummaryCard extends StatelessWidget {
+  const _CategorySummaryCard({
+    required this.selectedCategory,
+    required this.totalCategories,
+    required this.totalProducts,
+  });
+
+  final String selectedCategory;
+  final int totalCategories;
+  final int totalProducts;
 
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
-    return Padding(
-      padding: EdgeInsets.only(bottom: dpi.space(22)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: EdgeInsets.all(dpi.space(14)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.cardColor(context),
+        borderRadius: BorderRadius.circular(dpi.radius(16)),
+        border: Border.all(color: MangoThemeFactory.borderColor(context)),
+      ),
+      child: Row(
         children: [
-          Row(
-            children: [
-              Container(
-                width: dpi.scale(4),
-                height: dpi.scale(16),
-                decoration: BoxDecoration(
-                  color: MangoThemeFactory.mango,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-              SizedBox(width: dpi.space(8)),
-              Text(
-                category.toUpperCase(),
-                style: TextStyle(
-                  fontSize: dpi.font(13),
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.1,
-                  color: MangoThemeFactory.mango,
-                ),
-              ),
-            ],
+          Container(
+            width: dpi.scale(38),
+            height: dpi.scale(38),
+            decoration: BoxDecoration(
+              color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(dpi.radius(12)),
+            ),
+            child: Icon(Icons.category_rounded, color: MangoThemeFactory.mango, size: dpi.icon(20)),
           ),
-          SizedBox(height: dpi.space(12)),
-          ...items.map((item) => _ProductCard(item: item)),
+          SizedBox(width: dpi.space(12)),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  selectedCategory == 'Todas' ? 'Todas las categorías' : selectedCategory,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                SizedBox(height: dpi.space(2)),
+                Text(
+                  '$totalProducts productos · $totalCategories categorías',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -961,9 +1129,10 @@ class _ProductCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     final isActive = item.status.toLowerCase() == 'activo';
+    final statusColor = isActive ? MangoThemeFactory.success : MangoThemeFactory.mutedText(context);
     return Container(
       margin: EdgeInsets.only(bottom: dpi.space(10)),
-      padding: EdgeInsets.all(dpi.space(12)),
+      padding: EdgeInsets.all(dpi.space(14)),
       decoration: BoxDecoration(
         color: MangoThemeFactory.cardColor(context),
         borderRadius: BorderRadius.circular(dpi.radius(16)),
@@ -971,19 +1140,52 @@ class _ProductCard extends StatelessWidget {
       ),
       child: Row(
         children: [
+          Container(
+            width: dpi.scale(38),
+            height: dpi.scale(38),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(dpi.radius(10)),
+            ),
+            child: Icon(Icons.fastfood_rounded, color: statusColor, size: dpi.icon(18)),
+          ),
+          SizedBox(width: dpi.space(12)),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(item.name, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
                 SizedBox(height: dpi.space(2)),
-                Text(
-                  isActive ? 'Disponible' : 'No disponible',
-                  style: TextStyle(
-                    fontSize: dpi.font(10),
-                    color: isActive ? MangoThemeFactory.success : MangoThemeFactory.mutedText(context),
-                    fontWeight: FontWeight.w600,
-                  ),
+                Row(
+                  children: [
+                    Container(
+                      width: dpi.scale(6),
+                      height: dpi.scale(6),
+                      decoration: BoxDecoration(
+                        color: statusColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    SizedBox(width: dpi.space(5)),
+                    Text(
+                      isActive ? 'Disponible' : 'No disponible',
+                      style: TextStyle(
+                        fontSize: dpi.font(11),
+                        color: statusColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (item.category != null && item.category!.trim().isNotEmpty) ...[
+                      SizedBox(width: dpi.space(8)),
+                      Text(
+                        item.category!.trim(),
+                        style: TextStyle(
+                          fontSize: dpi.font(10),
+                          color: MangoThemeFactory.mutedText(context),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),
@@ -1004,9 +1206,10 @@ class _ProductCard extends StatelessWidget {
 }
 
 class OrdersView extends StatelessWidget {
-  const OrdersView({super.key, required this.dataState});
+  const OrdersView({super.key, required this.dataState, required this.onRefresh});
 
   final DashboardDataState dataState;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -1015,20 +1218,23 @@ class OrdersView extends StatelessWidget {
 
     if (dataState.isLoading) return const Center(child: CircularProgressIndicator());
 
-    return ListView(
-      physics: const BouncingScrollPhysics(),
-      padding: EdgeInsets.all(dpi.space(18)),
-      children: [
-        Text('Órdenes Activas', style: Theme.of(context).textTheme.headlineMedium),
-        SizedBox(height: dpi.space(4)),
-        Text('Selecciona una para ver detalles', style: Theme.of(context).textTheme.bodySmall),
-        SizedBox(height: dpi.space(20)),
-        if (orders.isEmpty)
-          const EmptyStateCard(title: 'Sin órdenes', message: 'No hay órdenes abiertas ahora mismo.')
-        else
-          ...orders.map((order) => _OrderCard(order: order)),
-        SizedBox(height: dpi.space(30)),
-      ],
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+        padding: EdgeInsets.all(dpi.space(18)),
+        children: [
+          Text('Órdenes Activas', style: Theme.of(context).textTheme.headlineMedium),
+          SizedBox(height: dpi.space(4)),
+          Text('Selecciona una para ver detalles', style: Theme.of(context).textTheme.bodySmall),
+          SizedBox(height: dpi.space(20)),
+          if (orders.isEmpty)
+            const EmptyStateCard(title: 'Sin órdenes', message: 'No hay órdenes abiertas ahora mismo.')
+          else
+            ...orders.map((order) => _OrderCard(order: order)),
+          SizedBox(height: dpi.space(30)),
+        ],
+      ),
     );
   }
 }
@@ -1127,7 +1333,10 @@ class _OrderDetailsSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
+    final maxSheetHeight = MediaQuery.of(context).size.height * 0.75;
+
     return Container(
+      constraints: BoxConstraints(maxHeight: maxSheetHeight),
       padding: EdgeInsets.all(dpi.space(22)),
       decoration: BoxDecoration(
         color: Theme.of(context).scaffoldBackgroundColor,
@@ -1137,27 +1346,66 @@ class _OrderDetailsSheet extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header - fixed
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Detalles de la Orden', style: Theme.of(context).textTheme.titleLarge),
+              Expanded(
+                child: Text(
+                  'Detalles de la Orden',
+                  style: Theme.of(context).textTheme.titleLarge,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
               IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close_rounded)),
             ],
           ),
-          SizedBox(height: dpi.space(12)),
-          Text(order.title, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
-          Text('Estado: ${order.status}', style: Theme.of(context).textTheme.bodySmall),
-          SizedBox(height: dpi.space(24)),
+          SizedBox(height: dpi.space(8)),
+          Text(
+            order.title,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+          SizedBox(height: dpi.space(2)),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: dpi.space(8), vertical: dpi.space(3)),
+            decoration: BoxDecoration(
+              color: MangoThemeFactory.success.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(dpi.radius(6)),
+            ),
+            child: Text(
+              order.status.toUpperCase(),
+              style: TextStyle(fontSize: dpi.font(10), fontWeight: FontWeight.w800, color: MangoThemeFactory.success),
+            ),
+          ),
+          SizedBox(height: dpi.space(16)),
+
+          // Items list - scrollable
           if (order.items.isEmpty)
-            const Center(child: Text('No hay productos registrados en esta orden.'))
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: dpi.space(16)),
+              child: Center(
+                child: Text(
+                  'No hay productos registrados en esta orden.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            )
           else
-            ...order.items.map((it) => Padding(
-                  padding: EdgeInsets.only(bottom: dpi.space(14)),
-                  child: Row(
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: order.items.length,
+                separatorBuilder: (context, index) => SizedBox(height: dpi.space(10)),
+                itemBuilder: (context, index) {
+                  final it = order.items[index];
+                  return Row(
                     children: [
                       Container(
-                        width: dpi.scale(24),
-                        height: dpi.scale(24),
+                        width: dpi.scale(28),
+                        height: dpi.scale(28),
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
                           color: MangoThemeFactory.mango.withValues(alpha: 0.1),
@@ -1170,16 +1418,26 @@ class _OrderDetailsSheet extends StatelessWidget {
                       ),
                       SizedBox(width: dpi.space(12)),
                       Expanded(
-                        child: Text(it.name, style: Theme.of(context).textTheme.titleSmall),
+                        child: Text(
+                          it.name,
+                          style: Theme.of(context).textTheme.titleSmall,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 2,
+                        ),
                       ),
+                      SizedBox(width: dpi.space(8)),
                       Text(
                         MangoFormatters.currency(it.total),
-                        style: const TextStyle(fontWeight: FontWeight.w700),
+                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: dpi.font(14)),
                       ),
                     ],
-                  ),
-                )),
-          SizedBox(height: dpi.space(20)),
+                  );
+                },
+              ),
+            ),
+
+          // Total - fixed at bottom
+          SizedBox(height: dpi.space(12)),
           const Divider(),
           SizedBox(height: dpi.space(10)),
           Row(
@@ -1222,6 +1480,7 @@ class BusinessSelectorCard extends ConsumerWidget {
               initialValue: profile.businessId,
               decoration: const InputDecoration(labelText: 'Seleccionar negocio'),
               items: memberships
+                  .where((item) => item.allowed)
                   .map(
                     (item) => DropdownMenuItem(
                       value: item.businessId,
@@ -1243,17 +1502,28 @@ class BusinessSelectorCard extends ConsumerWidget {
 }
 
 class SettingsView extends ConsumerWidget {
-  const SettingsView({super.key, required this.themeMode, required this.profile});
+  const SettingsView({
+    super.key,
+    required this.themeMode,
+    required this.profile,
+    required this.cashState,
+    required this.onRefresh,
+  });
 
   final ThemeMode themeMode;
   final AdminAccessProfile profile;
+  final CashRegisterState cashState;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final dpi = DpiScale.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return ListView(
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+      physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
       padding: EdgeInsets.symmetric(horizontal: dpi.space(18), vertical: dpi.space(12)),
       children: [
         Text('Ajustes', style: Theme.of(context).textTheme.headlineMedium),
@@ -1321,30 +1591,136 @@ class SettingsView extends ConsumerWidget {
                 icon: Icons.light_mode_rounded,
                 label: 'Modo Claro',
                 selected: themeMode == ThemeMode.light,
-                onTap: () => ref.read(themeModeProvider.notifier).state = ThemeMode.light,
+                onTap: () => ref.read(themeModeProvider.notifier).setMode(ThemeMode.light),
               ),
               Divider(height: dpi.space(24), color: MangoThemeFactory.borderColor(context).withValues(alpha: 0.5)),
               _ThemeOption(
                 icon: Icons.dark_mode_rounded,
                 label: 'Modo Oscuro',
                 selected: themeMode == ThemeMode.dark,
-                onTap: () => ref.read(themeModeProvider.notifier).state = ThemeMode.dark,
+                onTap: () => ref.read(themeModeProvider.notifier).setMode(ThemeMode.dark),
               ),
               Divider(height: dpi.space(24), color: MangoThemeFactory.borderColor(context).withValues(alpha: 0.5)),
               _ThemeOption(
                 icon: Icons.brightness_auto_rounded,
                 label: 'Sistema',
                 selected: themeMode == ThemeMode.system,
-                onTap: () => ref.read(themeModeProvider.notifier).state = ThemeMode.system,
+                onTap: () => ref.read(themeModeProvider.notifier).setMode(ThemeMode.system),
               ),
             ],
           ),
         ),
 
         SizedBox(height: dpi.space(32)),
+        _SettingsHeader(title: 'Caja'),
+        SizedBox(height: dpi.space(12)),
+
+        // --- Caja Summary Cards ---
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final cards = [
+              _CashSummaryCard(
+                title: 'Cajas registradas',
+                value: cashState.summary != null
+                    ? MangoFormatters.number(cashState.summary!.activeRegisters)
+                    : (cashState.isLoading ? '...' : '—'),
+                subtitle: cashState.summary != null
+                    ? '${cashState.summary!.totalRegisters} total · ${cashState.summary!.inactiveRegistersCount} inactivas'
+                    : 'Cajas activas del negocio',
+                icon: Icons.point_of_sale_rounded,
+                color: MangoThemeFactory.info,
+              ),
+              _CashSummaryCard(
+                title: 'Cajas abiertas',
+                value: cashState.summary != null
+                    ? MangoFormatters.number(cashState.summary!.openRegistersCount)
+                    : (cashState.isLoading ? '...' : '—'),
+                subtitle: cashState.summary != null
+                    ? 'Con sesión abierta ahora'
+                    : 'Sesiones abiertas',
+                icon: Icons.lock_open_rounded,
+                color: MangoThemeFactory.mango,
+              ),
+              _CashSummaryCard(
+                title: 'Top caja (ventas)',
+                value: cashState.summary?.topRegister != null
+                    ? MangoFormatters.currency(cashState.summary!.topRegister!.totalSales)
+                    : (cashState.isLoading ? '...' : '—'),
+                subtitle: cashState.summary?.topRegister != null
+                    ? cashState.summary!.topRegister!.registerName
+                    : 'Caja con más ventas visibles',
+                icon: Icons.emoji_events_rounded,
+                color: MangoThemeFactory.success,
+              ),
+            ];
+            final crossCount = constraints.maxWidth >= 760 ? 3 : 1;
+            return GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: crossCount,
+              crossAxisSpacing: dpi.space(12),
+              mainAxisSpacing: dpi.space(12),
+              childAspectRatio: crossCount == 3 ? 1.3 : 2.1,
+              children: cards,
+            );
+          },
+        ),
+        SizedBox(height: dpi.space(12)),
+
+        // --- Gestionar Cierres Button ---
+        InkWell(
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => CashRegisterDetailView(summary: cashState.summary, error: cashState.error),
+            ),
+          ),
+          borderRadius: BorderRadius.circular(dpi.radius(16)),
+          child: Container(
+            padding: EdgeInsets.all(dpi.space(16)),
+            decoration: BoxDecoration(
+              color: MangoThemeFactory.cardColor(context),
+              borderRadius: BorderRadius.circular(dpi.radius(16)),
+              border: Border.all(color: MangoThemeFactory.borderColor(context)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: dpi.scale(36),
+                  height: dpi.scale(36),
+                  decoration: BoxDecoration(
+                    color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(dpi.radius(10)),
+                  ),
+                  child: Icon(Icons.assignment_rounded, color: MangoThemeFactory.mango, size: dpi.icon(20)),
+                ),
+                SizedBox(width: dpi.space(14)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Gestionar Cierres',
+                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: dpi.font(15), color: MangoThemeFactory.textColor(context)),
+                      ),
+                      Text(
+                        cashState.summary != null
+                            ? '${cashState.summary!.openRegistersCount} abiertas · ${cashState.summary!.closings.length} cierres recientes'
+                            : 'Ver historial de cierres de caja',
+                        style: TextStyle(fontSize: dpi.font(12), color: MangoThemeFactory.mutedText(context)),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded, color: MangoThemeFactory.mutedText(context)),
+              ],
+            ),
+          ),
+        ),
+
+        SizedBox(height: dpi.space(32)),
         _SettingsHeader(title: 'Sesión'),
         SizedBox(height: dpi.space(12)),
-        
+
         InkWell(
           onTap: () => ref.read(authGateViewModelProvider.notifier).signOut(),
           borderRadius: BorderRadius.circular(dpi.radius(16)),
@@ -1371,6 +1747,75 @@ class SettingsView extends ConsumerWidget {
         ),
         SizedBox(height: dpi.space(40)),
       ],
+      ),
+    );
+  }
+}
+
+class _CashSummaryCard extends StatelessWidget {
+  const _CashSummaryCard({
+    required this.title,
+    required this.value,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+  });
+
+  final String title;
+  final String value;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+
+    return Container(
+      padding: EdgeInsets.all(dpi.space(16)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.cardColor(context),
+        borderRadius: BorderRadius.circular(dpi.radius(20)),
+        border: Border.all(color: MangoThemeFactory.borderColor(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: dpi.scale(36),
+            height: dpi.scale(36),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(dpi.radius(10)),
+            ),
+            child: Icon(icon, color: color, size: dpi.icon(20)),
+          ),
+          SizedBox(height: dpi.space(10)),
+          Text(
+            title,
+            style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context), fontWeight: FontWeight.w500),
+          ),
+          SizedBox(height: dpi.space(2)),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: dpi.font(22), fontWeight: FontWeight.w800, color: MangoThemeFactory.textColor(context)),
+            ),
+          ),
+          SizedBox(height: dpi.space(4)),
+          Text(
+            subtitle,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: dpi.font(12), color: MangoThemeFactory.mutedText(context)),
+          ),
+        ],
+      ),
     );
   }
 }

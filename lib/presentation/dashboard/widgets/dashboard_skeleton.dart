@@ -43,17 +43,23 @@ class _DashboardSkeletonState extends State<DashboardSkeleton>
             const SizedBox(height: 6),
             _SkeletonBox(width: 120, height: 16, opacity: opacity),
             const SizedBox(height: 24),
-            GridView.count(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisCount: 2,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              childAspectRatio: 1.35,
-              children: List.generate(
-                4,
-                (_) => _SkeletonCard(opacity: opacity),
-              ),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final crossCount = constraints.maxWidth > 600 ? 4 : 2;
+                final aspectRatio = constraints.maxWidth > 600 ? 1.6 : 1.05;
+                return GridView.count(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  crossAxisCount: crossCount,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                  childAspectRatio: aspectRatio,
+                  children: List.generate(
+                    4,
+                    (_) => _SkeletonCard(opacity: opacity),
+                  ),
+                );
+              },
             ),
             const SizedBox(height: 20),
             _SkeletonBox(width: double.infinity, height: 260, opacity: opacity, radius: 16),

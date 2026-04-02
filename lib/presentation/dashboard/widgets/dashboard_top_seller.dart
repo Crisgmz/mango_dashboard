@@ -169,13 +169,9 @@ class DashboardTopSeller extends StatelessWidget {
 
     if (onTap == null) return child;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(dpi.radius(16)),
-        child: child,
-      ),
+    return GestureDetector(
+      onTap: onTap,
+      child: child,
     );
   }
 }

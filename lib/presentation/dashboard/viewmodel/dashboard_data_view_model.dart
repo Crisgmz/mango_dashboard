@@ -44,6 +44,11 @@ class DashboardDataViewModel extends StateNotifier<DashboardDataState> {
 
   final Ref _ref;
 
+  /// Limpia el estado para forzar skeleton en cambio de negocio.
+  void reset() {
+    state = const DashboardDataState.initial();
+  }
+
   Future<void> load(AdminAccessProfile profile, {required SalesDateFilter filter}) async {
     final currentlyHasData = state.summary != null;
 
@@ -62,7 +67,7 @@ class DashboardDataViewModel extends StateNotifier<DashboardDataState> {
         isLoading: false,
         isRefreshing: false,
         summary: summary,
-        error: null,
+        clearError: true,
       );
     } catch (e) {
       state = state.copyWith(

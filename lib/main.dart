@@ -12,7 +12,9 @@ Future<void> main() async {
   await SupabaseBootstrap.initialize();
   
   runApp(const ProviderScope(child: MangoDashboardApp()));
-  
-  // Remove splash after a small frame delay to ensure app is ready
-  FlutterNativeSplash.remove();
+
+  // Remove splash after the first frame is painted
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    FlutterNativeSplash.remove();
+  });
 }

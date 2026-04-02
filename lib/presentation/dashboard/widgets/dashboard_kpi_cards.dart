@@ -194,13 +194,12 @@ class _KpiCard extends StatelessWidget {
 
     if (onTap == null) return content;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(dpi.radius(16)),
-        child: content,
-      ),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(dpi.radius(16)),
+      splashColor: (accentBackground ? Colors.white : color).withValues(alpha: 0.15),
+      highlightColor: (accentBackground ? Colors.white : color).withValues(alpha: 0.08),
+      child: content,
     );
   }
 }

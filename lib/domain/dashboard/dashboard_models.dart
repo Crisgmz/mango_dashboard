@@ -156,3 +156,85 @@ class LiveChildItem {
   final double quantity;
   final double total;
 }
+
+// ── Cash Register (Caja) Models ──
+
+@immutable
+class CashRegisterSummary {
+  const CashRegisterSummary({
+    this.openRegisters = const [],
+    this.closings = const [],
+    this.totalRegisters = 0,
+    this.activeRegisters = 0,
+    this.topRegister,
+  });
+
+  final List<RegisterSession> openRegisters;
+  final List<RegisterClosing> closings;
+  final int totalRegisters;
+  final int activeRegisters;
+  final RegisterSession? topRegister;
+
+  int get openRegistersCount => openRegisters.length;
+  int get inactiveRegistersCount => (totalRegisters - activeRegisters).clamp(0, totalRegisters);
+}
+
+@immutable
+class RegisterSession {
+  const RegisterSession({
+    required this.id,
+    required this.registerName,
+    required this.openedAt,
+    required this.openedByName,
+    this.closedAt,
+    this.deviceName,
+    this.openingAmount = 0,
+    this.totalSales = 0,
+    this.status = 'open',
+  });
+
+  final String id;
+  final String registerName;
+  final DateTime openedAt;
+  final String openedByName;
+  final DateTime? closedAt;
+  final String? deviceName;
+  final double openingAmount;
+  final double totalSales;
+  final String status;
+
+  bool get isOpen => closedAt == null;
+}
+
+@immutable
+class RegisterClosing {
+  const RegisterClosing({
+    required this.id,
+    required this.registerName,
+    required this.closedAt,
+    required this.closedByName,
+    this.deviceName,
+    this.openingAmount = 0,
+    this.closingAmount = 0,
+    this.expectedAmount = 0,
+    this.totalSales = 0,
+    this.totalDeposits = 0,
+    this.totalWithdrawals = 0,
+    this.totalExpenses = 0,
+  });
+
+  final String id;
+  final String registerName;
+  final DateTime closedAt;
+  final String closedByName;
+  final String? deviceName;
+  final double openingAmount;
+  final double closingAmount;
+  final double expectedAmount;
+  final double totalSales;
+  final double totalDeposits;
+  final double totalWithdrawals;
+  final double totalExpenses;
+
+  double get difference => closingAmount - expectedAmount;
+}

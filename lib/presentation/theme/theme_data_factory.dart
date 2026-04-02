@@ -85,6 +85,7 @@ class MangoThemeFactory {
         selectedItemColor: mango,
         unselectedItemColor: mutedText,
         type: BottomNavigationBarType.fixed,
+        elevation: 8,
       ),
       textTheme: TextTheme(
         headlineMedium: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: text),

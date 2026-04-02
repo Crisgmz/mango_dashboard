@@ -144,7 +144,10 @@ class DashboardDataService {
       final tableLabel = tableData is Map<String, dynamic>
           ? (tableData['label']?.toString() ?? tableData['code']?.toString() ?? 'Mesa')
           : 'Orden';
-      
+      final customerName = session is Map<String, dynamic>
+          ? session['customer_name']?.toString()
+          : null;
+
       final rawItems = row['order_items'] as List? ?? [];
       final childItems = rawItems.map((ri) => LiveChildItem(
         name: ri['product_name']?.toString() ?? 'Producto',
@@ -156,7 +159,7 @@ class DashboardDataService {
         LiveOrderItem(
           id: row['id']?.toString() ?? '',
           title: tableLabel,
-          subtitle: row['status_ext']?.toString() ?? 'open',
+          subtitle: customerName ?? row['status_ext']?.toString() ?? 'open',
           total: _toDouble(row['total']),
           status: row['status_ext']?.toString() ?? 'open',
           items: childItems,
@@ -168,8 +171,7 @@ class DashboardDataService {
         .from('menu_items')
         .select('id, name, price, is_active, categories(name)')
         .eq('business_id', businessId)
-        .order('created_at', ascending: false)
-        .limit(20);
+        .order('name', ascending: true);
 
     final catalogItems = List<Map<String, dynamic>>.from(productsRaw)
         .map(
@@ -206,7 +208,7 @@ class DashboardDataService {
     final topProducts = aggregate.values.toList()
       ..sort((a, b) => b.amount.compareTo(a.amount));
 
-    // --- Hourly sales for today ---
+    // --- Hourly sales for today (always today, independent of filter) ---
     final todayStart = DateTime(now.year, now.month, now.day).toUtc().toIso8601String();
     final tomorrowStart = DateTime(now.year, now.month, now.day + 1).toUtc().toIso8601String();
 
@@ -218,9 +220,33 @@ class DashboardDataService {
 
     final todayPayments = List<Map<String, dynamic>>.from(todayPaymentsRaw);
 
+    // Build today-specific scoped order IDs (filter period may not include today).
+    final todayOrderIds = todayPayments
+        .map((row) => row['order_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+
+    final scopedTodayOrderIds = <String>{};
+    if (todayOrderIds.isNotEmpty) {
+      for (var i = 0; i < todayOrderIds.length; i += _batchSize) {
+        final chunk = todayOrderIds.sublist(i, i + _batchSize > todayOrderIds.length ? todayOrderIds.length : i + _batchSize);
+        final scoped = await _client
+            .from('orders')
+            .select('id, table_sessions!inner(business_id)')
+            .inFilter('id', chunk)
+            .eq('table_sessions.business_id', businessId);
+        for (final row in List<Map<String, dynamic>>.from(scoped)) {
+          final id = row['id']?.toString();
+          if (id != null && id.isNotEmpty) scopedTodayOrderIds.add(id);
+        }
+      }
+    }
+
     final Map<int, double> hourlyMap = {};
     for (final row in todayPayments) {
-      if (!scopedOrderIds.contains(row['order_id']?.toString())) continue;
+      if (!scopedTodayOrderIds.contains(row['order_id']?.toString())) continue;
       final status = row['status']?.toString();
       if (status == 'void' || status == 'cancelled') continue;
       final net = _netAmount(row['amount'], row['change_amount']);

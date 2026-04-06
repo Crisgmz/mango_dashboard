@@ -131,7 +131,7 @@ class DashboardDataService {
 
     final activeOrdersRaw = await _client
         .from('orders')
-        .select('id, total, status_ext, created_at, table_sessions!inner(id, business_id, customer_name, dining_tables(code, label)), order_items(product_name, qty, quantity, total)')
+        .select('id, total, status_ext, created_at, table_sessions!inner(id, business_id, customer_name, dining_tables(code, label)), order_items(product_name, qty, quantity, total, order_item_modifiers(name, qty))')
         .eq('table_sessions.business_id', businessId)
         .isFilter('closed_at', null)
         .order('created_at', ascending: false)
@@ -149,11 +149,20 @@ class DashboardDataService {
           : null;
 
       final rawItems = row['order_items'] as List? ?? [];
-      final childItems = rawItems.map((ri) => LiveChildItem(
-        name: ri['product_name']?.toString() ?? 'Producto',
-        quantity: _toDouble(ri['qty'] ?? ri['quantity']),
-        total: _toDouble(ri['total']),
-      )).toList();
+      final childItems = rawItems.map((ri) {
+        final modifiers = ri['order_item_modifiers'] as List? ?? [];
+        final extras = modifiers
+            .map((m) => m['name']?.toString())
+            .whereType<String>()
+            .toList();
+
+        return LiveChildItem(
+          name: ri['product_name']?.toString() ?? 'Producto',
+          quantity: _toDouble(ri['qty'] ?? ri['quantity']),
+          total: _toDouble(ri['total']),
+          extras: extras,
+        );
+      }).toList();
 
       liveOrders.add(
         LiveOrderItem(
@@ -169,20 +178,42 @@ class DashboardDataService {
 
     final productsRaw = await _client
         .from('menu_items')
-        .select('id, name, price, is_active, categories(name)')
+        .select('id, name, price, is_active, categories(name), menu_item_groups(modifier_groups(id, name, selection_mode, modifiers(id, name, price_delta, is_active)))')
         .eq('business_id', businessId)
         .order('name', ascending: true);
 
     final catalogItems = List<Map<String, dynamic>>.from(productsRaw)
         .map(
-          (row) => CatalogItem(
-            name: row['name']?.toString() ?? 'Sin nombre',
-            status: (row['is_active'] == true) ? 'Activo' : 'Inactivo',
-            price: _toDoubleOrNull(row['price']),
-            category: row['categories'] is Map<String, dynamic>
-                ? row['categories']['name']?.toString()
-                : null,
-          ),
+          (row) {
+            final groups = <CatalogModifierGroup>[];
+            final rawGroups = row['menu_item_groups'] as List? ?? [];
+            for (final gRow in rawGroups) {
+              final mg = gRow['modifier_groups'];
+              if (mg is! Map<String, dynamic>) continue;
+              final mods = (mg['modifiers'] as List? ?? [])
+                  .whereType<Map<String, dynamic>>()
+                  .map((m) => CatalogModifier(
+                        name: m['name']?.toString() ?? '',
+                        priceDelta: _toDoubleOrNull(m['price_delta']) ?? 0,
+                        isActive: m['is_active'] == true,
+                      ))
+                  .toList(growable: false);
+              groups.add(CatalogModifierGroup(
+                name: mg['name']?.toString() ?? '',
+                selectionMode: mg['selection_mode']?.toString() ?? 'modifier',
+                modifiers: mods,
+              ));
+            }
+            return CatalogItem(
+              name: row['name']?.toString() ?? 'Sin nombre',
+              status: (row['is_active'] == true) ? 'Activo' : 'Inactivo',
+              price: _toDoubleOrNull(row['price']),
+              category: row['categories'] is Map<String, dynamic>
+                  ? row['categories']['name']?.toString()
+                  : null,
+              modifierGroups: groups,
+            );
+          },
         )
         .toList(growable: false);
 
@@ -214,7 +245,7 @@ class DashboardDataService {
 
     final todayPaymentsRaw = await _client
         .from('payments')
-        .select('amount, change_amount, status, order_id, created_at')
+        .select('amount, change_amount, status, order_id, created_at, payment_methods(code)')
         .gte('created_at', todayStart)
         .lt('created_at', tomorrowStart);
 
@@ -245,6 +276,7 @@ class DashboardDataService {
     }
 
     final Map<int, double> hourlyMap = {};
+    final Map<String, double> methodTotals = {};
     for (final row in todayPayments) {
       if (!scopedTodayOrderIds.contains(row['order_id']?.toString())) continue;
       final status = row['status']?.toString();
@@ -255,12 +287,20 @@ class DashboardDataService {
         final hour = createdAt.toLocal().hour;
         hourlyMap[hour] = (hourlyMap[hour] ?? 0) + net;
       }
+      final pm = row['payment_methods'];
+      final code = pm is Map<String, dynamic> ? pm['code']?.toString() ?? 'other' : 'other';
+      methodTotals[code] = (methodTotals[code] ?? 0) + net;
     }
 
     final hourlySales = hourlyMap.entries
         .map((e) => HourlySale(hour: e.key, amount: e.value))
         .toList()
       ..sort((a, b) => a.hour.compareTo(b.hour));
+
+    final salesByMethod = methodTotals.entries
+        .map((e) => SalesByMethod(code: e.key, amount: e.value))
+        .toList()
+      ..sort((a, b) => b.amount.compareTo(a.amount));
 
     // --- Comparison sales for previous equivalent period ---
     final pStart = prevStart.toUtc().toIso8601String();
@@ -360,11 +400,12 @@ class DashboardDataService {
       averageTicket: totalTickets == 0 ? 0 : totalSales / totalTickets,
       activeOrders: liveOrders.length,
       topProducts: topProducts.take(5).toList(growable: false),
-      catalogItems: catalogItems.take(10).toList(growable: false),
+      catalogItems: catalogItems,
       liveOrders: liveOrders,
       pendingAmount: pendingAmount,
       previousDaySales: previousDaySales,
       hourlySales: hourlySales,
+      salesByMethod: salesByMethod,
       topSeller: topSeller,
       filter: filter,
       tickets: tickets,

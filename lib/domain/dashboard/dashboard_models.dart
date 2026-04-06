@@ -18,6 +18,7 @@ class DashboardSummary {
     this.pendingAmount = 0,
     this.previousDaySales = 0,
     this.hourlySales = const [],
+    this.salesByMethod = const [],
     this.topSeller,
     this.filter = SalesDateFilter.month,
     this.tickets = const [],
@@ -32,6 +33,7 @@ class DashboardSummary {
   final double pendingAmount;
   final double previousDaySales;
   final List<HourlySale> hourlySales;
+  final List<SalesByMethod> salesByMethod;
   final TopSeller? topSeller;
   final List<TopProduct> topProducts;
   final List<CatalogItem> catalogItems;
@@ -52,6 +54,23 @@ class HourlySale {
 
   final int hour;
   final double amount;
+}
+
+@immutable
+class SalesByMethod {
+  const SalesByMethod({required this.code, required this.amount});
+
+  final String code;
+  final double amount;
+
+  String get label {
+    switch (code) {
+      case 'cash': return 'Efectivo';
+      case 'card': return 'Tarjeta';
+      case 'transfer': return 'Transferencia';
+      default: return 'Otro';
+    }
+  }
 }
 
 @immutable
@@ -83,12 +102,50 @@ class CatalogItem {
     required this.status,
     required this.price,
     required this.category,
+    this.modifierGroups = const [],
   });
 
   final String name;
   final String status;
   final double? price;
   final String? category;
+  final List<CatalogModifierGroup> modifierGroups;
+
+  bool get hasModifiers => modifierGroups.isNotEmpty;
+}
+
+@immutable
+class CatalogModifierGroup {
+  const CatalogModifierGroup({
+    required this.name,
+    required this.selectionMode,
+    this.modifiers = const [],
+  });
+
+  final String name;
+  final String selectionMode;
+  final List<CatalogModifier> modifiers;
+
+  String get modeLabel {
+    switch (selectionMode) {
+      case 'extra': return 'Extra';
+      case 'removal': return 'Remoción';
+      default: return 'Modificador';
+    }
+  }
+}
+
+@immutable
+class CatalogModifier {
+  const CatalogModifier({
+    required this.name,
+    required this.priceDelta,
+    this.isActive = true,
+  });
+
+  final String name;
+  final double priceDelta;
+  final bool isActive;
 }
 
 @immutable
@@ -150,11 +207,13 @@ class LiveChildItem {
     required this.name,
     required this.quantity,
     required this.total,
+    this.extras = const [],
   });
 
   final String name;
   final double quantity;
   final double total;
+  final List<String> extras;
 }
 
 // ── Cash Register (Caja) Models ──
@@ -190,6 +249,10 @@ class RegisterSession {
     this.deviceName,
     this.openingAmount = 0,
     this.totalSales = 0,
+    this.cashSales = 0,
+    this.cardSales = 0,
+    this.transferSales = 0,
+    this.otherSales = 0,
     this.status = 'open',
   });
 
@@ -201,6 +264,10 @@ class RegisterSession {
   final String? deviceName;
   final double openingAmount;
   final double totalSales;
+  final double cashSales;
+  final double cardSales;
+  final double transferSales;
+  final double otherSales;
   final String status;
 
   bool get isOpen => closedAt == null;
@@ -218,6 +285,10 @@ class RegisterClosing {
     this.closingAmount = 0,
     this.expectedAmount = 0,
     this.totalSales = 0,
+    this.cashSales = 0,
+    this.cardSales = 0,
+    this.transferSales = 0,
+    this.otherSales = 0,
     this.totalDeposits = 0,
     this.totalWithdrawals = 0,
     this.totalExpenses = 0,
@@ -232,6 +303,10 @@ class RegisterClosing {
   final double closingAmount;
   final double expectedAmount;
   final double totalSales;
+  final double cashSales;
+  final double cardSales;
+  final double transferSales;
+  final double otherSales;
   final double totalDeposits;
   final double totalWithdrawals;
   final double totalExpenses;

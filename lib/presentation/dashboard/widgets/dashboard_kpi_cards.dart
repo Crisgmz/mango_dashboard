@@ -164,27 +164,43 @@ class _KpiCard extends StatelessWidget {
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
-            child: Text(
-              value,
-              style: TextStyle(
-                fontSize: dpi.font(23),
-                fontWeight: FontWeight.w800,
-                color: textColor,
-                letterSpacing: -0.5,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: child,
+              ),
+              child: Text(
+                value,
+                key: ValueKey(value),
+                style: TextStyle(
+                  fontSize: dpi.font(23),
+                  fontWeight: FontWeight.w800,
+                  color: textColor,
+                  letterSpacing: -0.5,
+                ),
               ),
             ),
           ),
           if (subtitle != null) ...[
             SizedBox(height: dpi.space(1)),
-            Text(
-              subtitle!,
-              style: TextStyle(
-                fontSize: dpi.font(11),
-                fontWeight: FontWeight.w500,
-                color: subtitleColor ?? mutedColor,
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: child,
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              child: Text(
+                subtitle!,
+                key: ValueKey(subtitle),
+                style: TextStyle(
+                  fontSize: dpi.font(11),
+                  fontWeight: FontWeight.w500,
+                  color: subtitleColor ?? mutedColor,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
           const Spacer(flex: 1),

@@ -58,17 +58,24 @@ class CashRegisterDataService {
     ].whereType<String>().toList(growable: false);
 
     final txBySession = await _transactionsBySession(allSessionIds);
+    final payBySession = await _paymentsBySession(allSessionIds);
     final usersById = await _profilesByUserId([
       ...openRows.map((row) => row['user_id']?.toString()),
       ...closedRows.map((row) => row['user_id']?.toString()),
     ].whereType<String>().toList(growable: false));
 
     final openRegisters = openRows
-        .map((row) => _toSession(row, txBySession[row['id']?.toString()] ?? _SessionTx(), usersById))
+        .map((row) {
+          final sid = row['id']?.toString() ?? '';
+          return _toSession(row, txBySession[sid] ?? _SessionTx(), payBySession[sid] ?? _SessionPay(), usersById);
+        })
         .toList(growable: false);
 
     final closings = closedRows
-        .map((row) => _toClosing(row, txBySession[row['id']?.toString()] ?? _SessionTx(), usersById))
+        .map((row) {
+          final sid = row['id']?.toString() ?? '';
+          return _toClosing(row, txBySession[sid] ?? _SessionTx(), payBySession[sid] ?? _SessionPay(), usersById);
+        })
         .toList(growable: false);
 
     final registersRaw = await _client
@@ -95,6 +102,10 @@ class CashRegisterDataService {
           deviceName: topClosing.deviceName,
           openingAmount: topClosing.openingAmount,
           totalSales: topClosing.totalSales,
+          cashSales: topClosing.cashSales,
+          cardSales: topClosing.cardSales,
+          transferSales: topClosing.transferSales,
+          otherSales: topClosing.otherSales,
           status: 'closed',
         );
       }
@@ -161,9 +172,50 @@ class CashRegisterDataService {
     return result;
   }
 
+  Future<Map<String, _SessionPay>> _paymentsBySession(List<String> sessionIds) async {
+    if (sessionIds.isEmpty) return const {};
+
+    final result = <String, _SessionPay>{};
+    for (var i = 0; i < sessionIds.length; i += 50) {
+      final chunk = sessionIds.sublist(i, i + 50 > sessionIds.length ? sessionIds.length : i + 50);
+      final rows = await _client
+          .from('payments')
+          .select('session_id, amount, change_amount, status, payment_methods(code)')
+          .inFilter('session_id', chunk)
+          .not('status', 'in', '(void,cancelled)');
+
+      for (final row in List<Map<String, dynamic>>.from(rows)) {
+        final sessionId = row['session_id']?.toString();
+        if (sessionId == null || sessionId.isEmpty) continue;
+        final pay = result[sessionId] ??= _SessionPay();
+        final amount = _toDouble(row['amount']);
+        final change = _toDouble(row['change_amount']);
+        final net = amount - change;
+        final pm = row['payment_methods'];
+        final code = pm is Map<String, dynamic> ? pm['code']?.toString() : null;
+        switch (code) {
+          case 'cash':
+            pay.cash += net;
+            break;
+          case 'card':
+            pay.card += net;
+            break;
+          case 'transfer':
+            pay.transfer += net;
+            break;
+          default:
+            pay.other += net;
+            break;
+        }
+      }
+    }
+    return result;
+  }
+
   RegisterSession _toSession(
     Map<String, dynamic> row,
     _SessionTx tx,
+    _SessionPay pay,
     Map<String, String> usersById,
   ) {
     final register = row['cash_registers'];
@@ -180,7 +232,11 @@ class CashRegisterDataService {
       closedAt: DateTime.tryParse(row['closed_at']?.toString() ?? ''),
       deviceName: row['device_name']?.toString(),
       openingAmount: _toDouble(row['start_amount']),
-      totalSales: tx.sales,
+      totalSales: pay.total,
+      cashSales: pay.cash,
+      cardSales: pay.card,
+      transferSales: pay.transfer,
+      otherSales: pay.other,
       status: row['status']?.toString() ?? 'open',
     );
   }
@@ -188,6 +244,7 @@ class CashRegisterDataService {
   RegisterClosing _toClosing(
     Map<String, dynamic> row,
     _SessionTx tx,
+    _SessionPay pay,
     Map<String, String> usersById,
   ) {
     final register = row['cash_registers'];
@@ -209,7 +266,11 @@ class CashRegisterDataService {
       openingAmount: openingAmount,
       closingAmount: closingAmount,
       expectedAmount: expectedAmount,
-      totalSales: tx.sales,
+      totalSales: pay.total,
+      cashSales: pay.cash,
+      cardSales: pay.card,
+      transferSales: pay.transfer,
+      otherSales: pay.other,
       totalDeposits: tx.deposits,
       totalWithdrawals: tx.withdrawals,
       totalExpenses: tx.expenses,
@@ -227,4 +288,12 @@ class _SessionTx {
   double deposits = 0;
   double withdrawals = 0;
   double expenses = 0;
+}
+
+class _SessionPay {
+  double cash = 0;
+  double card = 0;
+  double transfer = 0;
+  double other = 0;
+  double get total => cash + card + transfer + other;
 }

@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../data/auth/admin_access_service.dart';
+import '../../data/auth/saved_accounts_service.dart';
 import '../../data/cash_register/cash_register_data_service.dart';
 import '../../data/dashboard/dashboard_data_service.dart';
 
@@ -19,4 +20,8 @@ final dashboardDataServiceProvider = Provider<DashboardDataService>((ref) {
 
 final cashRegisterDataServiceProvider = Provider<CashRegisterDataService>((ref) {
   return CashRegisterDataService(ref.read(supabaseClientProvider));
+});
+
+final savedAccountsServiceProvider = Provider<SavedAccountsService>((ref) {
+  return SavedAccountsService();
 });

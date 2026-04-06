@@ -88,8 +88,21 @@ class AdminAccessService {
     );
   }
 
+  String? get currentRefreshToken => _client.auth.currentSession?.refreshToken;
+
   Future<void> signIn({required String email, required String password}) async {
     await _client.auth.signInWithPassword(email: email, password: password);
+  }
+
+  /// Restaura sesión usando un refresh token guardado.
+  /// Retorna true si la sesión se restauró exitosamente.
+  Future<bool> restoreSession(String refreshToken) async {
+    try {
+      final response = await _client.auth.setSession(refreshToken);
+      return response.session != null;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> signOut() => _client.auth.signOut();

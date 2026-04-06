@@ -57,21 +57,31 @@ class DashboardTopProducts extends StatelessWidget {
             ],
           ),
           SizedBox(height: dpi.space(14)),
-          if (products.isEmpty)
-            Padding(
-              padding: EdgeInsets.symmetric(vertical: dpi.space(20)),
-              child: Center(
-                child: Text(
-                  'Sin productos vendidos aún',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            )
-          else
-            ...List.generate(products.length, (index) {
-              final product = products[index];
-              return _ProductRow(product: product, rank: index + 1, isLast: index == products.length - 1);
-            }),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: products.isEmpty
+                ? Padding(
+                    key: const ValueKey('empty_top_products'),
+                    padding: EdgeInsets.symmetric(vertical: dpi.space(20)),
+                    child: Center(
+                      child: Text(
+                        'Sin productos vendidos aún',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  )
+                : Column(
+                    key: ValueKey('list_top_products_${products.length}'),
+                    children: List.generate(products.length, (index) {
+                      final product = products[index];
+                      return _ProductRow(
+                        product: product,
+                        rank: index + 1,
+                        isLast: index == products.length - 1,
+                      );
+                    }),
+                  ),
+          ),
         ],
       ),
     );

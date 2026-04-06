@@ -645,6 +645,21 @@ class _OpenRegisterCard extends StatelessWidget {
                 Text('Apertura: ${MangoFormatters.currency(session.openingAmount)}', style: Theme.of(context).textTheme.bodySmall),
                 if (session.deviceName != null && session.deviceName!.trim().isNotEmpty)
                   Text(session.deviceName!, style: Theme.of(context).textTheme.bodySmall),
+                SizedBox(height: dpi.space(6)),
+                Wrap(
+                  spacing: dpi.space(10),
+                  runSpacing: dpi.space(4),
+                  children: [
+                    if (session.cashSales > 0)
+                      _PayMethodChip(icon: Icons.payments_rounded, label: MangoFormatters.currency(session.cashSales), color: MangoThemeFactory.success),
+                    if (session.cardSales > 0)
+                      _PayMethodChip(icon: Icons.credit_card_rounded, label: MangoFormatters.currency(session.cardSales), color: Colors.blueAccent),
+                    if (session.transferSales > 0)
+                      _PayMethodChip(icon: Icons.swap_horiz_rounded, label: MangoFormatters.currency(session.transferSales), color: Colors.deepPurpleAccent),
+                    if (session.otherSales > 0)
+                      _PayMethodChip(icon: Icons.more_horiz_rounded, label: MangoFormatters.currency(session.otherSales), color: Colors.grey),
+                  ],
+                ),
               ],
             ),
           ),
@@ -745,7 +760,7 @@ class _ClosingDetailSheet extends StatelessWidget {
           ),
           child: ListView(
             controller: controller,
-            padding: EdgeInsets.all(dpi.space(18)),
+            padding: EdgeInsets.fromLTRB(dpi.space(18), dpi.space(18), dpi.space(18), dpi.space(18) + MediaQuery.of(context).padding.bottom),
             children: [
               Center(
                 child: Container(
@@ -772,7 +787,25 @@ class _ClosingDetailSheet extends StatelessWidget {
               SizedBox(height: dpi.space(18)),
               Text('Qué hubo en la caja', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               SizedBox(height: dpi.space(10)),
-              _MetricCard(icon: Icons.payments_rounded, color: MangoThemeFactory.success, label: 'Ventas', value: MangoFormatters.currency(closing.totalSales)),
+              _MetricCard(icon: Icons.payments_rounded, color: MangoThemeFactory.success, label: 'Ventas totales', value: MangoFormatters.currency(closing.totalSales)),
+              SizedBox(height: dpi.space(8)),
+              Padding(
+                padding: EdgeInsets.only(left: dpi.space(4)),
+                child: Wrap(
+                  spacing: dpi.space(10),
+                  runSpacing: dpi.space(6),
+                  children: [
+                    if (closing.cashSales > 0)
+                      _PayMethodChip(icon: Icons.payments_rounded, label: MangoFormatters.currency(closing.cashSales), color: MangoThemeFactory.success),
+                    if (closing.cardSales > 0)
+                      _PayMethodChip(icon: Icons.credit_card_rounded, label: MangoFormatters.currency(closing.cardSales), color: Colors.blueAccent),
+                    if (closing.transferSales > 0)
+                      _PayMethodChip(icon: Icons.swap_horiz_rounded, label: MangoFormatters.currency(closing.transferSales), color: Colors.deepPurpleAccent),
+                    if (closing.otherSales > 0)
+                      _PayMethodChip(icon: Icons.more_horiz_rounded, label: MangoFormatters.currency(closing.otherSales), color: Colors.grey),
+                  ],
+                ),
+              ),
               SizedBox(height: dpi.space(10)),
               _MetricCard(icon: Icons.add_circle_outline_rounded, color: MangoThemeFactory.info, label: 'Depósitos', value: MangoFormatters.currency(closing.totalDeposits)),
               SizedBox(height: dpi.space(10)),
@@ -887,6 +920,33 @@ class _RangeBar extends StatelessWidget {
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PayMethodChip extends StatelessWidget {
+  const _PayMethodChip({required this.icon, required this.label, required this.color});
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: dpi.space(8), vertical: dpi.space(4)),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(dpi.radius(8)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: dpi.icon(14), color: color),
+          SizedBox(width: dpi.space(4)),
+          Text(label, style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w700, color: color)),
         ],
       ),
     );

@@ -1,13 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/di/providers.dart';
 import '../../../domain/auth/admin_access_profile.dart';
-
-const _keepSessionKey = 'keep_session';
+import '../../../domain/auth/saved_account.dart';
 
 class AuthGateState {
   const AuthGateState({
@@ -53,6 +51,8 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
 
   final Ref _ref;
   StreamSubscription<AuthState>? _subscription;
+  int _retryCount = 0;
+  static const _maxRetries = 3;
 
   Future<void> bootstrap() async {
     state = state.copyWith(isLoading: true, clearError: true);
@@ -65,17 +65,12 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
         return;
       }
 
-      // Si el usuario no quiso mantener sesión, cerrar al reabrir la app.
-      final prefs = await SharedPreferences.getInstance();
-      final keepSession = prefs.getBool(_keepSessionKey) ?? true;
-      if (!keepSession) {
-        await service.signOut();
-        await prefs.remove(_keepSessionKey);
-        state = const AuthGateState.initial().copyWith(isLoading: false);
-        return;
-      }
-
       final profile = await service.resolveCurrentAccess();
+      if (profile != null) {
+        // Guardar cuenta automáticamente al resolver acceso
+        await _saveCurrentAccount(profile);
+      }
+      _retryCount = 0;
       state = AuthGateState(
         isLoading: false,
         isAuthenticated: true,
@@ -84,15 +79,23 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
       );
     } catch (e) {
       final errorStr = e.toString();
-      // Error 500 mismatch in GoTrue/DB: unblock by clearing session
+
+      // Para errores transitorios (500, token HMAC), reintentar una vez antes de cerrar sesión
       if (errorStr.contains('500') || errorStr.contains('refresh_token_hmac_key')) {
+        _retryCount++;
+        if (_retryCount <= _maxRetries) {
+          await Future.delayed(const Duration(seconds: 2));
+          return bootstrap();
+        }
+        // Agotados los reintentos, cerrar sesión
+        _retryCount = 0;
         final service = _ref.read(adminAccessServiceProvider);
         await service.signOut();
         state = AuthGateState(
           isLoading: false,
           isAuthenticated: false,
           profile: null,
-          error: 'Su sesión ha expirado o requiere re-autenticación ($errorStr). Por favor inicie sesión de nuevo.',
+          error: 'Su sesión ha expirado o requiere re-autenticación. Por favor inicie sesión de nuevo.',
         );
         return;
       }
@@ -106,17 +109,51 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
     }
   }
 
-  Future<void> signIn({required String email, required String password, bool keepSession = true}) async {
+  Future<void> signIn({required String email, required String password}) async {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_keepSessionKey, keepSession);
       await _ref.read(adminAccessServiceProvider).signIn(email: email, password: password);
       await bootstrap();
     } on AuthException catch (e) {
       state = state.copyWith(isLoading: false, error: e.message);
     } catch (e) {
       state = state.copyWith(isLoading: false, error: 'No se pudo iniciar sesión: $e');
+    }
+  }
+
+  /// Intenta cambiar a una cuenta usando el refresh token guardado.
+  /// Si el token es válido, cambia sin pedir contraseña.
+  /// Retorna: null = éxito, string = error (sesión expirada, necesita contraseña).
+  Future<String?> switchAccountByToken(String refreshToken) async {
+    final service = _ref.read(adminAccessServiceProvider);
+    // Guardar token actual por si falla la restauración
+    final currentToken = service.currentRefreshToken;
+    try {
+      final restored = await service.restoreSession(refreshToken);
+      if (!restored) {
+        // Restaurar sesión anterior si falló
+        if (currentToken != null) await service.restoreSession(currentToken);
+        return 'SESSION_EXPIRED';
+      }
+      await bootstrap();
+      return null;
+    } catch (e) {
+      if (currentToken != null) await service.restoreSession(currentToken);
+      return 'SESSION_EXPIRED';
+    }
+  }
+
+  /// Intenta cambiar a una cuenta con contraseña. Si falla la contraseña,
+  /// la sesión actual NO se pierde (Supabase solo reemplaza sesión en éxito).
+  Future<String?> switchAccountWithPassword({required String email, required String password}) async {
+    try {
+      await _ref.read(adminAccessServiceProvider).signIn(email: email, password: password);
+      await bootstrap();
+      return null; // éxito
+    } on AuthException catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'No se pudo iniciar sesión: $e';
     }
   }
 
@@ -134,6 +171,20 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
   Future<void> signOut() async {
     await _ref.read(adminAccessServiceProvider).signOut();
     state = const AuthGateState.initial().copyWith(isLoading: false);
+  }
+
+  Future<void> _saveCurrentAccount(AdminAccessProfile profile) async {
+    final savedService = _ref.read(savedAccountsServiceProvider);
+    final service = _ref.read(adminAccessServiceProvider);
+    final businessName = profile.branchName?.trim().isNotEmpty == true
+        ? profile.branchName
+        : profile.businessName;
+    await savedService.saveAccount(SavedAccount(
+      email: profile.email ?? '',
+      displayName: profile.userName,
+      businessName: businessName,
+      refreshToken: service.currentRefreshToken,
+    ));
   }
 
   @override

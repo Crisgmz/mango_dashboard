@@ -80,65 +80,92 @@ class DashboardDataService {
     final periodStart = start.toUtc().toIso8601String();
     final periodEnd = end.toUtc().toIso8601String();
 
-    final paymentsRaw = await _client
-        .from('payments')
-        .select('amount, change_amount, status, order_id, created_at')
-        .gte('created_at', periodStart)
-        .lt('created_at', periodEnd);
+    // ── Phase 1: Fire independent queries in parallel ──
+    final todayStart = DateTime(now.year, now.month, now.day).toUtc().toIso8601String();
+    final tomorrowStart = DateTime(now.year, now.month, now.day + 1).toUtc().toIso8601String();
+    final pStart = prevStart.toUtc().toIso8601String();
+    final pEnd = prevEnd.toUtc().toIso8601String();
 
-    final paymentRows = List<Map<String, dynamic>>.from(paymentsRaw);
+    final results = await Future.wait([
+      // [0] Period payments
+      _client.from('payments')
+          .select('amount, change_amount, status, order_id, created_at, payment_methods(code)')
+          .gte('created_at', periodStart).lt('created_at', periodEnd),
+      // [1] Active orders
+      _client.from('orders')
+          .select('id, total, status_ext, created_at, table_sessions!inner(id, business_id, customer_name, dining_tables(code, label)), order_items(product_name, qty, quantity, total, order_item_modifiers(name, qty))')
+          .eq('table_sessions.business_id', businessId)
+          .isFilter('closed_at', null)
+          .order('created_at', ascending: false).limit(15),
+      // [2] Catalog
+      _client.from('menu_items')
+          .select('id, name, price, is_active, categories(name), menu_item_groups(modifier_groups(id, name, selection_mode, modifiers(id, name, price_delta, is_active)))')
+          .eq('business_id', businessId).order('name', ascending: true),
+      // [3] Today payments (for hourly + method breakdown)
+      _client.from('payments')
+          .select('amount, change_amount, status, order_id, created_at, payment_methods(code)')
+          .gte('created_at', todayStart).lt('created_at', tomorrowStart),
+      // [4] Previous period payments
+      _client.from('payments')
+          .select('amount, change_amount, status, order_id, created_at')
+          .gte('created_at', pStart).lt('created_at', pEnd),
+    ]);
+
+    final paymentRows = List<Map<String, dynamic>>.from(results[0]);
+    final activeOrdersRaw = List<Map<String, dynamic>>.from(results[1]);
+    final productsRaw = List<Map<String, dynamic>>.from(results[2]);
+    final todayPayments = List<Map<String, dynamic>>.from(results[3]);
+    final prevPaymentRows = List<Map<String, dynamic>>.from(results[4]);
+
+    // ── Phase 2: Scope order IDs to business (parallel batches) ──
     final orderIds = paymentRows
         .map((row) => row['order_id']?.toString())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
+        .whereType<String>().where((id) => id.isNotEmpty).toSet().toList(growable: false);
+    final todayOrderIds = todayPayments
+        .map((row) => row['order_id']?.toString())
+        .whereType<String>().where((id) => id.isNotEmpty).toSet().toList(growable: false);
+    final prevOrderIds = prevPaymentRows
+        .map((row) => row['order_id']?.toString())
+        .whereType<String>().where((id) => id.isNotEmpty).toSet().toList(growable: false);
 
-    final scopedOrderIds = <String>{};
-    if (orderIds.isNotEmpty) {
-      // Batch to avoid URI-too-long with many order IDs.
-      for (var i = 0; i < orderIds.length; i += _batchSize) {
-        final chunk = orderIds.sublist(i, i + _batchSize > orderIds.length ? orderIds.length : i + _batchSize);
-        final scoped = await _client
-            .from('orders')
-            .select('id, table_sessions!inner(business_id)')
-            .inFilter('id', chunk)
-            .eq('table_sessions.business_id', businessId);
-        for (final row in List<Map<String, dynamic>>.from(scoped)) {
-          final id = row['id']?.toString();
-          if (id != null && id.isNotEmpty) scopedOrderIds.add(id);
-        }
-      }
-    }
+    // All three scoping queries can run in parallel
+    final scopeResults = await Future.wait([
+      _scopeOrderIds(orderIds, businessId),
+      _scopeOrderIds(todayOrderIds, businessId),
+      _scopeOrderIds(prevOrderIds, businessId),
+    ]);
+    final scopedOrderIds = scopeResults[0];
+    final scopedTodayOrderIds = scopeResults[1];
+    final scopedPrevOrderIds = scopeResults[2];
 
+    // ── Phase 3: Process results (CPU-only, no awaits) ──
+
+    // Period sales & tickets
     double totalSales = 0;
     int totalTickets = 0;
     final tickets = <TicketItem>[];
     for (final row in paymentRows) {
-      if (!scopedOrderIds.contains(row['order_id']?.toString())) continue;
+      final oid = row['order_id']?.toString();
+      if (!scopedOrderIds.contains(oid)) continue;
       final status = row['status']?.toString();
       if (status == 'void' || status == 'cancelled') continue;
       final net = _netAmount(row['amount'], row['change_amount']);
       totalSales += net;
       totalTickets += 1;
+      final pm = row['payment_methods'];
+      final pmCode = pm is Map<String, dynamic> ? pm['code']?.toString() : null;
       tickets.add(TicketItem(
-        orderId: row['order_id']?.toString() ?? '',
+        orderId: oid ?? '',
         amount: net,
         createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+        paymentMethodCode: pmCode,
       ));
     }
     tickets.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-    final activeOrdersRaw = await _client
-        .from('orders')
-        .select('id, total, status_ext, created_at, table_sessions!inner(id, business_id, customer_name, dining_tables(code, label)), order_items(product_name, qty, quantity, total, order_item_modifiers(name, qty))')
-        .eq('table_sessions.business_id', businessId)
-        .isFilter('closed_at', null)
-        .order('created_at', ascending: false)
-        .limit(15);
-
+    // Live orders
     final liveOrders = <LiveOrderItem>[];
-    for (final row in List<Map<String, dynamic>>.from(activeOrdersRaw)) {
+    for (final row in activeOrdersRaw) {
       final session = row['table_sessions'];
       final tableData = session is Map<String, dynamic> ? session['dining_tables'] : null;
       final tableLabel = tableData is Map<String, dynamic>
@@ -151,11 +178,7 @@ class DashboardDataService {
       final rawItems = row['order_items'] as List? ?? [];
       final childItems = rawItems.map((ri) {
         final modifiers = ri['order_item_modifiers'] as List? ?? [];
-        final extras = modifiers
-            .map((m) => m['name']?.toString())
-            .whereType<String>()
-            .toList();
-
+        final extras = modifiers.map((m) => m['name']?.toString()).whereType<String>().toList();
         return LiveChildItem(
           name: ri['product_name']?.toString() ?? 'Producto',
           quantity: _toDouble(ri['qty'] ?? ri['quantity']),
@@ -164,59 +187,49 @@ class DashboardDataService {
         );
       }).toList();
 
-      liveOrders.add(
-        LiveOrderItem(
-          id: row['id']?.toString() ?? '',
-          title: tableLabel,
-          subtitle: customerName ?? row['status_ext']?.toString() ?? 'open',
-          total: _toDouble(row['total']),
-          status: row['status_ext']?.toString() ?? 'open',
-          items: childItems,
-        ),
-      );
+      liveOrders.add(LiveOrderItem(
+        id: row['id']?.toString() ?? '',
+        title: tableLabel,
+        subtitle: customerName ?? row['status_ext']?.toString() ?? 'open',
+        total: _toDouble(row['total']),
+        status: row['status_ext']?.toString() ?? 'open',
+        items: childItems,
+      ));
     }
 
-    final productsRaw = await _client
-        .from('menu_items')
-        .select('id, name, price, is_active, categories(name), menu_item_groups(modifier_groups(id, name, selection_mode, modifiers(id, name, price_delta, is_active)))')
-        .eq('business_id', businessId)
-        .order('name', ascending: true);
+    // Catalog
+    final catalogItems = productsRaw.map((row) {
+      final groups = <CatalogModifierGroup>[];
+      final rawGroups = row['menu_item_groups'] as List? ?? [];
+      for (final gRow in rawGroups) {
+        final mg = gRow['modifier_groups'];
+        if (mg is! Map<String, dynamic>) continue;
+        final mods = (mg['modifiers'] as List? ?? [])
+            .whereType<Map<String, dynamic>>()
+            .map((m) => CatalogModifier(
+                  name: m['name']?.toString() ?? '',
+                  priceDelta: _toDoubleOrNull(m['price_delta']) ?? 0,
+                  isActive: m['is_active'] == true,
+                ))
+            .toList(growable: false);
+        groups.add(CatalogModifierGroup(
+          name: mg['name']?.toString() ?? '',
+          selectionMode: mg['selection_mode']?.toString() ?? 'modifier',
+          modifiers: mods,
+        ));
+      }
+      return CatalogItem(
+        name: row['name']?.toString() ?? 'Sin nombre',
+        status: (row['is_active'] == true) ? 'Activo' : 'Inactivo',
+        price: _toDoubleOrNull(row['price']),
+        category: row['categories'] is Map<String, dynamic>
+            ? row['categories']['name']?.toString()
+            : null,
+        modifierGroups: groups,
+      );
+    }).toList(growable: false);
 
-    final catalogItems = List<Map<String, dynamic>>.from(productsRaw)
-        .map(
-          (row) {
-            final groups = <CatalogModifierGroup>[];
-            final rawGroups = row['menu_item_groups'] as List? ?? [];
-            for (final gRow in rawGroups) {
-              final mg = gRow['modifier_groups'];
-              if (mg is! Map<String, dynamic>) continue;
-              final mods = (mg['modifiers'] as List? ?? [])
-                  .whereType<Map<String, dynamic>>()
-                  .map((m) => CatalogModifier(
-                        name: m['name']?.toString() ?? '',
-                        priceDelta: _toDoubleOrNull(m['price_delta']) ?? 0,
-                        isActive: m['is_active'] == true,
-                      ))
-                  .toList(growable: false);
-              groups.add(CatalogModifierGroup(
-                name: mg['name']?.toString() ?? '',
-                selectionMode: mg['selection_mode']?.toString() ?? 'modifier',
-                modifiers: mods,
-              ));
-            }
-            return CatalogItem(
-              name: row['name']?.toString() ?? 'Sin nombre',
-              status: (row['is_active'] == true) ? 'Activo' : 'Inactivo',
-              price: _toDoubleOrNull(row['price']),
-              category: row['categories'] is Map<String, dynamic>
-                  ? row['categories']['name']?.toString()
-                  : null,
-              modifierGroups: groups,
-            );
-          },
-        )
-        .toList(growable: false);
-
+    // ── Phase 4: Top products (needs scopedOrderIds) ──
     final topProductsRaw = await _batchedInFilter(
       table: 'order_items',
       select: 'order_id, product_name, quantity, qty, total, status',
@@ -235,46 +248,10 @@ class DashboardDataService {
       final nextQty = (current?.quantity ?? 0) + _toDouble(row['qty'] ?? row['quantity']);
       aggregate[label] = TopProduct(label: label, amount: nextAmount, quantity: nextQty);
     }
-
     final topProducts = aggregate.values.toList()
       ..sort((a, b) => b.amount.compareTo(a.amount));
 
-    // --- Hourly sales for today (always today, independent of filter) ---
-    final todayStart = DateTime(now.year, now.month, now.day).toUtc().toIso8601String();
-    final tomorrowStart = DateTime(now.year, now.month, now.day + 1).toUtc().toIso8601String();
-
-    final todayPaymentsRaw = await _client
-        .from('payments')
-        .select('amount, change_amount, status, order_id, created_at, payment_methods(code)')
-        .gte('created_at', todayStart)
-        .lt('created_at', tomorrowStart);
-
-    final todayPayments = List<Map<String, dynamic>>.from(todayPaymentsRaw);
-
-    // Build today-specific scoped order IDs (filter period may not include today).
-    final todayOrderIds = todayPayments
-        .map((row) => row['order_id']?.toString())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-
-    final scopedTodayOrderIds = <String>{};
-    if (todayOrderIds.isNotEmpty) {
-      for (var i = 0; i < todayOrderIds.length; i += _batchSize) {
-        final chunk = todayOrderIds.sublist(i, i + _batchSize > todayOrderIds.length ? todayOrderIds.length : i + _batchSize);
-        final scoped = await _client
-            .from('orders')
-            .select('id, table_sessions!inner(business_id)')
-            .inFilter('id', chunk)
-            .eq('table_sessions.business_id', businessId);
-        for (final row in List<Map<String, dynamic>>.from(scoped)) {
-          final id = row['id']?.toString();
-          if (id != null && id.isNotEmpty) scopedTodayOrderIds.add(id);
-        }
-      }
-    }
-
+    // Hourly sales + method breakdown (today)
     final Map<int, double> hourlyMap = {};
     final Map<String, double> methodTotals = {};
     for (final row in todayPayments) {
@@ -291,51 +268,14 @@ class DashboardDataService {
       final code = pm is Map<String, dynamic> ? pm['code']?.toString() ?? 'other' : 'other';
       methodTotals[code] = (methodTotals[code] ?? 0) + net;
     }
-
     final hourlySales = hourlyMap.entries
-        .map((e) => HourlySale(hour: e.key, amount: e.value))
-        .toList()
+        .map((e) => HourlySale(hour: e.key, amount: e.value)).toList()
       ..sort((a, b) => a.hour.compareTo(b.hour));
-
     final salesByMethod = methodTotals.entries
-        .map((e) => SalesByMethod(code: e.key, amount: e.value))
-        .toList()
+        .map((e) => SalesByMethod(code: e.key, amount: e.value)).toList()
       ..sort((a, b) => b.amount.compareTo(a.amount));
 
-    // --- Comparison sales for previous equivalent period ---
-    final pStart = prevStart.toUtc().toIso8601String();
-    final pEnd = prevEnd.toUtc().toIso8601String();
-    
-    final prevPaymentsRaw = await _client
-        .from('payments')
-        .select('amount, change_amount, status, order_id, created_at')
-        .gte('created_at', pStart)
-        .lt('created_at', pEnd);
-
-    final prevPaymentRows = List<Map<String, dynamic>>.from(prevPaymentsRaw);
-    final prevOrderIds = prevPaymentRows
-        .map((row) => row['order_id']?.toString())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-
-    final scopedPrevOrderIds = <String>{};
-    if (prevOrderIds.isNotEmpty) {
-      for (var i = 0; i < prevOrderIds.length; i += _batchSize) {
-        final chunk = prevOrderIds.sublist(i, i + _batchSize > prevOrderIds.length ? prevOrderIds.length : i + _batchSize);
-        final scoped = await _client
-            .from('orders')
-            .select('id, table_sessions!inner(business_id)')
-            .inFilter('id', chunk)
-            .eq('table_sessions.business_id', businessId);
-        for (final row in List<Map<String, dynamic>>.from(scoped)) {
-          final id = row['id']?.toString();
-          if (id != null && id.isNotEmpty) scopedPrevOrderIds.add(id);
-        }
-      }
-    }
-
+    // Previous period comparison
     double previousDaySales = 0;
     for (final row in prevPaymentRows) {
       if (!scopedPrevOrderIds.contains(row['order_id']?.toString())) continue;
@@ -344,7 +284,7 @@ class DashboardDataService {
       previousDaySales += _netAmount(row['amount'], row['change_amount']);
     }
 
-    // --- Pending amount & pending tables ---
+    // Pending
     double pendingAmount = 0;
     final pendingTables = <PendingTable>[];
     for (final order in liveOrders) {
@@ -358,40 +298,8 @@ class DashboardDataService {
       ));
     }
 
-    // --- Top seller (waiter/cashier with most sales today) ---
+    // Top seller (disabled — order_items lacks created_by column)
     TopSeller? topSeller;
-    if (scopedOrderIds.isNotEmpty) {
-      // NOTE: order_items doesn't have a 'created_by' column according to the database.
-      // Fetching only existing columns to avoid crash.
-      final todayOrderItemsRaw = await _batchedInFilter(
-        table: 'order_items',
-        select: 'order_id, total, status',
-        filterColumn: 'order_id',
-        values: scopedOrderIds.toList(),
-      );
-
-      final Map<String, _SellerAgg> sellerMap = {};
-      for (final row in List<Map<String, dynamic>>.from(todayOrderItemsRaw)) {
-        if (row['status']?.toString() == 'void') continue;
-        
-        // TODO: find the correct column for seller name or join with orders/users.
-        // For now, this feature is disabled to prevent crashing.
-        final createdBy = row['created_by']?.toString();
-        if (createdBy == null || createdBy.isEmpty) continue;
-        final agg = sellerMap.putIfAbsent(createdBy, () => _SellerAgg());
-        agg.total += _toDouble(row['total']);
-        agg.orders.add(row['order_id']?.toString() ?? '');
-      }
-
-      if (sellerMap.isNotEmpty) {
-        final best = sellerMap.entries.reduce((a, b) => a.value.total >= b.value.total ? a : b);
-        topSeller = TopSeller(
-          name: best.key,
-          totalSales: best.value.total,
-          orderCount: best.value.orders.length,
-        );
-      }
-    }
 
     return DashboardSummary(
       profile: profile,
@@ -427,9 +335,22 @@ class DashboardDataService {
     if (value is num) return value.toDouble();
     return double.tryParse(value.toString());
   }
-}
 
-class _SellerAgg {
-  double total = 0;
-  final Set<String> orders = {};
+  Future<Set<String>> _scopeOrderIds(List<String> orderIds, String businessId) async {
+    if (orderIds.isEmpty) return const {};
+    final result = <String>{};
+    for (var i = 0; i < orderIds.length; i += _batchSize) {
+      final chunk = orderIds.sublist(i, i + _batchSize > orderIds.length ? orderIds.length : i + _batchSize);
+      final scoped = await _client
+          .from('orders')
+          .select('id, table_sessions!inner(business_id)')
+          .inFilter('id', chunk)
+          .eq('table_sessions.business_id', businessId);
+      for (final row in List<Map<String, dynamic>>.from(scoped)) {
+        final id = row['id']?.toString();
+        if (id != null && id.isNotEmpty) result.add(id);
+      }
+    }
+    return result;
+  }
 }

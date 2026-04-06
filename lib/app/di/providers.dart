@@ -5,6 +5,7 @@ import '../../data/auth/admin_access_service.dart';
 import '../../data/auth/saved_accounts_service.dart';
 import '../../data/cash_register/cash_register_data_service.dart';
 import '../../data/dashboard/dashboard_data_service.dart';
+import '../../data/notifications/notification_service.dart';
 
 final supabaseClientProvider = Provider<SupabaseClient>((ref) {
   return Supabase.instance.client;
@@ -24,4 +25,8 @@ final cashRegisterDataServiceProvider = Provider<CashRegisterDataService>((ref) 
 
 final savedAccountsServiceProvider = Provider<SavedAccountsService>((ref) {
   return SavedAccountsService();
+});
+
+final notificationServiceProvider = Provider<NotificationService>((ref) {
+  return NotificationService(ref.read(supabaseClientProvider));
 });

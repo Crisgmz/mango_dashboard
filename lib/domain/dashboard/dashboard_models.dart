@@ -156,6 +156,7 @@ class TicketItem {
     required this.createdAt,
     this.tableName,
     this.customerName,
+    this.paymentMethodCode,
   });
 
   final String orderId;
@@ -163,6 +164,7 @@ class TicketItem {
   final DateTime createdAt;
   final String? tableName;
   final String? customerName;
+  final String? paymentMethodCode;
 }
 
 @immutable

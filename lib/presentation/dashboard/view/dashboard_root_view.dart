@@ -14,8 +14,10 @@ import '../../auth/view/login_view.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_controller.dart';
 import '../../theme/theme_data_factory.dart';
+import '../../../domain/notifications/dashboard_notification.dart';
 import '../viewmodel/cash_register_view_model.dart';
 import '../viewmodel/dashboard_data_view_model.dart';
+import '../viewmodel/notification_view_model.dart';
 import '../widgets/dashboard_kpi_cards.dart';
 import '../widgets/dashboard_sales_chart.dart';
 import '../widgets/dashboard_skeleton.dart';
@@ -30,7 +32,7 @@ class DashboardRootView extends ConsumerStatefulWidget {
   ConsumerState<DashboardRootView> createState() => _DashboardRootViewState();
 }
 
-class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
+class _DashboardRootViewState extends ConsumerState<DashboardRootView> with WidgetsBindingObserver {
   int _currentIndex = 0;
   String? _loadedBusinessId;
   Timer? _refreshTimer;
@@ -44,8 +46,20 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     Future.microtask(() => ref.read(authGateViewModelProvider.notifier).bootstrap());
     _startTimer();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      final authState = ref.read(authGateViewModelProvider);
+      final profile = authState.profile;
+      if (authState.isAuthenticated && profile != null && profile.allowed) {
+        unawaited(_refreshAll(profile));
+      }
+    }
   }
 
   void _startTimer() {
@@ -62,6 +76,7 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
     super.dispose();
   }
@@ -116,6 +131,8 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> {
     ref.read(dashboardHomeDataViewModelProvider.notifier).reset();
     ref.read(salesDataViewModelProvider.notifier).reset();
     ref.read(cashRegisterViewModelProvider.notifier).reset();
+    ref.read(notificationViewModelProvider.notifier).clear();
+    ref.read(notificationViewModelProvider.notifier).subscribe(profile.businessId);
     _isRefreshing = false;
     _startTimer();
     Future.microtask(() => _refreshAll(profile));
@@ -562,6 +579,47 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
               ),
             ),
             SizedBox(width: dpi.space(8)),
+            Consumer(builder: (context, cRef, _) {
+              final notifState = cRef.watch(notificationViewModelProvider);
+              final unread = notifState.unreadCount;
+              return GestureDetector(
+                onTap: () => _showNotifications(context, cRef),
+                child: SizedBox(
+                  width: dpi.scale(40),
+                  height: dpi.scale(40),
+                  child: Stack(
+                    children: [
+                      Center(
+                        child: Icon(
+                          unread > 0 ? Icons.notifications_rounded : Icons.notifications_outlined,
+                          color: unread > 0 ? MangoThemeFactory.mango : MangoThemeFactory.mutedText(context),
+                          size: dpi.icon(24),
+                        ),
+                      ),
+                      if (unread > 0)
+                        Positioned(
+                          right: 2,
+                          top: 2,
+                          child: Container(
+                            padding: EdgeInsets.all(dpi.space(4)),
+                            decoration: const BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                            ),
+                            constraints: BoxConstraints(minWidth: dpi.scale(18), minHeight: dpi.scale(18)),
+                            child: Text(
+                              unread > 9 ? '9+' : '$unread',
+                              style: TextStyle(color: Colors.white, fontSize: dpi.font(9), fontWeight: FontWeight.w800),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+            SizedBox(width: dpi.space(4)),
             Container(
               width: dpi.scale(46),
               height: dpi.scale(46),
@@ -609,11 +667,128 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
     );
   }
 
+  void _showNotifications(BuildContext context, WidgetRef cRef) {
+    cRef.read(notificationViewModelProvider.notifier).markAllRead();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => const _NotificationsSheet(),
+    );
+  }
+
   String _greetingByTime() {
     final hour = DateTime.now().hour;
     if (hour < 12) return 'Buenos días';
     if (hour < 18) return 'Buenas tardes';
     return 'Buenas noches';
+  }
+}
+
+class _NotificationsSheet extends ConsumerWidget {
+  const _NotificationsSheet();
+
+  static const _typeIcons = <NotificationType, IconData>{
+    NotificationType.itemVoided: Icons.remove_circle_rounded,
+    NotificationType.cashClosed: Icons.point_of_sale_rounded,
+  };
+  static const _typeColors = <NotificationType, Color>{
+    NotificationType.itemVoided: Colors.redAccent,
+    NotificationType.cashClosed: Colors.blueAccent,
+  };
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dpi = DpiScale.of(context);
+    final notifications = ref.watch(notificationViewModelProvider).notifications;
+
+    return SafeArea(
+      top: false,
+      child: Container(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
+        padding: EdgeInsets.all(dpi.space(22)),
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(dpi.radius(28))),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Notificaciones', style: Theme.of(context).textTheme.titleLarge),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            SizedBox(height: dpi.space(12)),
+            if (notifications.isEmpty)
+              Padding(
+                padding: EdgeInsets.symmetric(vertical: dpi.space(32)),
+                child: Column(
+                  children: [
+                    Icon(Icons.notifications_off_outlined, size: dpi.icon(40), color: MangoThemeFactory.mutedText(context)),
+                    SizedBox(height: dpi.space(10)),
+                    Text('Sin notificaciones', style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+              )
+            else
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: notifications.length,
+                  separatorBuilder: (_, _) => SizedBox(height: dpi.space(8)),
+                  itemBuilder: (context, index) {
+                    final n = notifications[index];
+                    final icon = _typeIcons[n.type] ?? Icons.info_rounded;
+                    final color = _typeColors[n.type] ?? MangoThemeFactory.info;
+                    final time = n.createdAt.toLocal();
+                    final timeStr = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+
+                    return Container(
+                      padding: EdgeInsets.all(dpi.space(12)),
+                      decoration: BoxDecoration(
+                        color: MangoThemeFactory.cardColor(context),
+                        borderRadius: BorderRadius.circular(dpi.radius(14)),
+                        border: Border.all(color: MangoThemeFactory.borderColor(context)),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: dpi.scale(36),
+                            height: dpi.scale(36),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(dpi.radius(10)),
+                            ),
+                            child: Icon(icon, color: color, size: dpi.icon(18)),
+                          ),
+                          SizedBox(width: dpi.space(10)),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(n.title, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                                SizedBox(height: dpi.space(2)),
+                                Text(n.message, style: Theme.of(context).textTheme.bodySmall, maxLines: 2, overflow: TextOverflow.ellipsis),
+                              ],
+                            ),
+                          ),
+                          Text(timeStr, style: TextStyle(fontSize: dpi.font(10), color: MangoThemeFactory.mutedText(context))),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

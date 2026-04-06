@@ -26,7 +26,7 @@ class SalesDetailView extends StatelessWidget {
               child: Text('No hay ventas registradas.', style: Theme.of(context).textTheme.bodySmall),
             )
           : ListView.builder(
-              padding: EdgeInsets.all(dpi.space(16)),
+              padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
               itemCount: tickets.length + 1,
               itemBuilder: (context, index) {
                 if (index == 0) {
@@ -103,11 +103,39 @@ class _TicketCard extends StatelessWidget {
   final TicketItem ticket;
   final int index;
 
+  static const _methodIcons = <String, IconData>{
+    'cash': Icons.payments_rounded,
+    'card': Icons.credit_card_rounded,
+    'transfer': Icons.swap_horiz_rounded,
+  };
+  static const _methodColors = <String, Color>{
+    'cash': MangoThemeFactory.success,
+    'card': Colors.blueAccent,
+    'transfer': Colors.deepPurpleAccent,
+  };
+  static const _methodLabels = <String, String>{
+    'cash': 'Efectivo',
+    'card': 'Tarjeta',
+    'transfer': 'Transferencia',
+  };
+
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     final time = ticket.createdAt.toLocal();
     final hour = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    final pmCode = ticket.paymentMethodCode;
+    final pmColor = _methodColors[pmCode] ?? MangoThemeFactory.success;
+    final pmIcon = _methodIcons[pmCode] ?? Icons.receipt_rounded;
+
+    // Build subtitle parts
+    final parts = <String>[hour];
+    if (ticket.tableName != null && ticket.tableName!.trim().isNotEmpty) {
+      parts.add(ticket.tableName!.trim());
+    }
+    if (ticket.customerName != null && ticket.customerName!.trim().isNotEmpty) {
+      parts.add(ticket.customerName!.trim());
+    }
 
     return Container(
       margin: EdgeInsets.only(bottom: dpi.space(10)),
@@ -123,10 +151,10 @@ class _TicketCard extends StatelessWidget {
             width: dpi.scale(38),
             height: dpi.scale(38),
             decoration: BoxDecoration(
-              color: MangoThemeFactory.success.withValues(alpha: 0.1),
+              color: pmColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(dpi.radius(10)),
             ),
-            child: Icon(Icons.receipt_rounded, color: MangoThemeFactory.success, size: dpi.icon(18)),
+            child: Icon(pmIcon, color: pmColor, size: dpi.icon(18)),
           ),
           SizedBox(width: dpi.space(12)),
           Expanded(
@@ -138,7 +166,14 @@ class _TicketCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 SizedBox(height: dpi.space(2)),
-                Text(hour, style: Theme.of(context).textTheme.bodySmall),
+                Text(parts.join(' · '), style: Theme.of(context).textTheme.bodySmall),
+                if (pmCode != null) ...[
+                  SizedBox(height: dpi.space(2)),
+                  Text(
+                    _methodLabels[pmCode] ?? 'Otro',
+                    style: TextStyle(fontSize: dpi.font(10), fontWeight: FontWeight.w600, color: pmColor),
+                  ),
+                ],
               ],
             ),
           ),
@@ -175,7 +210,7 @@ class OrdersDetailView extends StatelessWidget {
       body: orders.isEmpty
           ? Center(child: Text('No hay órdenes activas.', style: Theme.of(context).textTheme.bodySmall))
           : ListView.builder(
-              padding: EdgeInsets.all(dpi.space(16)),
+              padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
               itemCount: orders.length + 1,
               itemBuilder: (context, index) {
                 if (index == 0) {
@@ -319,7 +354,7 @@ class PendingDetailView extends StatelessWidget {
       body: tables.isEmpty
           ? Center(child: Text('No hay mesas pendientes.', style: Theme.of(context).textTheme.bodySmall))
           : ListView(
-              padding: EdgeInsets.all(dpi.space(16)),
+              padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
               children: [
                 Container(
                   margin: EdgeInsets.only(bottom: dpi.space(16)),
@@ -428,7 +463,7 @@ class AverageTicketDetailView extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Ticket Promedio')),
       body: ListView(
-        padding: EdgeInsets.all(dpi.space(16)),
+        padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
         children: [
           Container(
             margin: EdgeInsets.only(bottom: dpi.space(16)),
@@ -514,7 +549,7 @@ class CashRegisterDetailView extends StatelessWidget {
           : data == null
           ? Center(child: Text('Cargando cajas...', style: Theme.of(context).textTheme.bodySmall))
           : ListView(
-              padding: EdgeInsets.all(dpi.space(16)),
+              padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
               children: [
                 Container(
                   padding: EdgeInsets.all(dpi.space(18)),

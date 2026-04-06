@@ -45,7 +45,12 @@ class CashRegisterViewModel extends StateNotifier<CashRegisterState> {
           .loadSummary(businessId);
       state = CashRegisterState(summary: summary);
     } catch (e) {
-      state = CashRegisterState(error: 'No se pudo cargar las cajas: $e');
+      final msg = e.toString();
+      if (msg.contains('SocketException') || msg.contains('Failed host lookup') || msg.contains('Network is unreachable')) {
+        state = const CashRegisterState(error: 'Sin conexión a internet.');
+      } else {
+        state = const CashRegisterState(error: 'No se pudo cargar las cajas. Intenta de nuevo.');
+      }
     }
   }
 }

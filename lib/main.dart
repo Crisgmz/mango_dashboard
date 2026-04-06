@@ -4,12 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/app.dart';
 import 'core/network/supabase_bootstrap.dart';
+import 'core/notifications/local_notification_helper.dart';
 
 Future<void> main() async {
   WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
-  
+
   await SupabaseBootstrap.initialize();
+  await LocalNotificationHelper.initialize();
   
   runApp(const ProviderScope(child: MangoDashboardApp()));
 

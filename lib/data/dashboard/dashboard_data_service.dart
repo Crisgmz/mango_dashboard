@@ -91,12 +91,13 @@ class DashboardDataService {
       _client.from('payments')
           .select('amount, change_amount, status, order_id, created_at, payment_methods(code)')
           .gte('created_at', periodStart).lt('created_at', periodEnd),
-      // [1] Active orders
+      // [1] Orders (both active and recently closed for the period)
       _client.from('orders')
-          .select('id, total, status_ext, created_at, table_sessions!inner(id, business_id, customer_name, dining_tables(code, label)), order_items(product_name, qty, quantity, total, order_item_modifiers(name, qty))')
+          .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, dining_tables(code, label)), order_items(product_name, qty, quantity, total, order_item_modifiers(name, qty))')
           .eq('table_sessions.business_id', businessId)
-          .isFilter('closed_at', null)
-          .order('created_at', ascending: false).limit(15),
+          .gte('created_at', periodStart)
+          .lt('created_at', periodEnd)
+          .order('created_at', ascending: false).limit(60),
       // [2] Catalog
       _client.from('menu_items')
           .select('id, name, price, is_active, categories(name), menu_item_groups(modifier_groups(id, name, selection_mode, modifiers(id, name, price_delta, is_active)))')
@@ -163,9 +164,11 @@ class DashboardDataService {
     }
     tickets.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-    // Live orders
+    // Orders (partitioned by closed_at)
     final liveOrders = <LiveOrderItem>[];
+    final closedOrders = <LiveOrderItem>[];
     for (final row in activeOrdersRaw) {
+      final isClosed = row['closed_at'] != null;
       final session = row['table_sessions'];
       final tableData = session is Map<String, dynamic> ? session['dining_tables'] : null;
       final tableLabel = tableData is Map<String, dynamic>
@@ -187,14 +190,20 @@ class DashboardDataService {
         );
       }).toList();
 
-      liveOrders.add(LiveOrderItem(
+      final item = LiveOrderItem(
         id: row['id']?.toString() ?? '',
         title: tableLabel,
         subtitle: customerName ?? row['status_ext']?.toString() ?? 'open',
         total: _toDouble(row['total']),
         status: row['status_ext']?.toString() ?? 'open',
         items: childItems,
-      ));
+      );
+
+      if (isClosed) {
+        closedOrders.add(item);
+      } else {
+        liveOrders.add(item);
+      }
     }
 
     // Catalog
@@ -310,6 +319,7 @@ class DashboardDataService {
       topProducts: topProducts.take(5).toList(growable: false),
       catalogItems: catalogItems,
       liveOrders: liveOrders,
+      closedOrders: closedOrders,
       pendingAmount: pendingAmount,
       previousDaySales: previousDaySales,
       hourlySales: hourlySales,

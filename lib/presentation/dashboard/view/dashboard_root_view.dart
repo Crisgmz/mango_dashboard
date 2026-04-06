@@ -691,10 +691,12 @@ class _NotificationsSheet extends ConsumerWidget {
   static const _typeIcons = <NotificationType, IconData>{
     NotificationType.itemVoided: Icons.remove_circle_rounded,
     NotificationType.cashClosed: Icons.point_of_sale_rounded,
+    NotificationType.tableOpened: Icons.table_restaurant_rounded,
   };
   static const _typeColors = <NotificationType, Color>{
     NotificationType.itemVoided: Colors.redAccent,
     NotificationType.cashClosed: Colors.blueAccent,
+    NotificationType.tableOpened: MangoThemeFactory.success,
   };
 
   @override

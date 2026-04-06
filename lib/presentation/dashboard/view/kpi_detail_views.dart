@@ -192,37 +192,195 @@ class _TicketCard extends StatelessWidget {
 }
 
 /// Órdenes - lista de todas las órdenes del período
-class OrdersDetailView extends StatelessWidget {
+class OrdersDetailView extends StatefulWidget {
   const OrdersDetailView({super.key, required this.summary});
 
   final DashboardSummary summary;
 
   @override
+  State<OrdersDetailView> createState() => _OrdersDetailViewState();
+}
+
+class _OrdersDetailViewState extends State<OrdersDetailView> {
+  int _filterIndex = 0; // 0: Todas, 1: Activas, 2: Cerradas
+
+  @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
-    final orders = summary.liveOrders;
+
+    final List<LiveOrderItem> displayedOrders;
+    if (_filterIndex == 0) {
+      displayedOrders = [...widget.summary.liveOrders, ...widget.summary.closedOrders];
+    } else if (_filterIndex == 1) {
+      displayedOrders = widget.summary.liveOrders;
+    } else {
+      displayedOrders = widget.summary.closedOrders;
+    }
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Órdenes'),
         centerTitle: false,
       ),
-      body: orders.isEmpty
-          ? Center(child: Text('No hay órdenes activas.', style: Theme.of(context).textTheme.bodySmall))
-          : ListView.builder(
-              padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
-              itemCount: orders.length + 1,
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  return _OrdersSummaryHeader(
-                    total: summary.totalTickets,
-                    active: summary.activeOrders,
-                  );
-                }
-                final order = orders[index - 1];
-                return _OrderDetailCard(order: order);
-              },
+      body: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: dpi.space(16), vertical: dpi.space(8)),
+            child: _OrderFilterTabs(
+              selectedIndex: _filterIndex,
+              onChanged: (index) => setState(() => _filterIndex = index),
             ),
+          ),
+          Expanded(
+            child: displayedOrders.isEmpty
+                ? Center(
+                    child: Text(
+                      _filterIndex == 1 ? 'No hay órdenes activas.' : (_filterIndex == 2 ? 'No hay órdenes cerradas.' : 'No hay órdenes registradas.'),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  )
+                : ListView.builder(
+                    padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(10), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
+                    itemCount: displayedOrders.length + (_filterIndex == 0 ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      if (_filterIndex == 0 && index == 0) {
+                        return _OrdersSummaryHeader(
+                          total: widget.summary.totalTickets,
+                          active: widget.summary.activeOrders,
+                        );
+                      }
+                      
+                      final orderIndex = _filterIndex == 0 ? index - 1 : index;
+                      final order = displayedOrders[orderIndex];
+
+                      // Section headers if "Todas" is selected
+                      if (_filterIndex == 0) {
+                         if (orderIndex == 0 && widget.summary.liveOrders.isNotEmpty) {
+                           return Column(
+                             crossAxisAlignment: CrossAxisAlignment.start,
+                             children: [
+                               _SectionHeader(title: 'ACTIVAS', count: widget.summary.liveOrders.length, color: MangoThemeFactory.mango),
+                               _OrderDetailCard(order: order),
+                             ],
+                           );
+                         }
+                         if (orderIndex == widget.summary.liveOrders.length && widget.summary.closedOrders.isNotEmpty) {
+                           return Column(
+                             crossAxisAlignment: CrossAxisAlignment.start,
+                             children: [
+                               SizedBox(height: dpi.space(16)),
+                               _SectionHeader(title: 'CERRADAS', count: widget.summary.closedOrders.length, color: Colors.grey),
+                               _OrderDetailCard(order: order),
+                             ],
+                           );
+                         }
+                      }
+
+                      return _OrderDetailCard(order: order);
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({required this.title, required this.count, required this.color});
+  final String title;
+  final int count;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Padding(
+      padding: EdgeInsets.only(bottom: dpi.space(10), left: dpi.space(4)),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: dpi.font(11),
+              fontWeight: FontWeight.w800,
+              color: color,
+              letterSpacing: 1.2,
+            ),
+          ),
+          SizedBox(width: dpi.space(8)),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: dpi.space(6), vertical: dpi.space(2)),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(dpi.radius(6)),
+            ),
+            child: Text(
+              '$count',
+              style: TextStyle(fontSize: dpi.font(10), fontWeight: FontWeight.w700, color: color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OrderFilterTabs extends StatelessWidget {
+  const _OrderFilterTabs({required this.selectedIndex, required this.onChanged});
+  final int selectedIndex;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Container(
+      height: dpi.scale(38),
+      padding: EdgeInsets.all(dpi.space(4)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.cardColor(context),
+        borderRadius: BorderRadius.circular(dpi.radius(10)),
+        border: Border.all(color: MangoThemeFactory.borderColor(context)),
+      ),
+      child: Row(
+        children: [
+          _TabItem(label: 'Todas', isSelected: selectedIndex == 0, onTap: () => onChanged(0)),
+          _TabItem(label: 'Activas', isSelected: selectedIndex == 1, onTap: () => onChanged(1)),
+          _TabItem(label: 'Cerradas', isSelected: selectedIndex == 2, onTap: () => onChanged(2)),
+        ],
+      ),
+    );
+  }
+}
+
+class _TabItem extends StatelessWidget {
+  const _TabItem({required this.label, required this.isSelected, required this.onTap});
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: isSelected ? MangoThemeFactory.mango : Colors.transparent,
+            borderRadius: BorderRadius.circular(dpi.radius(7)),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: dpi.font(12),
+              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+              color: isSelected ? Colors.white : MangoThemeFactory.textColor(context).withValues(alpha: 0.6),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -293,10 +451,20 @@ class _OrderDetailCard extends StatelessWidget {
                 width: dpi.scale(38),
                 height: dpi.scale(38),
                 decoration: BoxDecoration(
-                  color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+                  color: (order.status == 'closed' || order.status == 'completed') 
+                    ? Colors.grey.withValues(alpha: 0.1)
+                    : MangoThemeFactory.mango.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(dpi.radius(10)),
                 ),
-                child: Icon(Icons.restaurant_rounded, color: MangoThemeFactory.mango, size: dpi.icon(18)),
+                child: Icon(
+                  (order.status == 'closed' || order.status == 'completed') 
+                    ? Icons.check_circle_outline_rounded 
+                    : Icons.restaurant_rounded, 
+                  color: (order.status == 'closed' || order.status == 'completed')
+                    ? Colors.grey
+                    : MangoThemeFactory.mango, 
+                  size: dpi.icon(18)
+                ),
               ),
               SizedBox(width: dpi.space(12)),
               Expanded(

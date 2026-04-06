@@ -15,6 +15,7 @@ class DashboardSummary {
     required this.topProducts,
     required this.catalogItems,
     required this.liveOrders,
+    required this.closedOrders,
     this.pendingAmount = 0,
     this.previousDaySales = 0,
     this.hourlySales = const [],
@@ -38,6 +39,7 @@ class DashboardSummary {
   final List<TopProduct> topProducts;
   final List<CatalogItem> catalogItems;
   final List<LiveOrderItem> liveOrders;
+  final List<LiveOrderItem> closedOrders;
   final SalesDateFilter filter;
   final List<TicketItem> tickets;
   final List<PendingTable> pendingTables;

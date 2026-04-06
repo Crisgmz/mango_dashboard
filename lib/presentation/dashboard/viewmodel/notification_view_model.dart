@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/di/providers.dart';
+import '../../../core/notifications/local_notification_helper.dart';
 import '../../../domain/notifications/dashboard_notification.dart';
 
 class NotificationState {
@@ -30,6 +31,11 @@ class NotificationViewModel extends StateNotifier<NotificationState> {
     _subscription = service.stream.listen((notification) {
       state = state.copyWith(
         notifications: <DashboardNotification>[notification, ...state.notifications].take(50).toList(),
+      );
+      // Show system notification
+      LocalNotificationHelper.show(
+        title: notification.title,
+        body: notification.message,
       );
     });
   }

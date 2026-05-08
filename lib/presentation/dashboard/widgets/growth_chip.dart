@@ -100,3 +100,23 @@ String comparisonLabelFor(SalesDateFilter filter) {
       return 'vs periodo previo';
   }
 }
+
+/// Returns the current period label, e.g. "este mes" / "esta semana".
+String periodLabelFor(SalesDateFilter filter) {
+  switch (filter) {
+    case SalesDateFilter.today:
+      return 'hoy';
+    case SalesDateFilter.yesterday:
+      return 'ayer';
+    case SalesDateFilter.week:
+      return 'estos 7 días';
+    case SalesDateFilter.month:
+      return 'este mes';
+    case SalesDateFilter.lastMonth:
+      return 'mes pasado';
+    case SalesDateFilter.last3Months:
+      return 'estos 90 días';
+    case SalesDateFilter.custom:
+      return 'periodo elegido';
+  }
+}

@@ -104,7 +104,7 @@ class DashboardDataService {
     final pEnd = prevEnd.toUtc().toIso8601String();
 
     final periodPaymentsFuture = _client.from('payments')
-        .select('amount, change_amount, status, order_id, created_at, payment_methods(code)')
+        .select('amount, change_amount, status, order_id, created_at, processed_by, payment_methods(code)')
         .eq('business_id', businessId)
         .gte('created_at', periodStart).lt('created_at', periodEnd);
 
@@ -324,9 +324,30 @@ class DashboardDataService {
     // Top seller (disabled — order_items lacks created_by column)
     TopSeller? topSeller;
 
+    // ── Waiter performance: map orderId → waiter via table_sessions, then
+    // aggregate the period's payments per waiter and resolve profile names.
+    final paymentOrderIds = paymentRows
+        .map((p) => p['order_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+
+    final performanceResults = await Future.wait([
+      _loadWaiterPerformance(
+        paymentRows: paymentRows,
+        paymentOrderIds: paymentOrderIds,
+      ),
+      _loadCashierPerformance(paymentRows: paymentRows),
+    ]);
+    final waiterPerformance = performanceResults[0] as List<WaiterPerformance>;
+    final cashierPerformance = performanceResults[1] as List<CashierPerformance>;
+
     final activeOrdersCount = liveOrders.length;
-    final closedOrdersCount = closedOrders.length;
-    final totalTickets = activeOrdersCount + closedOrdersCount;
+    // Tickets are payment-driven, not order-driven: this keeps the count
+    // consistent with `totalSales` (also derived from `paymentRows`) and
+    // works in liteMode (which skips the closed-orders query).
+    final totalTickets = tickets.length;
 
     return DashboardSummary(
       profile: profile,
@@ -348,7 +369,136 @@ class DashboardDataService {
       previousDaySales: previousDaySales,
       tickets: tickets,
       pendingTables: pendingTables,
+      waiterPerformance: waiterPerformance,
+      cashierPerformance: cashierPerformance,
+      periodStart: start,
+      periodEnd: end,
     );
+  }
+
+  /// Aggregates the period's payments per cashier (`payments.processed_by`)
+  /// and resolves their display names. Excludes void/cancelled payments and
+  /// payments without an assigned cashier.
+  Future<List<CashierPerformance>> _loadCashierPerformance({
+    required List<Map<String, dynamic>> paymentRows,
+  }) async {
+    final agg = <String, _CashierAgg>{};
+    for (final row in paymentRows) {
+      final processedBy = row['processed_by']?.toString();
+      if (processedBy == null || processedBy.isEmpty) continue;
+      final status = row['status']?.toString();
+      if (status == 'void' || status == 'cancelled') continue;
+      final net = _netAmount(row['amount'], row['change_amount']);
+      final orderId = row['order_id']?.toString();
+      final entry = agg.putIfAbsent(processedBy, _CashierAgg.new);
+      entry.total += net;
+      entry.ticketCount += 1;
+      if (orderId != null && orderId.isNotEmpty) entry.orderIds.add(orderId);
+    }
+    if (agg.isEmpty) return const [];
+
+    final cashierIds = agg.keys.toList(growable: false);
+    final profileRows = await _batchedInFilter(
+      table: 'profiles',
+      select: 'id, full_name',
+      filterColumn: 'id',
+      values: cashierIds,
+    );
+    final namesById = <String, String>{};
+    for (final row in profileRows) {
+      final id = row['id']?.toString();
+      final name = row['full_name']?.toString().trim();
+      if (id != null && name != null && name.isNotEmpty) namesById[id] = name;
+    }
+
+    final result = agg.entries
+        .map((e) => CashierPerformance(
+              userId: e.key,
+              name: namesById[e.key] ?? 'Cajero',
+              totalSales: e.value.total,
+              ticketCount: e.value.ticketCount,
+              tablesCount: e.value.orderIds.length,
+            ))
+        .toList()
+      ..sort((a, b) => b.totalSales.compareTo(a.totalSales));
+    return result;
+  }
+
+  /// Aggregates the period's payments per waiter (`table_sessions.waiter_user_id`)
+  /// and resolves their display names from the `profiles` table. Excludes
+  /// payments tied to sessions without an assigned waiter.
+  Future<List<WaiterPerformance>> _loadWaiterPerformance({
+    required List<Map<String, dynamic>> paymentRows,
+    required List<String> paymentOrderIds,
+  }) async {
+    if (paymentOrderIds.isEmpty) return const [];
+
+    // 1. Map orderId → (waiterUserId, sessionId).
+    final orderRows = await _batchedInFilter(
+      table: 'orders',
+      select: 'id, table_sessions!inner(id, waiter_user_id)',
+      filterColumn: 'id',
+      values: paymentOrderIds,
+    );
+    final orderToWaiter = <String, String>{};
+    final orderToSession = <String, String>{};
+    for (final row in orderRows) {
+      final oid = row['id']?.toString();
+      if (oid == null || oid.isEmpty) continue;
+      final session = row['table_sessions'];
+      if (session is Map<String, dynamic>) {
+        final wid = session['waiter_user_id']?.toString();
+        final sid = session['id']?.toString();
+        if (wid != null && wid.isNotEmpty) orderToWaiter[oid] = wid;
+        if (sid != null && sid.isNotEmpty) orderToSession[oid] = sid;
+      }
+    }
+    if (orderToWaiter.isEmpty) return const [];
+
+    // 2. Aggregate payments per waiter.
+    final agg = <String, _WaiterAgg>{};
+    for (final row in paymentRows) {
+      final oid = row['order_id']?.toString();
+      if (oid == null) continue;
+      final waiterId = orderToWaiter[oid];
+      if (waiterId == null) continue;
+      final status = row['status']?.toString();
+      if (status == 'void' || status == 'cancelled') continue;
+      final net = _netAmount(row['amount'], row['change_amount']);
+      final entry = agg.putIfAbsent(waiterId, _WaiterAgg.new);
+      entry.total += net;
+      entry.ticketCount += 1;
+      final sessionId = orderToSession[oid];
+      if (sessionId != null) entry.sessions.add(sessionId);
+    }
+    if (agg.isEmpty) return const [];
+
+    // 3. Resolve waiter names.
+    final waiterIds = agg.keys.toList(growable: false);
+    final profileRows = await _batchedInFilter(
+      table: 'profiles',
+      select: 'id, full_name',
+      filterColumn: 'id',
+      values: waiterIds,
+    );
+    final namesById = <String, String>{};
+    for (final row in profileRows) {
+      final id = row['id']?.toString();
+      final name = row['full_name']?.toString().trim();
+      if (id != null && name != null && name.isNotEmpty) namesById[id] = name;
+    }
+
+    final result = agg.entries
+        .map((e) => WaiterPerformance(
+              userId: e.key,
+              name: namesById[e.key] ?? 'Mesero',
+              totalSales: e.value.total,
+              ticketCount: e.value.ticketCount,
+              tablesCount: e.value.sessions.length,
+            ))
+        .toList()
+      ..sort((a, b) => b.totalSales.compareTo(a.totalSales));
+    return result;
   }
 
   LiveOrderItem _mapToLiveOrderItem(Map<String, dynamic> row) {
@@ -401,6 +551,306 @@ class DashboardDataService {
       openedAt: openedAt,
       peopleCount: peopleCount,
     );
+  }
+
+  /// Loads the audit breakdown for a period: voided items, cancelled
+  /// payments, and discounted orders. Used by the lazy `AuditDetailView`.
+  /// Resolves waiter/cashier names via a single batched profiles query.
+  Future<({AuditSummary summary, AuditDetail detail})> loadAuditDetail({
+    required String businessId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final periodStart = start.toUtc().toIso8601String();
+    final periodEnd = end.toUtc().toIso8601String();
+
+    final results = await Future.wait([
+      // Voided items in period — joined to orders → table_sessions for table
+      // label, customer name, and waiter attribution.
+      _client
+          .from('order_items')
+          .select(
+              'id, product_name, qty, quantity, subtotal, orders!inner(id, created_at, table_sessions!inner(id, business_id, customer_name, waiter_user_id, dining_tables(label, code)))')
+          .eq('status', 'void')
+          .eq('orders.table_sessions.business_id', businessId)
+          .gte('orders.created_at', periodStart)
+          .lt('orders.created_at', periodEnd),
+
+      // Cancelled / voided payments in period.
+      _client
+          .from('payments')
+          .select(
+              'id, amount, change_amount, status, created_at, processed_by, payment_methods(code), orders(id, table_sessions(dining_tables(label, code)))')
+          .eq('business_id', businessId)
+          .inFilter('status', ['void', 'cancelled'])
+          .gte('created_at', periodStart)
+          .lt('created_at', periodEnd),
+
+      // Orders with discount > 0.
+      _client
+          .from('orders')
+          .select(
+              'id, total, discounts, created_at, table_sessions!inner(id, business_id, customer_name, waiter_user_id, dining_tables(label, code))')
+          .eq('table_sessions.business_id', businessId)
+          .gt('discounts', 0)
+          .gte('created_at', periodStart)
+          .lt('created_at', periodEnd),
+    ]);
+
+    final voidRows = List<Map<String, dynamic>>.from(results[0]);
+    final cancelRows = List<Map<String, dynamic>>.from(results[1]);
+    final discountRows = List<Map<String, dynamic>>.from(results[2]);
+
+    // Collect all user IDs we need to resolve names for.
+    final userIds = <String>{};
+    for (final row in voidRows) {
+      final session = (row['orders'] is Map<String, dynamic>)
+          ? row['orders']['table_sessions']
+          : null;
+      if (session is Map<String, dynamic>) {
+        final id = session['waiter_user_id']?.toString();
+        if (id != null && id.isNotEmpty) userIds.add(id);
+      }
+    }
+    for (final row in cancelRows) {
+      final id = row['processed_by']?.toString();
+      if (id != null && id.isNotEmpty) userIds.add(id);
+    }
+    for (final row in discountRows) {
+      final session = row['table_sessions'];
+      if (session is Map<String, dynamic>) {
+        final id = session['waiter_user_id']?.toString();
+        if (id != null && id.isNotEmpty) userIds.add(id);
+      }
+    }
+
+    final namesById = <String, String>{};
+    if (userIds.isNotEmpty) {
+      final profileRows = await _batchedInFilter(
+        table: 'profiles',
+        select: 'id, full_name',
+        filterColumn: 'id',
+        values: userIds.toList(growable: false),
+      );
+      for (final row in profileRows) {
+        final id = row['id']?.toString();
+        final name = row['full_name']?.toString().trim();
+        if (id != null && name != null && name.isNotEmpty) namesById[id] = name;
+      }
+    }
+
+    // Build VoidedItem list + accumulate KPIs.
+    double voidedAmount = 0;
+    final voidedItems = <VoidedItem>[];
+    for (final row in voidRows) {
+      final order = row['orders'];
+      final session = order is Map<String, dynamic> ? order['table_sessions'] : null;
+      final tableData = session is Map<String, dynamic> ? session['dining_tables'] : null;
+      final amount = _toDouble(row['subtotal']);
+      voidedAmount += amount;
+      final waiterId = session is Map<String, dynamic>
+          ? session['waiter_user_id']?.toString()
+          : null;
+      voidedItems.add(VoidedItem(
+        orderItemId: row['id']?.toString() ?? '',
+        productName: row['product_name']?.toString() ?? 'Producto',
+        amount: amount,
+        quantity: _toDouble(row['qty'] ?? row['quantity']),
+        createdAt: order is Map<String, dynamic>
+            ? (DateTime.tryParse(order['created_at']?.toString() ?? '') ?? DateTime.now())
+            : DateTime.now(),
+        tableLabel: tableData is Map<String, dynamic>
+            ? (tableData['label']?.toString() ?? tableData['code']?.toString())
+            : null,
+        customerName: session is Map<String, dynamic>
+            ? session['customer_name']?.toString()
+            : null,
+        waiterName: waiterId != null ? namesById[waiterId] : null,
+      ));
+    }
+    voidedItems.sort((a, b) => b.amount.compareTo(a.amount));
+
+    // Build CancelledPayment list + KPIs.
+    double cancelledAmount = 0;
+    final cancelledPayments = <CancelledPayment>[];
+    for (final row in cancelRows) {
+      final amount = _netAmount(row['amount'], row['change_amount']);
+      cancelledAmount += amount;
+      final pm = row['payment_methods'];
+      final order = row['orders'];
+      final session = order is Map<String, dynamic> ? order['table_sessions'] : null;
+      final tableData = session is Map<String, dynamic> ? session['dining_tables'] : null;
+      final cashierId = row['processed_by']?.toString();
+      cancelledPayments.add(CancelledPayment(
+        paymentId: row['id']?.toString() ?? '',
+        amount: amount,
+        createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+        status: row['status']?.toString() ?? 'cancelled',
+        methodCode: pm is Map<String, dynamic> ? pm['code']?.toString() : null,
+        cashierName: cashierId != null ? namesById[cashierId] : null,
+        tableLabel: tableData is Map<String, dynamic>
+            ? (tableData['label']?.toString() ?? tableData['code']?.toString())
+            : null,
+      ));
+    }
+    cancelledPayments.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    // Build DiscountedOrder list + KPIs.
+    double discountsAmount = 0;
+    final discountedOrders = <DiscountedOrder>[];
+    for (final row in discountRows) {
+      final discount = _toDouble(row['discounts']);
+      discountsAmount += discount;
+      final session = row['table_sessions'];
+      final tableData = session is Map<String, dynamic> ? session['dining_tables'] : null;
+      final waiterId = session is Map<String, dynamic>
+          ? session['waiter_user_id']?.toString()
+          : null;
+      discountedOrders.add(DiscountedOrder(
+        orderId: row['id']?.toString() ?? '',
+        discount: discount,
+        total: _toDouble(row['total']),
+        createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+        tableLabel: tableData is Map<String, dynamic>
+            ? (tableData['label']?.toString() ?? tableData['code']?.toString())
+            : null,
+        customerName: session is Map<String, dynamic>
+            ? session['customer_name']?.toString()
+            : null,
+        waiterName: waiterId != null ? namesById[waiterId] : null,
+      ));
+    }
+    discountedOrders.sort((a, b) => b.discount.compareTo(a.discount));
+
+    final summary = AuditSummary(
+      voidedAmount: voidedAmount,
+      voidedItemsCount: voidedItems.length,
+      cancelledAmount: cancelledAmount,
+      cancelledPaymentsCount: cancelledPayments.length,
+      discountsAmount: discountsAmount,
+      discountsAppliedCount: discountedOrders.length,
+    );
+
+    return (
+      summary: summary,
+      detail: AuditDetail(
+        voidedItems: voidedItems,
+        cancelledPayments: cancelledPayments,
+        discountedOrders: discountedOrders,
+      ),
+    );
+  }
+
+  /// Loads the table sessions a specific waiter served in [start..end].
+  /// Each row represents a mesa with its order total.
+  Future<List<PersonSession>> loadSessionsForWaiter({
+    required String businessId,
+    required String waiterUserId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final rows = await _client
+        .from('table_sessions')
+        .select('''
+          id, opened_at, closed_at, customer_name, people_count, origin,
+          dining_tables(id, label, code, zones(name)),
+          orders(total)
+        ''')
+        .eq('business_id', businessId)
+        .eq('waiter_user_id', waiterUserId)
+        .gte('opened_at', start.toUtc().toIso8601String())
+        .lt('opened_at', end.toUtc().toIso8601String())
+        .order('opened_at', ascending: false);
+
+    return List<Map<String, dynamic>>.from(rows).map((row) {
+      final table = row['dining_tables'];
+      final zones = table is Map<String, dynamic> ? table['zones'] : null;
+      double total = 0;
+      final orders = row['orders'];
+      if (orders is List) {
+        for (final o in orders) {
+          if (o is Map<String, dynamic>) total += _toDouble(o['total']);
+        }
+      }
+      return PersonSession(
+        sessionId: row['id']?.toString() ?? '',
+        tableLabel: table is Map<String, dynamic>
+            ? (table['label']?.toString() ?? table['code']?.toString() ?? 'Mesa')
+            : 'Sesión',
+        zoneName: zones is Map<String, dynamic> ? zones['name']?.toString() : null,
+        openedAt: DateTime.tryParse(row['opened_at']?.toString() ?? '') ?? DateTime.now(),
+        closedAt: DateTime.tryParse(row['closed_at']?.toString() ?? ''),
+        customerName: row['customer_name']?.toString(),
+        peopleCount: row['people_count'] is int
+            ? row['people_count'] as int
+            : int.tryParse(row['people_count']?.toString() ?? ''),
+        total: total,
+        origin: row['origin']?.toString(),
+      );
+    }).toList(growable: false);
+  }
+
+  /// Loads payments processed by a specific cashier in [start..end], expanding
+  /// each into a [PersonSession] (one row per payment, with the mesa's metadata).
+  Future<List<PersonSession>> loadPaymentsForCashier({
+    required String businessId,
+    required String cashierUserId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final rows = await _client
+        .from('payments')
+        .select('''
+          id, amount, change_amount, status, created_at,
+          payment_methods(code),
+          orders!inner(
+            id,
+            table_sessions!inner(
+              id, opened_at, closed_at, customer_name, people_count, origin,
+              dining_tables(id, label, code, zones(name))
+            )
+          )
+        ''')
+        .eq('business_id', businessId)
+        .eq('processed_by', cashierUserId)
+        .gte('created_at', start.toUtc().toIso8601String())
+        .lt('created_at', end.toUtc().toIso8601String())
+        .not('status', 'in', '(void,cancelled)')
+        .order('created_at', ascending: false);
+
+    return List<Map<String, dynamic>>.from(rows).map((row) {
+      final order = row['orders'];
+      final session = order is Map<String, dynamic> ? order['table_sessions'] : null;
+      final table = session is Map<String, dynamic> ? session['dining_tables'] : null;
+      final zones = table is Map<String, dynamic> ? table['zones'] : null;
+      final pm = row['payment_methods'];
+      final code = pm is Map<String, dynamic> ? pm['code']?.toString() : null;
+      final net = _netAmount(row['amount'], row['change_amount']);
+      return PersonSession(
+        sessionId: session is Map<String, dynamic> ? session['id']?.toString() ?? '' : '',
+        tableLabel: table is Map<String, dynamic>
+            ? (table['label']?.toString() ?? table['code']?.toString() ?? 'Mesa')
+            : 'Pago',
+        zoneName: zones is Map<String, dynamic> ? zones['name']?.toString() : null,
+        openedAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+        closedAt: session is Map<String, dynamic>
+            ? DateTime.tryParse(session['closed_at']?.toString() ?? '')
+            : null,
+        customerName: session is Map<String, dynamic>
+            ? session['customer_name']?.toString()
+            : null,
+        peopleCount: session is Map<String, dynamic> &&
+                (session['people_count'] is int ||
+                    int.tryParse(session['people_count']?.toString() ?? '') != null)
+            ? (session['people_count'] is int
+                ? session['people_count'] as int
+                : int.tryParse(session['people_count']?.toString() ?? ''))
+            : null,
+        total: net,
+        paymentMethodCode: code,
+        origin: session is Map<String, dynamic> ? session['origin']?.toString() : null,
+      );
+    }).toList(growable: false);
   }
 
   /// Loads zones + their dining tables for the visual table map.
@@ -462,4 +912,16 @@ class DashboardDataService {
     return double.tryParse(value.toString());
   }
 
+}
+
+class _WaiterAgg {
+  double total = 0;
+  int ticketCount = 0;
+  final Set<String> sessions = <String>{};
+}
+
+class _CashierAgg {
+  double total = 0;
+  int ticketCount = 0;
+  final Set<String> orderIds = <String>{};
 }

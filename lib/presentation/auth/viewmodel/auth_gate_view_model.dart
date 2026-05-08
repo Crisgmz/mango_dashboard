@@ -52,9 +52,17 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
   final Ref _ref;
   StreamSubscription<AuthState>? _subscription;
   int _retryCount = 0;
+  bool _bootstrapping = false;
   static const _maxRetries = 3;
 
   Future<void> bootstrap() async {
+    // Skip concurrent bootstraps. Supabase's auth subscription fires
+    // bootstrap whenever the session changes (signIn / tokenRefreshed /
+    // signOut), and several call sites also await it explicitly.
+    // Re-entering causes a write race on SharedPreferences and can
+    // overwrite a successful state with a stale one.
+    if (_bootstrapping) return;
+    _bootstrapping = true;
     state = state.copyWith(isLoading: true, clearError: true);
     final service = _ref.read(adminAccessServiceProvider);
 
@@ -67,8 +75,13 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
 
       final profile = await service.resolveCurrentAccess();
       if (profile != null) {
-        // Guardar cuenta automáticamente al resolver acceso
-        await _saveCurrentAccount(profile);
+        // Guardar cuenta automáticamente al resolver acceso. Falla aquí
+        // (ej. SharedPreferences corrupto) NO debe romper el login.
+        try {
+          await _saveCurrentAccount(profile);
+        } catch (_) {
+          // Persisting saved-account metadata is best-effort.
+        }
       }
       _retryCount = 0;
       state = AuthGateState(
@@ -85,6 +98,9 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
         _retryCount++;
         if (_retryCount <= _maxRetries) {
           await Future.delayed(const Duration(seconds: 2));
+          // Release the guard before recursing — the inner bootstrap will
+          // re-acquire it. Without this, the recursive call would no-op.
+          _bootstrapping = false;
           return bootstrap();
         }
         // Agotados los reintentos, cerrar sesión
@@ -106,6 +122,8 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
         profile: null,
         error: _friendlyNetworkError(e),
       );
+    } finally {
+      _bootstrapping = false;
     }
   }
 

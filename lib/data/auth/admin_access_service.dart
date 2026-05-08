@@ -95,11 +95,19 @@ class AdminAccessService {
   /// JSON of the current session — captures access + refresh tokens, expiry,
   /// and user info. Used for instant restore via [recoverSerializedSession]
   /// without a network call when the access token is still valid.
+  ///
+  /// Format must match what `auth.recoverSession()` expects:
+  /// `{ "currentSession": <session.toJson()>, "expiresAt": <unix-seconds> }`.
+  /// Passing the session JSON directly (without the wrapper) makes
+  /// `recoverSession` throw with "Missing currentSession.".
   String? get currentSerializedSession {
     final session = _client.auth.currentSession;
     if (session == null) return null;
     try {
-      return jsonEncode(session.toJson());
+      return jsonEncode({
+        'currentSession': session.toJson(),
+        'expiresAt': session.expiresAt,
+      });
     } catch (_) {
       return null;
     }

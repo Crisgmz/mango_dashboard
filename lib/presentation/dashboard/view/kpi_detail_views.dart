@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:printing/printing.dart';
 
 import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../data/cash_register/reporte_z_pdf_builder.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
@@ -995,7 +997,7 @@ class _ClosingDetailSheet extends StatelessWidget {
                     );
                   },
                   icon: const Icon(Icons.receipt_long_rounded),
-                  label: const Text('Ver Reporte Z'),
+                  label: const Text('Ver reporte de cierre'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: MangoThemeFactory.mango,
                     side: BorderSide(color: MangoThemeFactory.mango.withValues(alpha: 0.5)),
@@ -1040,24 +1042,35 @@ class _ClosingDetailSheet extends StatelessWidget {
               Text('Cómo cerró', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               SizedBox(height: dpi.space(10)),
               _MetricCard(
-                icon: Icons.calculate_rounded, 
-                color: MangoThemeFactory.info, 
-                label: 'Esperado', 
-                value: MangoFormatters.currency(closing.cashSales + closing.cardSales + closing.transferSales),
+                icon: Icons.calculate_rounded,
+                color: MangoThemeFactory.info,
+                label: 'Esperado en caja',
+                value: MangoFormatters.currency(_cashExpected(closing)),
               ),
               SizedBox(height: dpi.space(10)),
               _MetricCard(
-                icon: Icons.account_balance_wallet_rounded, 
-                color: MangoThemeFactory.warning, 
-                label: 'Monto cierre', 
-                value: MangoFormatters.currency(closing.cashSales + closing.cardSales + closing.transferSales),
+                icon: Icons.account_balance_wallet_rounded,
+                color: MangoThemeFactory.warning,
+                label: 'Contado al cierre',
+                value: MangoFormatters.currency(closing.closingAmount),
               ),
               SizedBox(height: dpi.space(10)),
-              _MetricCard(
-                icon: Icons.compare_arrows_rounded, 
-                color: MangoThemeFactory.success, 
-                label: 'Diferencia', 
-                value: MangoFormatters.currency(0),
+              Builder(
+                builder: (_) {
+                  final diff = closing.closingAmount - _cashExpected(closing);
+                  final isSurplus = diff > 0;
+                  final isShortfall = diff < 0;
+                  final color = isShortfall
+                      ? MangoThemeFactory.danger
+                      : (isSurplus ? MangoThemeFactory.success : MangoThemeFactory.mutedText(context));
+                  final label = isShortfall ? 'Faltante' : (isSurplus ? 'Sobrante' : 'Diferencia');
+                  return _MetricCard(
+                    icon: Icons.compare_arrows_rounded,
+                    color: color,
+                    label: label,
+                    value: MangoFormatters.currency(diff.abs()),
+                  );
+                },
               ),
               SizedBox(height: dpi.space(24)),
             ],
@@ -1065,6 +1078,17 @@ class _ClosingDetailSheet extends StatelessWidget {
         );
       },
     );
+  }
+
+  /// Expected cash in the drawer at closing time:
+  /// `apertura + ventas en efectivo + depósitos − retiros − gastos`.
+  /// Mirrors the formula used in the printed receipt.
+  static double _cashExpected(RegisterClosing c) {
+    return c.openingAmount +
+        c.cashSales +
+        c.totalDeposits -
+        c.totalWithdrawals -
+        c.totalExpenses;
   }
 }
 
@@ -1557,44 +1581,147 @@ class _TopProductCard extends StatelessWidget {
 }
 
 /// Reporte Z (cierre de turno) — formato tipo recibo, listo para imprimir.
-class ReporteZView extends ConsumerWidget {
+class ReporteZView extends ConsumerStatefulWidget {
   const ReporteZView({super.key, required this.closing});
 
   final RegisterClosing closing;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ReporteZView> createState() => _ReporteZViewState();
+}
+
+class _ReporteZViewState extends ConsumerState<ReporteZView> {
+  late Future<List<NcfTypeSummary>> _ncfsFuture;
+  List<NcfTypeSummary> _ncfs = const [];
+  bool _ncfsLoading = true;
+  bool _ncfsError = false;
+  bool _exportInFlight = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ncfsFuture = _loadNcfs();
+  }
+
+  Future<List<NcfTypeSummary>> _loadNcfs() async {
+    final profile = ref.read(authGateViewModelProvider).profile;
+    final businessId = profile?.businessId;
+    if (businessId == null) {
+      if (mounted) {
+        setState(() {
+          _ncfsLoading = false;
+          _ncfsError = true;
+        });
+      }
+      return const [];
+    }
+    try {
+      final list = await ref.read(cashRegisterDataServiceProvider).loadNcfsForSession(
+            businessId: businessId,
+            openedAt: widget.closing.openedAt ??
+                widget.closing.closedAt.subtract(const Duration(hours: 24)),
+            closedAt: widget.closing.closedAt,
+          );
+      if (mounted) {
+        setState(() {
+          _ncfs = list;
+          _ncfsLoading = false;
+        });
+      }
+      return list;
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _ncfsLoading = false;
+          _ncfsError = true;
+        });
+      }
+      return const [];
+    }
+  }
+
+  Future<void> _handlePrint(String businessName) async {
+    if (_exportInFlight) return;
+    setState(() => _exportInFlight = true);
+    try {
+      final doc = await ReporteZPdfBuilder.build(
+        closing: widget.closing,
+        businessName: businessName,
+        ncfs: _ncfs,
+      );
+      await Printing.layoutPdf(
+        onLayout: (format) async => doc.save(),
+        name: _pdfName(),
+      );
+    } finally {
+      if (mounted) setState(() => _exportInFlight = false);
+    }
+  }
+
+  Future<void> _handleShare(String businessName) async {
+    if (_exportInFlight) return;
+    setState(() => _exportInFlight = true);
+    try {
+      final doc = await ReporteZPdfBuilder.build(
+        closing: widget.closing,
+        businessName: businessName,
+        ncfs: _ncfs,
+      );
+      final bytes = await doc.save();
+      await Printing.sharePdf(bytes: bytes, filename: '${_pdfName()}.pdf');
+    } finally {
+      if (mounted) setState(() => _exportInFlight = false);
+    }
+  }
+
+  String _pdfName() {
+    final d = widget.closing.closedAt;
+    final stamp = '${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}_${d.hour.toString().padLeft(2, '0')}${d.minute.toString().padLeft(2, '0')}';
+    return 'reporte_z_$stamp';
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     final auth = ref.watch(authGateViewModelProvider);
     final profile = auth.profile;
     final businessId = profile?.businessId;
     final businessName = profile?.businessName ?? 'Mi Negocio';
 
+    final canExport = !_ncfsLoading && !_exportInFlight && businessId != null;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Reporte Z'),
+        title: const Text('Reporte de cierre'),
         centerTitle: false,
+        actions: [
+          IconButton(
+            tooltip: 'Compartir',
+            icon: const Icon(Icons.ios_share_rounded),
+            onPressed: canExport ? () => _handleShare(businessName) : null,
+          ),
+          IconButton(
+            tooltip: 'Imprimir',
+            icon: const Icon(Icons.print_rounded),
+            onPressed: canExport ? () => _handlePrint(businessName) : null,
+          ),
+          SizedBox(width: dpi.space(4)),
+        ],
       ),
       body: businessId == null
           ? const Center(child: Text('No se pudo identificar el negocio.'))
           : FutureBuilder<List<NcfTypeSummary>>(
-              future: ref.read(cashRegisterDataServiceProvider).loadNcfsForSession(
-                    businessId: businessId,
-                    openedAt: closing.openedAt ?? closing.closedAt.subtract(const Duration(hours: 24)),
-                    closedAt: closing.closedAt,
-                  ),
+              future: _ncfsFuture,
               builder: (context, snapshot) {
-                final isLoading = snapshot.connectionState == ConnectionState.waiting;
-                final ncfs = snapshot.data ?? const <NcfTypeSummary>[];
                 return ListView(
                   padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
                   children: [
                     _ReporteZReceipt(
-                      closing: closing,
+                      closing: widget.closing,
                       businessName: businessName,
-                      ncfs: ncfs,
-                      ncfsLoading: isLoading,
-                      ncfsError: snapshot.hasError,
+                      ncfs: _ncfs,
+                      ncfsLoading: _ncfsLoading,
+                      ncfsError: _ncfsError,
                     ),
                   ],
                 );
@@ -1658,7 +1785,7 @@ class _ReporteZReceipt extends StatelessWidget {
                 ),
                 SizedBox(height: dpi.space(4)),
                 Text(
-                  'REPORTE Z · CIERRE DE TURNO',
+                  'REPORTE DE CIERRE DE TURNO',
                   style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w700, color: MangoThemeFactory.mutedText(context), letterSpacing: 1.5),
                 ),
               ],

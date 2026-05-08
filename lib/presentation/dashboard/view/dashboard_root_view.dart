@@ -16,15 +16,24 @@ import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_controller.dart';
 import '../../theme/theme_data_factory.dart';
 import '../../../domain/notifications/dashboard_notification.dart';
+import '../../../data/dashboard/sales_layout_service.dart';
 import '../viewmodel/cash_register_view_model.dart';
 import '../viewmodel/dashboard_data_view_model.dart';
 import '../viewmodel/notification_view_model.dart';
+import '../viewmodel/sales_layout_view_model.dart';
 import '../widgets/dashboard_kpi_cards.dart';
 import '../widgets/dashboard_sales_chart.dart';
 import '../widgets/dashboard_skeleton.dart';
 import '../widgets/dashboard_top_products.dart';
 import '../widgets/dashboard_top_seller.dart';
 import '../widgets/growth_chip.dart';
+import '../widgets/month_projection_card.dart';
+import '../widgets/product_projection_card.dart';
+import '../widgets/audit_card.dart';
+import '../widgets/cashier_performance_card.dart';
+import '../widgets/waiter_performance_card.dart';
+import 'audit_detail_view.dart';
+import 'person_sales_detail_view.dart';
 import 'kpi_detail_views.dart';
 
 class DashboardRootView extends ConsumerStatefulWidget {
@@ -192,29 +201,11 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
     ];
 
     return Scaffold(
+      // Refreshes happen silently in the background — values just change in
+      // place. The freshness badge in HomeView already shows "Actualizado
+      // hace Xm" when relevant, no need for a top loader.
       body: SafeArea(
-        child: Stack(
-          children: [
-            IndexedStack(index: _currentIndex, children: pages),
-            // Dynamic loading indicator that doesn't break Safe Area
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                child: (homeDataState.isRefreshing || salesDataState.isRefreshing || cashRegisterState.isLoading)
-                    ? LinearProgressIndicator(
-                        key: const ValueKey('loading_indicator'),
-                        minHeight: 2,
-                        backgroundColor: Colors.transparent,
-                        valueColor: AlwaysStoppedAnimation<Color>(MangoThemeFactory.mango.withValues(alpha: 0.5)),
-                      )
-                    : const SizedBox(key: ValueKey('no_indicator'), height: 2),
-              ),
-            ),
-          ],
-        ),
+        child: IndexedStack(index: _currentIndex, children: pages),
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
@@ -400,13 +391,6 @@ class HomeView extends StatelessWidget {
         padding: EdgeInsets.all(dpi.space(18)),
         children: [
           _HomeHeader(profile: profile),
-          if (dataState.isFromCache || dataState.isRefreshing) ...[
-            SizedBox(height: dpi.space(8)),
-            _FreshnessBadge(
-              cachedAt: dataState.cachedAt,
-              refreshing: dataState.isRefreshing,
-            ),
-          ],
           gap,
           DashboardKpiCards(
             summary: summary,
@@ -490,53 +474,6 @@ class HomeView extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-/// Subtle badge that shows the data's freshness ("hace 3m") and a refreshing
-/// hint when a background fetch is in flight after a cache hydration.
-class _FreshnessBadge extends StatelessWidget {
-  const _FreshnessBadge({this.cachedAt, this.refreshing = false});
-
-  final DateTime? cachedAt;
-  final bool refreshing;
-
-  @override
-  Widget build(BuildContext context) {
-    final dpi = DpiScale.of(context);
-    final muted = MangoThemeFactory.mutedText(context);
-    final freshLabel = _freshness(cachedAt);
-
-    return Row(
-      children: [
-        if (refreshing) ...[
-          SizedBox(
-            width: dpi.scale(11),
-            height: dpi.scale(11),
-            child: CircularProgressIndicator(
-              strokeWidth: 1.5,
-              valueColor: AlwaysStoppedAnimation<Color>(MangoThemeFactory.mango),
-            ),
-          ),
-          SizedBox(width: dpi.space(6)),
-          Text('Actualizando…', style: TextStyle(fontSize: dpi.font(11), color: muted)),
-        ] else ...[
-          Icon(Icons.history_rounded, size: dpi.icon(12), color: muted),
-          SizedBox(width: dpi.space(4)),
-          Text('Actualizado $freshLabel', style: TextStyle(fontSize: dpi.font(11), color: muted)),
-        ],
-      ],
-    );
-  }
-
-  static String _freshness(DateTime? at) {
-    if (at == null) return 'recién';
-    final diff = DateTime.now().difference(at);
-    if (diff.inSeconds < 30) return 'recién';
-    if (diff.inMinutes < 1) return 'hace ${diff.inSeconds}s';
-    if (diff.inHours < 1) return 'hace ${diff.inMinutes}m';
-    if (diff.inDays < 1) return 'hace ${diff.inHours}h';
-    return 'hace ${diff.inDays}d';
   }
 }
 
@@ -1252,14 +1189,28 @@ class SalesView extends ConsumerWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Reporte de Ventas', style: Theme.of(context).textTheme.headlineMedium),
-                  Text('Resumen mensual y diario', style: Theme.of(context).textTheme.bodySmall),
-                ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Reporte de Ventas', style: Theme.of(context).textTheme.headlineMedium),
+                    Text('Resumen mensual y diario', style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
               ),
               _FilterBadge(summary: summary),
+              SizedBox(width: dpi.space(8)),
+              IconButton(
+                tooltip: 'Personalizar orden',
+                icon: const Icon(Icons.tune_rounded),
+                onPressed: () => showModalBottomSheet<void>(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (_) => const _SalesLayoutSheet(),
+                ),
+                color: MangoThemeFactory.mango,
+              ),
             ],
           ),
         SizedBox(height: dpi.space(16)),
@@ -1348,93 +1299,253 @@ class SalesView extends ConsumerWidget {
           ),
         ),
         gap,
-        // Small KPI row for sales tab
-        Row(
+        // Cards rendered in user-customized order (see _SalesLayoutSheet).
+        for (final card in ref.watch(salesLayoutProvider))
+          ..._renderSalesCard(context, ref, card, summary, profile, gap),
+        SizedBox(height: dpi.space(22)),
+        ],
+      ),
+    );
+  }
+
+  /// Builds the widgets for a single [SalesCard] slot. Returns the card
+  /// widget(s) plus a trailing [gap]; returns empty when the card has no
+  /// data to show (e.g., projection cards outside `Mes`).
+  List<Widget> _renderSalesCard(
+    BuildContext context,
+    WidgetRef ref,
+    SalesCard card,
+    DashboardSummary summary,
+    AdminAccessProfile profile,
+    Widget gap,
+  ) {
+    final dpi = DpiScale.of(context);
+
+    Widget? body;
+    switch (card) {
+      case SalesCard.kpis:
+        body = Column(
           children: [
-            Expanded(
-              child: _SmallKpi(
-                label: 'Ventas Totales',
-                value: MangoFormatters.currency(summary.totalSales),
-                color: MangoThemeFactory.success,
-                trailing: GrowthChip(
-                  current: summary.totalSales,
-                  previous: summary.previousDaySales,
-                  compact: true,
-                  onLight: true,
-                ),
-                footer: Text(
-                  comparisonLabelFor(summary.filter),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: dpi.font(10)),
-                ),
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: _SmallKpi(
+                      label: 'Ventas Totales',
+                      value: MangoFormatters.currency(summary.totalSales),
+                      color: MangoThemeFactory.success,
+                      trailing: GrowthChip(
+                        current: summary.totalSales,
+                        previous: summary.previousDaySales,
+                        compact: true,
+                        onLight: true,
+                      ),
+                      footer: Text(
+                        comparisonLabelFor(summary.filter),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: dpi.font(10)),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: dpi.space(10)),
+                  Expanded(
+                    child: _SmallKpi(
+                      label: 'Tickets',
+                      value: MangoFormatters.number(summary.totalTickets),
+                      color: MangoThemeFactory.info,
+                      footer: Text(
+                        periodLabelFor(summary.filter),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: dpi.font(10)),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            SizedBox(width: dpi.space(10)),
-            Expanded(
-              child: _SmallKpi(
-                label: 'Tickets',
-                value: MangoFormatters.number(summary.totalTickets),
-                color: MangoThemeFactory.info,
+            SizedBox(height: dpi.space(10)),
+            _SmallKpi(
+              label: 'Ticket Promedio',
+              value: MangoFormatters.currency(summary.averageTicket),
+              color: MangoThemeFactory.mango,
+              footer: Text(
+                'por venta · ${summary.totalTickets} ${summary.totalTickets == 1 ? 'ticket' : 'tickets'}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: dpi.font(10)),
               ),
             ),
           ],
-        ),
-        SizedBox(height: dpi.space(10)),
-        _SmallKpi(
-          label: 'Ticket Promedio',
-          value: MangoFormatters.currency(summary.averageTicket),
-          color: MangoThemeFactory.mango,
-        ),
-        gap,
-        if (summary.salesByMethod.isNotEmpty)
-          _SalesByMethodCard(methods: summary.salesByMethod),
-        if (summary.salesByMethod.isNotEmpty) gap,
-        DashboardSalesChart(hourlySales: summary.hourlySales, title: 'Ventas por hora', subtitle: 'Flujo de ventas del día'),
-        gap,
-        if (summary.salesByCategory.isNotEmpty) ...[
-          _SalesByCategoryCard(categories: summary.salesByCategory),
-          gap,
-        ],
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Expanded(
-              child: Text('Rendimiento por Producto', style: Theme.of(context).textTheme.titleLarge),
+        );
+        break;
+
+      case SalesCard.monthProjection:
+        if (summary.filter == SalesDateFilter.month) {
+          body = MonthProjectionCard(
+            currentMonthSales: summary.totalSales,
+            previousMonthSales: summary.previousDaySales,
+          );
+        }
+        break;
+
+      case SalesCard.productProjection:
+        if (summary.filter == SalesDateFilter.month && summary.topProducts.isNotEmpty) {
+          body = ProductProjectionCard(products: summary.topProducts);
+        }
+        break;
+
+      case SalesCard.salesByMethod:
+        if (summary.salesByMethod.isNotEmpty) {
+          body = _SalesByMethodCard(methods: summary.salesByMethod);
+        }
+        break;
+
+      case SalesCard.hourlyChart:
+        body = DashboardSalesChart(
+          hourlySales: summary.hourlySales,
+          title: 'Ventas por hora',
+          subtitle: 'Flujo de ventas del día',
+        );
+        break;
+
+      case SalesCard.salesByCategory:
+        if (summary.salesByCategory.isNotEmpty) {
+          body = _SalesByCategoryCard(categories: summary.salesByCategory);
+        }
+        break;
+
+      case SalesCard.waiterPerformance:
+        if (summary.waiterPerformance.isNotEmpty) {
+          body = WaiterPerformanceCard(
+            waiters: summary.waiterPerformance,
+            onItemTap: (w) => _openPersonDetail(
+              context,
+              userId: w.userId,
+              userName: w.name,
+              role: PersonRole.waiter,
+              totalSales: w.totalSales,
+              ticketCount: w.ticketCount,
+              tablesCount: w.tablesCount,
+              summary: summary,
             ),
-            if (summary.topProducts.length > 10)
-              Text(
-                '${summary.topProducts.length} totales',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-          ],
-        ),
-        SizedBox(height: dpi.space(12)),
-        if (summary.topProducts.isEmpty)
-          const EmptyStateCard(title: 'Sin productos', message: 'No hay ventas registradas aún.')
-        else ...[
-          ...summary.topProducts.take(10).map((p) => _ProductSaleRow(product: p, maxAmount: summary.topProducts.first.amount)),
-          if (summary.topProducts.length > 10)
-            Padding(
-              padding: EdgeInsets.only(top: dpi.space(4)),
-              child: SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => TopProductsDetailView(summary: summary)),
-                  ),
-                  icon: const Icon(Icons.list_alt_rounded),
-                  label: Text('Ver todos los productos (${summary.topProducts.length})'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: MangoThemeFactory.mango,
-                    side: BorderSide(color: MangoThemeFactory.mango.withValues(alpha: 0.5)),
-                    padding: EdgeInsets.symmetric(vertical: dpi.space(14)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(dpi.radius(12))),
-                  ),
+          );
+        }
+        break;
+
+      case SalesCard.cashierPerformance:
+        if (summary.cashierPerformance.isNotEmpty) {
+          body = CashierPerformanceCard(
+            cashiers: summary.cashierPerformance,
+            onItemTap: (c) => _openPersonDetail(
+              context,
+              userId: c.userId,
+              userName: c.name,
+              role: PersonRole.cashier,
+              totalSales: c.totalSales,
+              ticketCount: c.ticketCount,
+              tablesCount: c.tablesCount,
+              summary: summary,
+            ),
+          );
+        }
+        break;
+
+      case SalesCard.audit:
+        body = AuditCard(
+          onTap: () {
+            final start = summary.periodStart ??
+                DateTime.now().subtract(const Duration(hours: 24));
+            final end = summary.periodEnd ?? DateTime.now();
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => AuditDetailView(
+                  start: start,
+                  end: end,
+                  periodLabel: periodLabelFor(summary.filter),
                 ),
               ),
+            );
+          },
+        );
+        break;
+
+      case SalesCard.topProducts:
+        body = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text('Rendimiento por Producto', style: Theme.of(context).textTheme.titleLarge),
+                ),
+                if (summary.topProducts.length > 10)
+                  Text(
+                    '${summary.topProducts.length} totales',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+              ],
             ),
-        ],
-          SizedBox(height: dpi.space(22)),
-        ],
+            SizedBox(height: dpi.space(12)),
+            if (summary.topProducts.isEmpty)
+              const EmptyStateCard(title: 'Sin productos', message: 'No hay ventas registradas aún.')
+            else ...[
+              ...summary.topProducts.take(10).map((p) => _ProductSaleRow(product: p, maxAmount: summary.topProducts.first.amount)),
+              if (summary.topProducts.length > 10)
+                Padding(
+                  padding: EdgeInsets.only(top: dpi.space(4)),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => TopProductsDetailView(summary: summary)),
+                      ),
+                      icon: const Icon(Icons.list_alt_rounded),
+                      label: Text('Ver todos los productos (${summary.topProducts.length})'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: MangoThemeFactory.mango,
+                        side: BorderSide(color: MangoThemeFactory.mango.withValues(alpha: 0.5)),
+                        padding: EdgeInsets.symmetric(vertical: dpi.space(14)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(dpi.radius(12))),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ],
+        );
+        break;
+    }
+
+    if (body == null) return const [];
+    return [body, gap];
+  }
+
+  /// Pushes the drill-down detail view for a single waiter/cashier with the
+  /// same period the summary represents (falls back to "today" if missing).
+  void _openPersonDetail(
+    BuildContext context, {
+    required String userId,
+    required String userName,
+    required PersonRole role,
+    required double totalSales,
+    required int ticketCount,
+    required int tablesCount,
+    required DashboardSummary summary,
+  }) {
+    final start = summary.periodStart ??
+        DateTime.now().subtract(const Duration(hours: 24));
+    final end = summary.periodEnd ?? DateTime.now();
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PersonSalesDetailView(
+          userId: userId,
+          userName: userName,
+          role: role,
+          start: start,
+          end: end,
+          totalSales: totalSales,
+          ticketCount: ticketCount,
+          tablesCount: tablesCount,
+          periodLabel: periodLabelFor(summary.filter),
+        ),
       ),
     );
   }
@@ -1503,10 +1614,25 @@ class _SalesFilterChip extends StatelessWidget {
         label: Text(label),
         selected: selected,
         onSelected: (_) => onSelected(),
+        // Hide leading checkmark to keep all chips a consistent width;
+        // selection is already conveyed by the background + bold label.
+        showCheckmark: false,
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        labelPadding: EdgeInsets.symmetric(horizontal: dpi.space(6), vertical: 0),
+        padding: EdgeInsets.symmetric(horizontal: dpi.space(10), vertical: dpi.space(6)),
         selectedColor: MangoThemeFactory.mango.withValues(alpha: 0.2),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(dpi.radius(20)),
+          side: BorderSide(
+            color: selected
+                ? MangoThemeFactory.mango.withValues(alpha: 0.5)
+                : MangoThemeFactory.borderColor(context),
+          ),
+        ),
         labelStyle: TextStyle(
           color: selected ? MangoThemeFactory.mango : null,
-          fontWeight: selected ? FontWeight.w700 : null,
+          fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
           fontSize: dpi.font(12),
         ),
       ),
@@ -3847,6 +3973,188 @@ class EmptyStateCard extends StatelessWidget {
             action!,
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// Bottom sheet that lets the user reorder SalesView cards. Uses
+/// [ReorderableListView] — drag a card via its handle to a new position.
+/// Changes persist immediately via [salesLayoutProvider].
+class _SalesLayoutSheet extends ConsumerWidget {
+  const _SalesLayoutSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dpi = DpiScale.of(context);
+    final order = ref.watch(salesLayoutProvider);
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.65,
+      minChildSize: 0.45,
+      maxChildSize: 0.95,
+      builder: (context, controller) {
+        return Container(
+          decoration: BoxDecoration(
+            color: MangoThemeFactory.cardColor(context),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(dpi.radius(24))),
+          ),
+          child: Column(
+            children: [
+              SizedBox(height: dpi.space(12)),
+              Center(
+                child: Container(
+                  width: dpi.scale(42),
+                  height: dpi.scale(4),
+                  decoration: BoxDecoration(
+                    color: MangoThemeFactory.borderColor(context),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              SizedBox(height: dpi.space(14)),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: dpi.space(20)),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Personalizar orden',
+                            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                          SizedBox(height: dpi.space(2)),
+                          Text(
+                            'Arrastra cada sección para cambiarla de lugar.',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () async {
+                        await ref.read(salesLayoutProvider.notifier).resetToDefault();
+                      },
+                      icon: const Icon(Icons.refresh_rounded, size: 18),
+                      label: const Text('Restaurar'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: MangoThemeFactory.mutedText(context),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: dpi.space(8)),
+              Expanded(
+                child: ReorderableListView.builder(
+                  scrollController: controller,
+                  buildDefaultDragHandles: false,
+                  padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16), dpi.space(20) + MediaQuery.of(context).padding.bottom),
+                  itemCount: order.length,
+                  onReorder: (oldIdx, newIdx) {
+                    ref.read(salesLayoutProvider.notifier).reorder(oldIdx, newIdx);
+                  },
+                  itemBuilder: (context, index) {
+                    final card = order[index];
+                    return _SalesLayoutTile(
+                      key: ValueKey(card.name),
+                      index: index,
+                      card: card,
+                    );
+                  },
+                ),
+              ),
+              Padding(
+                padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16), dpi.space(12)),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: MangoThemeFactory.mango,
+                      padding: EdgeInsets.symmetric(vertical: dpi.space(14)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(dpi.radius(12))),
+                    ),
+                    child: const Text('Listo', style: TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _SalesLayoutTile extends StatelessWidget {
+  const _SalesLayoutTile({
+    super.key,
+    required this.index,
+    required this.card,
+  });
+
+  final int index;
+  final SalesCard card;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Padding(
+      padding: EdgeInsets.only(bottom: dpi.space(8)),
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: dpi.space(14), vertical: dpi.space(12)),
+        decoration: BoxDecoration(
+          color: MangoThemeFactory.altSurface(context),
+          borderRadius: BorderRadius.circular(dpi.radius(14)),
+          border: Border.all(color: MangoThemeFactory.borderColor(context)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: dpi.scale(28),
+              height: dpi.scale(28),
+              decoration: BoxDecoration(
+                color: MangoThemeFactory.mango.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(dpi.radius(8)),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                '${index + 1}',
+                style: TextStyle(
+                  fontSize: dpi.font(12),
+                  fontWeight: FontWeight.w800,
+                  color: MangoThemeFactory.mango,
+                ),
+              ),
+            ),
+            SizedBox(width: dpi.space(12)),
+            Expanded(
+              child: Text(
+                card.label,
+                style: TextStyle(
+                  fontSize: dpi.font(13),
+                  fontWeight: FontWeight.w700,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            ReorderableDragStartListener(
+              index: index,
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: dpi.space(4), vertical: dpi.space(4)),
+                child: Icon(
+                  Icons.drag_handle_rounded,
+                  color: MangoThemeFactory.mutedText(context),
+                  size: dpi.icon(22),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -21,6 +21,8 @@ dependencies:
   local_auth: ^2.3.0
   local_auth_android: ^1.0.46
   local_auth_darwin: ^1.4.0
+  printing: ^5.13.4
+  pdf: ^3.11.3
 
 dev_dependencies:
   flutter_test:

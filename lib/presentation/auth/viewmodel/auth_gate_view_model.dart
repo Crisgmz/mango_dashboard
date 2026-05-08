@@ -104,9 +104,56 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
         isLoading: false,
         isAuthenticated: false,
         profile: null,
-        error: errorStr,
+        error: _friendlyNetworkError(e),
       );
     }
+  }
+
+  /// Maps Supabase [AuthException] codes/messages to localized user text.
+  static String _friendlyAuthError(AuthException e) {
+    final msg = e.message.toLowerCase();
+    if (msg.contains('invalid login credentials') ||
+        msg.contains('invalid_credentials') ||
+        msg.contains('invalid grant')) {
+      return 'Correo o contraseña incorrectos.';
+    }
+    if (msg.contains('email not confirmed')) {
+      return 'Tu correo aún no ha sido verificado.';
+    }
+    if (msg.contains('user not found')) {
+      return 'No existe una cuenta con ese correo.';
+    }
+    if (msg.contains('rate limit') || msg.contains('too many')) {
+      return 'Demasiados intentos. Espera un momento e intenta de nuevo.';
+    }
+    if (msg.contains('network') || msg.contains('fetch') || msg.contains('socket')) {
+      return 'Sin conexión. Verifica tu internet e intenta de nuevo.';
+    }
+    // Fall back to a clean generic message — never surface internals.
+    return 'No se pudo iniciar sesión. Intenta de nuevo.';
+  }
+
+  /// Maps generic / network exceptions to localized user text without
+  /// surfacing URLs, errno values, or stack-trace details.
+  static String _friendlyNetworkError(Object e) {
+    final msg = e.toString().toLowerCase();
+    if (msg.contains('socketexception') ||
+        msg.contains('failed host lookup') ||
+        msg.contains('network is unreachable') ||
+        msg.contains('connection refused') ||
+        msg.contains('connection closed')) {
+      return 'Sin conexión a internet. Verifica tu red e intenta de nuevo.';
+    }
+    if (msg.contains('timeoutexception') || msg.contains('timed out')) {
+      return 'El servidor tardó demasiado en responder. Intenta de nuevo.';
+    }
+    if (msg.contains('handshakeexception') || msg.contains('certificate')) {
+      return 'Error de conexión segura. Verifica tu red.';
+    }
+    if (msg.contains('500') || msg.contains('502') || msg.contains('503') || msg.contains('504')) {
+      return 'El servidor no está disponible en este momento. Intenta más tarde.';
+    }
+    return 'No se pudo iniciar sesión. Intenta de nuevo.';
   }
 
   Future<void> signIn({required String email, required String password}) async {
@@ -115,32 +162,57 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
       await _ref.read(adminAccessServiceProvider).signIn(email: email, password: password);
       await bootstrap();
     } on AuthException catch (e) {
-      state = state.copyWith(isLoading: false, error: e.message);
+      state = state.copyWith(isLoading: false, error: _friendlyAuthError(e));
     } catch (e) {
-      state = state.copyWith(isLoading: false, error: 'No se pudo iniciar sesión: $e');
+      state = state.copyWith(isLoading: false, error: _friendlyNetworkError(e));
     }
   }
 
-  /// Intenta cambiar a una cuenta usando el refresh token guardado.
-  /// Si el token es válido, cambia sin pedir contraseña.
-  /// Retorna: null = éxito, string = error (sesión expirada, necesita contraseña).
-  Future<String?> switchAccountByToken(String refreshToken) async {
+  /// Switches to a saved account, trying paths in order of speed:
+  /// 1) Instant restore from cached serialized session (no network) when the
+  ///    access token still has > 30s of life.
+  /// 2) Network refresh via stored refresh token.
+  /// 3) Re-auth with stored password.
+  /// Returns null on success, or 'SESSION_EXPIRED' when all paths failed.
+  Future<String?> switchAccountByToken(SavedAccount account) async {
     final service = _ref.read(adminAccessServiceProvider);
-    // Guardar token actual por si falla la restauración
-    final currentToken = service.currentRefreshToken;
-    try {
-      final restored = await service.restoreSession(refreshToken);
-      if (!restored) {
-        // Restaurar sesión anterior si falló
-        if (currentToken != null) await service.restoreSession(currentToken);
-        return 'SESSION_EXPIRED';
+
+    // 1. Instant path — cached access token is still fresh.
+    if (account.serializedSession != null && account.hasFreshAccessToken) {
+      final ok = await service.recoverSerializedSession(account.serializedSession!);
+      if (ok) {
+        await bootstrap();
+        if (state.profile != null) {
+          await _saveCurrentAccount(state.profile!, password: account.password);
+        }
+        return null;
       }
-      await bootstrap();
-      return null;
-    } catch (e) {
-      if (currentToken != null) await service.restoreSession(currentToken);
-      return 'SESSION_EXPIRED';
     }
+
+    // 2. Network refresh via refresh token.
+    if (account.refreshToken != null) {
+      final restored = await service.restoreSession(account.refreshToken!);
+      if (restored) {
+        await bootstrap();
+        if (state.profile != null) {
+          await _saveCurrentAccount(state.profile!, password: account.password);
+        }
+        return null;
+      }
+    }
+
+    // 3. Re-auth with stored password.
+    if (account.password != null) {
+      try {
+        await service.signIn(email: account.email, password: account.password!);
+        await bootstrap();
+        return null;
+      } catch (_) {
+        // All paths failed — fall through.
+      }
+    }
+
+    return 'SESSION_EXPIRED';
   }
 
   /// Intenta cambiar a una cuenta con contraseña. Si falla la contraseña,
@@ -148,12 +220,16 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
   Future<String?> switchAccountWithPassword({required String email, required String password}) async {
     try {
       await _ref.read(adminAccessServiceProvider).signIn(email: email, password: password);
+      final profile = await _ref.read(adminAccessServiceProvider).resolveCurrentAccess();
+      if (profile != null) {
+        await _saveCurrentAccount(profile, password: password);
+      }
       await bootstrap();
       return null; // éxito
     } on AuthException catch (e) {
-      return e.message;
+      return _friendlyAuthError(e);
     } catch (e) {
-      return 'No se pudo iniciar sesión: $e';
+      return _friendlyNetworkError(e);
     }
   }
 
@@ -165,6 +241,12 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
       businessId: businessId,
     );
     if (next == null) return;
+    
+    // Preservar la cuenta guardada con su password si existe
+    final oldAccounts = await _ref.read(savedAccountsServiceProvider).loadAccounts();
+    final currentSaved = oldAccounts.where((a) => a.email == next.email).firstOrNull;
+    
+    await _saveCurrentAccount(next, password: currentSaved?.password);
     state = state.copyWith(profile: next);
   }
 
@@ -173,9 +255,16 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
     state = const AuthGateState.initial().copyWith(isLoading: false);
   }
 
-  Future<void> _saveCurrentAccount(AdminAccessProfile profile) async {
+  Future<void> _saveCurrentAccount(AdminAccessProfile profile, {String? password}) async {
     final savedService = _ref.read(savedAccountsServiceProvider);
     final service = _ref.read(adminAccessServiceProvider);
+
+    final existing = await savedService.loadAccounts();
+    final current = existing.where((a) => a.email == profile.email).firstOrNull;
+
+    final passwordToSave = password ?? current?.password;
+    final biometricEnabled = current?.biometricEnabled ?? false;
+
     final businessName = profile.branchName?.trim().isNotEmpty == true
         ? profile.branchName
         : profile.businessName;
@@ -184,7 +273,22 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
       displayName: profile.userName,
       businessName: businessName,
       refreshToken: service.currentRefreshToken,
+      password: passwordToSave,
+      biometricEnabled: biometricEnabled,
+      serializedSession: service.currentSerializedSession,
+      accessTokenExpiresAt: service.currentAccessTokenExpiresAt,
     ));
+  }
+
+  /// Enables or disables biometric unlock for a saved account.
+  /// Returns true on success.
+  Future<bool> setBiometricEnabled(String email, bool enabled) async {
+    final savedService = _ref.read(savedAccountsServiceProvider);
+    final accounts = await savedService.loadAccounts();
+    final account = accounts.where((a) => a.email == email).firstOrNull;
+    if (account == null) return false;
+    await savedService.updateAccount(account.copyWith(biometricEnabled: enabled));
+    return true;
   }
 
   @override

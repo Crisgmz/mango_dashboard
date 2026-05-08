@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/auth/role_mapper.dart';
@@ -90,6 +92,22 @@ class AdminAccessService {
 
   String? get currentRefreshToken => _client.auth.currentSession?.refreshToken;
 
+  /// JSON of the current session — captures access + refresh tokens, expiry,
+  /// and user info. Used for instant restore via [recoverSerializedSession]
+  /// without a network call when the access token is still valid.
+  String? get currentSerializedSession {
+    final session = _client.auth.currentSession;
+    if (session == null) return null;
+    try {
+      return jsonEncode(session.toJson());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Expiry (UTC seconds since epoch) of the current access token, if any.
+  int? get currentAccessTokenExpiresAt => _client.auth.currentSession?.expiresAt;
+
   Future<void> signIn({required String email, required String password}) async {
     await _client.auth.signInWithPassword(email: email, password: password);
   }
@@ -100,6 +118,21 @@ class AdminAccessService {
     try {
       final response = await _client.auth.setSession(refreshToken);
       return response.session != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Restores a previously serialized session JSON without a network round-trip
+  /// when the access token is still valid. Returns true on success.
+  Future<bool> recoverSerializedSession(String serializedJson) async {
+    try {
+      final response = await _client.auth.recoverSession(serializedJson);
+      final session = response.session;
+      if (session == null) return false;
+      // If the recovered access token is still valid, no network was needed.
+      // The Supabase SDK will lazily refresh on next API call if expired.
+      return true;
     } catch (_) {
       return false;
     }

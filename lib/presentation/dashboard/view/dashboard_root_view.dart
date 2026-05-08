@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/di/providers.dart';
+import '../../../core/auth/biometric_auth_service.dart';
 import '../../../core/auth/role_mapper.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
@@ -23,6 +24,7 @@ import '../widgets/dashboard_sales_chart.dart';
 import '../widgets/dashboard_skeleton.dart';
 import '../widgets/dashboard_top_products.dart';
 import '../widgets/dashboard_top_seller.dart';
+import '../widgets/growth_chip.dart';
 import 'kpi_detail_views.dart';
 
 class DashboardRootView extends ConsumerStatefulWidget {
@@ -125,11 +127,22 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
     }
   }
 
-  /// Cambio de negocio: limpia datos viejos y recarga todo.
+  /// Cambio de cuenta/negocio: hidrata desde caché por cuenta (si existe) para
+  /// mostrar la última snapshot al instante, y dispara refresh en background.
   void _onBusinessChanged(AdminAccessProfile profile) {
     _loadedBusinessId = profile.businessId;
-    ref.read(dashboardHomeDataViewModelProvider.notifier).reset();
-    ref.read(salesDataViewModelProvider.notifier).reset();
+
+    // Try cache hydration first — falls back to skeleton if no cache exists.
+    final homeHydrated = ref
+        .read(dashboardHomeDataViewModelProvider.notifier)
+        .hydrateFromCache(profile);
+    final salesHydrated = ref
+        .read(salesDataViewModelProvider.notifier)
+        .hydrateFromCache(profile);
+    if (!homeHydrated) ref.read(dashboardHomeDataViewModelProvider.notifier).reset();
+    if (!salesHydrated) ref.read(salesDataViewModelProvider.notifier).reset();
+
+    // Cash register has no cache — keep existing reset behavior.
     ref.read(cashRegisterViewModelProvider.notifier).reset();
     ref.read(notificationViewModelProvider.notifier).clear();
     ref.read(notificationViewModelProvider.notifier).subscribe(profile.businessId);
@@ -387,6 +400,13 @@ class HomeView extends StatelessWidget {
         padding: EdgeInsets.all(dpi.space(18)),
         children: [
           _HomeHeader(profile: profile),
+          if (dataState.isFromCache || dataState.isRefreshing) ...[
+            SizedBox(height: dpi.space(8)),
+            _FreshnessBadge(
+              cachedAt: dataState.cachedAt,
+              refreshing: dataState.isRefreshing,
+            ),
+          ],
           gap,
           DashboardKpiCards(
             summary: summary,
@@ -422,8 +442,10 @@ class HomeView extends StatelessWidget {
                   children: [
                     Expanded(
                       child: DashboardTopProducts(
-                        products: summary.topProducts,
-                        onTap: onOpenItems,
+                        products: summary.topProducts.take(5).toList(growable: false),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => TopProductsDetailView(summary: summary)),
+                        ),
                       ),
                     ),
                     SizedBox(width: dpi.space(14)),
@@ -444,8 +466,10 @@ class HomeView extends StatelessWidget {
               return Column(
                 children: [
                   DashboardTopProducts(
-                    products: summary.topProducts,
-                    onTap: onOpenItems,
+                    products: summary.topProducts.take(5).toList(growable: false),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => TopProductsDetailView(summary: summary)),
+                    ),
                   ),
                   gap,
                   if (summary.topSeller != null)
@@ -466,6 +490,53 @@ class HomeView extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// Subtle badge that shows the data's freshness ("hace 3m") and a refreshing
+/// hint when a background fetch is in flight after a cache hydration.
+class _FreshnessBadge extends StatelessWidget {
+  const _FreshnessBadge({this.cachedAt, this.refreshing = false});
+
+  final DateTime? cachedAt;
+  final bool refreshing;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final muted = MangoThemeFactory.mutedText(context);
+    final freshLabel = _freshness(cachedAt);
+
+    return Row(
+      children: [
+        if (refreshing) ...[
+          SizedBox(
+            width: dpi.scale(11),
+            height: dpi.scale(11),
+            child: CircularProgressIndicator(
+              strokeWidth: 1.5,
+              valueColor: AlwaysStoppedAnimation<Color>(MangoThemeFactory.mango),
+            ),
+          ),
+          SizedBox(width: dpi.space(6)),
+          Text('Actualizando…', style: TextStyle(fontSize: dpi.font(11), color: muted)),
+        ] else ...[
+          Icon(Icons.history_rounded, size: dpi.icon(12), color: muted),
+          SizedBox(width: dpi.space(4)),
+          Text('Actualizado $freshLabel', style: TextStyle(fontSize: dpi.font(11), color: muted)),
+        ],
+      ],
+    );
+  }
+
+  static String _freshness(DateTime? at) {
+    if (at == null) return 'recién';
+    final diff = DateTime.now().difference(at);
+    if (diff.inSeconds < 30) return 'recién';
+    if (diff.inMinutes < 1) return 'hace ${diff.inSeconds}s';
+    if (diff.inHours < 1) return 'hace ${diff.inMinutes}m';
+    if (diff.inDays < 1) return 'hace ${diff.inHours}h';
+    return 'hace ${diff.inDays}d';
   }
 }
 
@@ -649,10 +720,10 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
           Navigator.pop(ctx);
           ref.read(authGateViewModelProvider.notifier).switchBusiness(id);
         },
-        onAccountSwitchByToken: (refreshToken) async {
+        onAccountSwitchByToken: (account) async {
           final error = await ref
               .read(authGateViewModelProvider.notifier)
-              .switchAccountByToken(refreshToken);
+              .switchAccountByToken(account);
           if (error == null && ctx.mounted) Navigator.pop(ctx);
           return error;
         },
@@ -806,7 +877,7 @@ class _BusinessAccountSelectorSheet extends StatefulWidget {
   final AdminAccessProfile profile;
   final List<SavedAccount> otherAccounts;
   final Function(String) onBranchSelected;
-  final Future<String?> Function(String refreshToken) onAccountSwitchByToken;
+  final Future<String?> Function(SavedAccount account) onAccountSwitchByToken;
   final Future<String?> Function(String email, String password) onAccountSwitchWithPassword;
 
   @override
@@ -816,9 +887,9 @@ class _BusinessAccountSelectorSheet extends StatefulWidget {
 class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorSheet> {
   // Para el mini-formulario de contraseña (solo si el token expiró)
   String? _needsPasswordEmail;
+  String? _switchingEmail;
   final _passwordController = TextEditingController();
   String? _switchError;
-  bool _switchLoading = false;
 
   @override
   void dispose() {
@@ -827,32 +898,35 @@ class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorS
   }
 
   Future<void> _tryTokenSwitch(SavedAccount account) async {
-    if (account.refreshToken == null) {
-      // No tiene token guardado, pedir contraseña directamente
-      setState(() { _needsPasswordEmail = account.email; _switchError = null; });
-      return;
-    }
-    setState(() { _switchLoading = true; _switchError = null; _needsPasswordEmail = null; });
-    final error = await widget.onAccountSwitchByToken(account.refreshToken!);
+    setState(() { 
+      _switchingEmail = account.email; 
+      _switchError = null; 
+      _needsPasswordEmail = null; 
+    });
+    
+    final error = await widget.onAccountSwitchByToken(account);
     if (!mounted) return;
+    
     if (error == null) return; // éxito, el sheet ya se cerró
-    // Token expirado, pedir contraseña
+    
+    // Si llegamos aquí, fallaron el token y el password guardado (si había)
     setState(() {
-      _switchLoading = false;
+      _switchingEmail = null;
       _needsPasswordEmail = account.email;
+      _switchError = 'Sesión expirada.';
     });
   }
 
   Future<void> _tryPasswordSwitch() async {
     if (_needsPasswordEmail == null) return;
-    setState(() { _switchLoading = true; _switchError = null; });
+    setState(() { _switchingEmail = _needsPasswordEmail; _switchError = null; });
     final error = await widget.onAccountSwitchWithPassword(
       _needsPasswordEmail!,
       _passwordController.text,
     );
     if (mounted) {
       setState(() {
-        _switchLoading = false;
+        _switchingEmail = null;
         _switchError = error;
       });
     }
@@ -977,7 +1051,7 @@ class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorS
               return Padding(
                 padding: EdgeInsets.only(bottom: dpi.space(10)),
                 child: InkWell(
-                  onTap: _switchLoading ? null : () => _tryTokenSwitch(account),
+                  onTap: _switchingEmail != null ? null : () => _tryTokenSwitch(account),
                   borderRadius: BorderRadius.circular(dpi.radius(16)),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
@@ -1038,7 +1112,7 @@ class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorS
                                 ],
                               ),
                             ),
-                            if (_switchLoading && (needsPassword || _needsPasswordEmail == null))
+                            if (_switchingEmail == account.email)
                               SizedBox(
                                 width: dpi.scale(22),
                                 height: dpi.scale(22),
@@ -1053,65 +1127,64 @@ class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorS
                           ],
                         ),
 
-                        // Campo de contraseña (solo si el token expiró)
                         if (needsPassword) ...[
-                          SizedBox(height: dpi.space(14)),
-                          Text(
-                            'La sesión expiró. Ingresa tu contraseña.',
-                            style: TextStyle(fontSize: dpi.font(12), color: MangoThemeFactory.mutedText(context)),
-                          ),
-                          SizedBox(height: dpi.space(10)),
-                          TextField(
-                            controller: _passwordController,
-                            obscureText: true,
-                            autofocus: true,
-                            decoration: InputDecoration(
-                              labelText: 'Contraseña',
-                              isDense: true,
-                              prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(dpi.radius(10))),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(dpi.radius(10)),
-                                borderSide: const BorderSide(color: MangoThemeFactory.mango, width: 1.5),
-                              ),
-                            ),
-                            onSubmitted: (_) => _tryPasswordSwitch(),
-                          ),
-                          if (_switchError != null) ...[
-                            SizedBox(height: dpi.space(8)),
-                            Container(
-                              width: double.infinity,
-                              padding: EdgeInsets.all(dpi.space(8)),
-                              decoration: BoxDecoration(
-                                color: MangoThemeFactory.danger.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(dpi.radius(8)),
-                              ),
-                              child: Text(
-                                _switchError!,
-                                style: TextStyle(color: MangoThemeFactory.danger, fontSize: dpi.font(12)),
-                              ),
-                            ),
-                          ],
-                          SizedBox(height: dpi.space(10)),
-                          SizedBox(
-                            width: double.infinity,
-                            height: dpi.scale(40),
-                            child: FilledButton(
-                              onPressed: _switchLoading ? null : _tryPasswordSwitch,
-                              style: FilledButton.styleFrom(
-                                backgroundColor: MangoThemeFactory.mango,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(dpi.radius(10))),
-                              ),
-                              child: _switchLoading
-                                  ? SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white.withValues(alpha: 0.8)),
-                                    )
-                                  : Text('Cambiar', style: TextStyle(fontSize: dpi.font(14), fontWeight: FontWeight.w700)),
-                            ),
-                          ),
-                        ],
+                             SizedBox(height: dpi.space(14)),
+                             Text(
+                               'La sesión expiró. Ingresa tu contraseña.',
+                               style: TextStyle(fontSize: dpi.font(12), color: MangoThemeFactory.mutedText(context)),
+                             ),
+                             SizedBox(height: dpi.space(10)),
+                             TextField(
+                               controller: _passwordController,
+                               obscureText: true,
+                               autofocus: true,
+                               decoration: InputDecoration(
+                                 labelText: 'Contraseña',
+                                 isDense: true,
+                                 prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
+                                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(dpi.radius(10))),
+                                 focusedBorder: OutlineInputBorder(
+                                   borderRadius: BorderRadius.circular(dpi.radius(10)),
+                                   borderSide: const BorderSide(color: MangoThemeFactory.mango, width: 1.5),
+                                 ),
+                               ),
+                               onSubmitted: (_) => _tryPasswordSwitch(),
+                             ),
+                             if (_switchError != null) ...[
+                               SizedBox(height: dpi.space(8)),
+                               Container(
+                                 width: double.infinity,
+                                 padding: EdgeInsets.all(dpi.space(8)),
+                                 decoration: BoxDecoration(
+                                   color: MangoThemeFactory.danger.withValues(alpha: 0.1),
+                                   borderRadius: BorderRadius.circular(dpi.radius(8)),
+                                 ),
+                                 child: Text(
+                                   _switchError!,
+                                   style: TextStyle(color: MangoThemeFactory.danger, fontSize: dpi.font(12)),
+                                 ),
+                               ),
+                             ],
+                             SizedBox(height: dpi.space(10)),
+                             SizedBox(
+                               width: double.infinity,
+                               height: dpi.scale(40),
+                               child: FilledButton(
+                                 onPressed: _switchingEmail != null ? null : _tryPasswordSwitch,
+                                 style: FilledButton.styleFrom(
+                                   backgroundColor: MangoThemeFactory.mango,
+                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(dpi.radius(10))),
+                                 ),
+                                 child: _switchingEmail != null
+                                     ? SizedBox(
+                                         width: 18,
+                                         height: 18,
+                                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white.withValues(alpha: 0.8)),
+                                       )
+                                     : Text('Cambiar', style: TextStyle(fontSize: dpi.font(14), fontWeight: FontWeight.w700)),
+                               ),
+                             ),
+                           ],
                       ],
                     ),
                   ),
@@ -1186,7 +1259,7 @@ class SalesView extends ConsumerWidget {
                   Text('Resumen mensual y diario', style: Theme.of(context).textTheme.bodySmall),
                 ],
               ),
-              _FilterBadge(filter: summary.filter),
+              _FilterBadge(summary: summary),
             ],
           ),
         SizedBox(height: dpi.space(16)),
@@ -1242,6 +1315,35 @@ class SalesView extends ConsumerWidget {
                       filter: SalesDateFilter.last3Months,
                     ),
               ),
+              _SalesFilterChip(
+                label: 'Elegir fecha',
+                selected: summary.filter == SalesDateFilter.custom,
+                onSelected: () async {
+                  final range = await showDateRangePicker(
+                    context: context,
+                    firstDate: DateTime(2023),
+                    lastDate: DateTime.now().add(const Duration(days: 1)),
+                    builder: (context, child) {
+                      return Theme(
+                        data: Theme.of(context).copyWith(
+                          colorScheme: ColorScheme.fromSeed(
+                            seedColor: MangoThemeFactory.mango,
+                            primary: MangoThemeFactory.mango,
+                          ),
+                        ),
+                        child: child!,
+                      );
+                    },
+                  );
+                  if (range != null) {
+                    ref.read(salesDataViewModelProvider.notifier).load(
+                          profile,
+                          filter: SalesDateFilter.custom,
+                          customRange: range,
+                        );
+                  }
+                },
+              ),
             ],
           ),
         ),
@@ -1254,6 +1356,16 @@ class SalesView extends ConsumerWidget {
                 label: 'Ventas Totales',
                 value: MangoFormatters.currency(summary.totalSales),
                 color: MangoThemeFactory.success,
+                trailing: GrowthChip(
+                  current: summary.totalSales,
+                  previous: summary.previousDaySales,
+                  compact: true,
+                  onLight: true,
+                ),
+                footer: Text(
+                  comparisonLabelFor(summary.filter),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: dpi.font(10)),
+                ),
               ),
             ),
             SizedBox(width: dpi.space(10)),
@@ -1278,12 +1390,49 @@ class SalesView extends ConsumerWidget {
         if (summary.salesByMethod.isNotEmpty) gap,
         DashboardSalesChart(hourlySales: summary.hourlySales, title: 'Ventas por hora', subtitle: 'Flujo de ventas del día'),
         gap,
-        Text('Rendimiento por Producto', style: Theme.of(context).textTheme.titleLarge),
+        if (summary.salesByCategory.isNotEmpty) ...[
+          _SalesByCategoryCard(categories: summary.salesByCategory),
+          gap,
+        ],
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Text('Rendimiento por Producto', style: Theme.of(context).textTheme.titleLarge),
+            ),
+            if (summary.topProducts.length > 10)
+              Text(
+                '${summary.topProducts.length} totales',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+          ],
+        ),
         SizedBox(height: dpi.space(12)),
         if (summary.topProducts.isEmpty)
           const EmptyStateCard(title: 'Sin productos', message: 'No hay ventas registradas aún.')
-        else
-          ...summary.topProducts.map((p) => _ProductSaleRow(product: p, maxAmount: summary.topProducts.first.amount)),
+        else ...[
+          ...summary.topProducts.take(10).map((p) => _ProductSaleRow(product: p, maxAmount: summary.topProducts.first.amount)),
+          if (summary.topProducts.length > 10)
+            Padding(
+              padding: EdgeInsets.only(top: dpi.space(4)),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => TopProductsDetailView(summary: summary)),
+                  ),
+                  icon: const Icon(Icons.list_alt_rounded),
+                  label: Text('Ver todos los productos (${summary.topProducts.length})'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: MangoThemeFactory.mango,
+                    side: BorderSide(color: MangoThemeFactory.mango.withValues(alpha: 0.5)),
+                    padding: EdgeInsets.symmetric(vertical: dpi.space(14)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(dpi.radius(12))),
+                  ),
+                ),
+              ),
+            ),
+        ],
           SizedBox(height: dpi.space(22)),
         ],
       ),
@@ -1292,20 +1441,29 @@ class SalesView extends ConsumerWidget {
 }
 
 class _FilterBadge extends StatelessWidget {
-  const _FilterBadge({required this.filter});
-  final SalesDateFilter filter;
+  const _FilterBadge({required this.summary});
+  final DashboardSummary summary;
 
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     String label;
-    switch (filter) {
+    switch (summary.filter) {
       case SalesDateFilter.today: label = 'Hoy'; break;
       case SalesDateFilter.yesterday: label = 'Ayer'; break;
       case SalesDateFilter.week: label = '7 días'; break;
       case SalesDateFilter.month: label = 'Mensual'; break;
       case SalesDateFilter.lastMonth: label = 'Mes Pasado'; break;
       case SalesDateFilter.last3Months: label = 'Trimestral'; break;
+      case SalesDateFilter.custom: 
+        if (summary.customRange != null) {
+          final s = summary.customRange!.start;
+          final e = summary.customRange!.end;
+          label = '${s.day}/${s.month} - ${e.day}/${e.month}';
+        } else {
+          label = 'Personalizado';
+        }
+        break;
     }
     return Container(
       padding: EdgeInsets.symmetric(horizontal: dpi.space(12), vertical: dpi.space(6)),
@@ -1452,11 +1610,104 @@ class _SalesByMethodCard extends StatelessWidget {
   }
 }
 
+class _SalesByCategoryCard extends StatelessWidget {
+  const _SalesByCategoryCard({required this.categories});
+  final List<SalesByCategory> categories;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final total = categories.fold<double>(0, (sum, item) => sum + item.amount);
+    
+    return Container(
+      padding: EdgeInsets.all(dpi.space(16)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.cardColor(context),
+        borderRadius: BorderRadius.circular(dpi.radius(16)),
+        border: Border.all(color: MangoThemeFactory.borderColor(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: dpi.scale(32),
+                height: dpi.scale(32),
+                decoration: BoxDecoration(
+                  color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(dpi.radius(8)),
+                ),
+                child: Icon(Icons.pie_chart_rounded, color: MangoThemeFactory.mango, size: dpi.icon(18)),
+              ),
+              SizedBox(width: dpi.space(10)),
+              Text('Ventas por Categoría', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+            ],
+          ),
+          SizedBox(height: dpi.space(16)),
+          if (categories.isEmpty)
+             const Text('No hay datos disponibles')
+          else
+            ...categories.map((c) {
+              final percent = total > 0 ? (c.amount / total) : 0.0;
+              return Padding(
+                padding: EdgeInsets.only(bottom: dpi.space(12)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(c.label, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600)),
+                        Text(MangoFormatters.currency(c.amount), style: TextStyle(fontWeight: FontWeight.w700, color: MangoThemeFactory.mango)),
+                      ],
+                    ),
+                    SizedBox(height: dpi.space(6)),
+                    Stack(
+                      children: [
+                        Container(
+                          height: dpi.scale(6),
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            color: MangoThemeFactory.borderColor(context),
+                            borderRadius: BorderRadius.circular(dpi.radius(3)),
+                          ),
+                        ),
+                        FractionallySizedBox(
+                          widthFactor: percent.clamp(0.01, 1.0),
+                          child: Container(
+                            height: dpi.scale(6),
+                            decoration: BoxDecoration(
+                              color: MangoThemeFactory.mango,
+                              borderRadius: BorderRadius.circular(dpi.radius(3)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+}
+
 class _SmallKpi extends StatelessWidget {
-  const _SmallKpi({required this.label, required this.value, required this.color});
+  const _SmallKpi({
+    required this.label,
+    required this.value,
+    required this.color,
+    this.trailing,
+    this.footer,
+  });
   final String label;
   final String value;
   final Color color;
+  final Widget? trailing;
+  final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
@@ -1472,7 +1723,14 @@ class _SmallKpi extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: Theme.of(context).textTheme.bodySmall, maxLines: 1),
+          Row(
+            children: [
+              Expanded(
+                child: Text(label, style: Theme.of(context).textTheme.bodySmall, maxLines: 1),
+              ),
+              if (trailing != null) Flexible(child: trailing!),
+            ],
+          ),
           SizedBox(height: dpi.space(4)),
           FittedBox(
             fit: BoxFit.scaleDown,
@@ -1494,6 +1752,10 @@ class _SmallKpi extends StatelessWidget {
               ),
             ),
           ),
+          if (footer != null) ...[
+            SizedBox(height: dpi.space(4)),
+            footer!,
+          ],
         ],
       ),
     );
@@ -1915,11 +2177,18 @@ class _ProductCardState extends State<_ProductCard> {
   }
 }
 
-class OrdersView extends StatelessWidget {
+class OrdersView extends StatefulWidget {
   const OrdersView({super.key, required this.dataState, required this.onRefresh});
 
   final DashboardDataState dataState;
   final Future<void> Function() onRefresh;
+
+  @override
+  State<OrdersView> createState() => _OrdersViewState();
+}
+
+class _OrdersViewState extends State<OrdersView> {
+  String _selectedZone = 'Todas';
 
   @override
   Widget build(BuildContext context) {
@@ -1932,25 +2201,77 @@ class OrdersView extends StatelessWidget {
   }
 
   Widget _buildOrdersContent(BuildContext context, DpiScale dpi) {
-    final orders = dataState.summary?.liveOrders ?? const <LiveOrderItem>[];
-
-    if (dataState.isLoading) {
+    if (widget.dataState.isLoading) {
       return const DashboardSkeleton(key: ValueKey('skeleton_orders'));
     }
 
+    final allOrders = widget.dataState.summary?.liveOrders ?? const <LiveOrderItem>[];
+    
+    // Extraer zonas únicas
+    final zones = {'Todas', ...allOrders.map((o) => o.zone).whereType<String>()}.toList();
+    
+    final orders = _selectedZone == 'Todas'
+        ? allOrders
+        : allOrders.where((o) => o.zone == _selectedZone).toList();
+
     return RefreshIndicator(
       key: const ValueKey('content_orders'),
-      onRefresh: onRefresh,
+      onRefresh: widget.onRefresh,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
         padding: EdgeInsets.all(dpi.space(18)),
         children: [
-          Text('Órdenes Activas', style: Theme.of(context).textTheme.headlineMedium),
-          SizedBox(height: dpi.space(4)),
-          Text('Selecciona una para ver detalles', style: Theme.of(context).textTheme.bodySmall),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Órdenes Activas', style: Theme.of(context).textTheme.headlineMedium),
+                    SizedBox(height: dpi.space(4)),
+                    Text('Selecciona una para ver detalles', style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+              ),
+              SizedBox(width: dpi.space(8)),
+              IconButton.filledTonal(
+                tooltip: 'Mapa de mesas',
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => TableMapView(liveOrders: allOrders)),
+                ),
+                icon: const Icon(Icons.grid_view_rounded),
+                style: IconButton.styleFrom(
+                  backgroundColor: MangoThemeFactory.mango.withValues(alpha: 0.12),
+                  foregroundColor: MangoThemeFactory.mango,
+                ),
+              ),
+            ],
+          ),
+
+          if (zones.length > 1) ...[
+            SizedBox(height: dpi.space(16)),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                children: zones.map((zone) {
+                  return _SalesFilterChip(
+                    label: zone,
+                    selected: _selectedZone == zone,
+                    onSelected: () => setState(() => _selectedZone = zone),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+          
           SizedBox(height: dpi.space(20)),
           if (orders.isEmpty)
-            const EmptyStateCard(title: 'Sin órdenes', message: 'No hay órdenes abiertas ahora mismo.')
+            EmptyStateCard(
+              title: _selectedZone == 'Todas' ? 'Sin órdenes' : 'Sin órdenes en $_selectedZone',
+              message: 'No hay órdenes abiertas ahora mismo.',
+            )
           else
             ...orders.map((order) => _OrderCard(order: order)),
           SizedBox(height: dpi.space(30)),
@@ -1995,7 +2316,29 @@ class _OrderCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(order.title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                    Row(
+                      children: [
+                        Text(order.title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+                        if (order.zone != null) ...[
+                          SizedBox(width: dpi.space(8)),
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: dpi.space(6), vertical: dpi.space(2)),
+                            decoration: BoxDecoration(
+                              color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(dpi.radius(4)),
+                            ),
+                            child: Text(
+                              order.zone!,
+                              style: TextStyle(
+                                fontSize: dpi.font(9),
+                                fontWeight: FontWeight.w800,
+                                color: MangoThemeFactory.mango,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                     if (order.subtitle.toLowerCase() != 'sent_to_kitchen') ...[
                       SizedBox(height: dpi.space(2)),
                       Text(order.subtitle, style: Theme.of(context).textTheme.bodySmall),
@@ -2198,6 +2541,387 @@ class _OrderDetailsSheet extends StatelessWidget {
         ],
       ),
     ));
+  }
+}
+
+/// Visual floor plan of dining tables, grouped by zone.
+/// Cross-references with already-loaded live orders to mark occupied tables.
+class TableMapView extends ConsumerStatefulWidget {
+  const TableMapView({super.key, required this.liveOrders});
+
+  final List<LiveOrderItem> liveOrders;
+
+  @override
+  ConsumerState<TableMapView> createState() => _TableMapViewState();
+}
+
+class _TableMapViewState extends ConsumerState<TableMapView> {
+  late Future<List<ZoneLayout>> _layoutFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _layoutFuture = _loadLayout();
+  }
+
+  Future<List<ZoneLayout>> _loadLayout() async {
+    final profile = ref.read(authGateViewModelProvider).profile;
+    if (profile == null) return const [];
+    return ref.read(dashboardDataServiceProvider).loadTableLayout(profile.businessId);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final occupiedByTableId = <String, LiveOrderItem>{
+      for (final o in widget.liveOrders)
+        if (o.tableId != null && o.tableId!.isNotEmpty) o.tableId!: o,
+    };
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Mapa de mesas'),
+        centerTitle: false,
+        actions: [
+          IconButton(
+            tooltip: 'Refrescar',
+            onPressed: () => setState(() => _layoutFuture = _loadLayout()),
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
+      body: FutureBuilder<List<ZoneLayout>>(
+        future: _layoutFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(
+              child: Padding(
+                padding: EdgeInsets.all(dpi.space(20)),
+                child: Text(
+                  'No se pudo cargar el mapa de mesas.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: MangoThemeFactory.danger),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            );
+          }
+          final zones = snapshot.data ?? const <ZoneLayout>[];
+          final occupiedCount = occupiedByTableId.length;
+          final totalTables = zones.fold<int>(0, (s, z) => s + z.tables.length);
+          final freeCount = (totalTables - occupiedCount).clamp(0, totalTables);
+
+          if (zones.isEmpty) {
+            return Center(
+              child: Padding(
+                padding: EdgeInsets.all(dpi.space(20)),
+                child: Text(
+                  'No hay zonas o mesas configuradas para este negocio.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            );
+          }
+
+          return RefreshIndicator(
+            onRefresh: () async {
+              setState(() => _layoutFuture = _loadLayout());
+              await _layoutFuture;
+            },
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+              padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
+              children: [
+                _TableMapSummary(
+                  totalTables: totalTables,
+                  occupiedCount: occupiedCount,
+                  freeCount: freeCount,
+                ),
+                SizedBox(height: dpi.space(16)),
+                for (final zone in zones) ...[
+                  _ZoneSection(zone: zone, occupiedByTableId: occupiedByTableId),
+                  SizedBox(height: dpi.space(18)),
+                ],
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _TableMapSummary extends StatelessWidget {
+  const _TableMapSummary({
+    required this.totalTables,
+    required this.occupiedCount,
+    required this.freeCount,
+  });
+
+  final int totalTables;
+  final int occupiedCount;
+  final int freeCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final occupancy = totalTables == 0 ? 0.0 : (occupiedCount / totalTables) * 100;
+    return Container(
+      padding: EdgeInsets.all(dpi.space(16)),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [MangoThemeFactory.mango, MangoThemeFactory.mango.withValues(alpha: 0.78)],
+        ),
+        borderRadius: BorderRadius.circular(dpi.radius(16)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Ocupación', style: TextStyle(color: Colors.white70, fontSize: dpi.font(11))),
+                SizedBox(height: dpi.space(2)),
+                Text(
+                  '${occupancy.toStringAsFixed(0)}%',
+                  style: TextStyle(color: Colors.white, fontSize: dpi.font(26), fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+          ),
+          _MapStat(label: 'Ocupadas', value: '$occupiedCount', color: Colors.white),
+          SizedBox(width: dpi.space(12)),
+          _MapStat(label: 'Libres', value: '$freeCount', color: Colors.white),
+          SizedBox(width: dpi.space(12)),
+          _MapStat(label: 'Total', value: '$totalTables', color: Colors.white),
+        ],
+      ),
+    );
+  }
+}
+
+class _MapStat extends StatelessWidget {
+  const _MapStat({required this.label, required this.value, required this.color});
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(value, style: TextStyle(color: color, fontSize: dpi.font(18), fontWeight: FontWeight.w800)),
+        Text(label, style: TextStyle(color: color.withValues(alpha: 0.75), fontSize: dpi.font(10))),
+      ],
+    );
+  }
+}
+
+class _ZoneSection extends StatelessWidget {
+  const _ZoneSection({required this.zone, required this.occupiedByTableId});
+
+  final ZoneLayout zone;
+  final Map<String, LiveOrderItem> occupiedByTableId;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final occupiedInZone = zone.tables.where((t) => occupiedByTableId.containsKey(t.id)).length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                zone.name,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+              ),
+            ),
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: dpi.space(8), vertical: dpi.space(3)),
+              decoration: BoxDecoration(
+                color: MangoThemeFactory.mango.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(dpi.radius(20)),
+              ),
+              child: Text(
+                '$occupiedInZone / ${zone.tables.length}',
+                style: TextStyle(
+                  fontSize: dpi.font(11),
+                  fontWeight: FontWeight.w800,
+                  color: MangoThemeFactory.mango,
+                ),
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: dpi.space(10)),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final cardWidth = constraints.maxWidth > 720 ? 160.0 : (constraints.maxWidth - dpi.space(10) * 2) / 3;
+            return Wrap(
+              spacing: dpi.space(10),
+              runSpacing: dpi.space(10),
+              children: zone.tables
+                  .map((table) => SizedBox(
+                        width: cardWidth,
+                        child: _TableCard(
+                          table: table,
+                          activeOrder: occupiedByTableId[table.id],
+                        ),
+                      ))
+                  .toList(),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _TableCard extends StatelessWidget {
+  const _TableCard({required this.table, required this.activeOrder});
+
+  final TableLayoutItem table;
+  final LiveOrderItem? activeOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isOccupied = activeOrder != null;
+
+    final accentColor = isOccupied ? MangoThemeFactory.warning : MangoThemeFactory.success;
+    final bg = isOccupied
+        ? accentColor.withValues(alpha: isDark ? 0.18 : 0.10)
+        : MangoThemeFactory.cardColor(context);
+    final borderColor = isOccupied
+        ? accentColor.withValues(alpha: 0.55)
+        : MangoThemeFactory.borderColor(context);
+
+    final card = Container(
+      padding: EdgeInsets.all(dpi.space(12)),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(dpi.radius(14)),
+        border: Border.all(color: borderColor, width: isOccupied ? 1.5 : 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: dpi.scale(8),
+                height: dpi.scale(8),
+                decoration: BoxDecoration(
+                  color: accentColor,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              SizedBox(width: dpi.space(6)),
+              Expanded(
+                child: Text(
+                  table.label,
+                  style: TextStyle(
+                    fontSize: dpi.font(14),
+                    fontWeight: FontWeight.w800,
+                    color: MangoThemeFactory.textColor(context),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (table.capacity != null)
+                Row(
+                  children: [
+                    Icon(Icons.person_rounded, size: dpi.icon(12), color: MangoThemeFactory.mutedText(context)),
+                    Text(
+                      '${table.capacity}',
+                      style: TextStyle(fontSize: dpi.font(10), color: MangoThemeFactory.mutedText(context)),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          SizedBox(height: dpi.space(8)),
+          if (isOccupied) ...[
+            Text(
+              activeOrder!.subtitle.isEmpty ? 'Cliente' : activeOrder!.subtitle,
+              style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w600),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            SizedBox(height: dpi.space(2)),
+            Text(
+              MangoFormatters.currency(activeOrder!.total),
+              style: TextStyle(
+                fontSize: dpi.font(13),
+                fontWeight: FontWeight.w800,
+                color: accentColor,
+              ),
+            ),
+            SizedBox(height: dpi.space(2)),
+            Row(
+              children: [
+                Icon(Icons.schedule_rounded, size: dpi.icon(11), color: MangoThemeFactory.mutedText(context)),
+                SizedBox(width: dpi.space(3)),
+                Text(
+                  _elapsedFromNow(activeOrder!.openedAt),
+                  style: TextStyle(fontSize: dpi.font(10), color: MangoThemeFactory.mutedText(context)),
+                ),
+                if (activeOrder!.peopleCount != null && activeOrder!.peopleCount! > 0) ...[
+                  SizedBox(width: dpi.space(8)),
+                  Icon(Icons.groups_rounded, size: dpi.icon(11), color: MangoThemeFactory.mutedText(context)),
+                  SizedBox(width: dpi.space(3)),
+                  Text(
+                    '${activeOrder!.peopleCount}',
+                    style: TextStyle(fontSize: dpi.font(10), color: MangoThemeFactory.mutedText(context)),
+                  ),
+                ],
+              ],
+            ),
+          ] else ...[
+            Text(
+              'Libre',
+              style: TextStyle(
+                fontSize: dpi.font(11),
+                fontWeight: FontWeight.w700,
+                color: accentColor,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+
+    if (!isOccupied) return card;
+    return InkWell(
+      onTap: () => showModalBottomSheet<void>(
+        context: context,
+        backgroundColor: Colors.transparent,
+        isScrollControlled: true,
+        builder: (_) => _OrderDetailsSheet(order: activeOrder!),
+      ),
+      borderRadius: BorderRadius.circular(dpi.radius(14)),
+      child: card,
+    );
+  }
+
+  static String _elapsedFromNow(DateTime? openedAt) {
+    if (openedAt == null) return '—';
+    final diff = DateTime.now().difference(openedAt);
+    if (diff.inMinutes < 1) return 'Recién';
+    if (diff.inHours < 1) return '${diff.inMinutes}m';
+    final h = diff.inHours;
+    final m = diff.inMinutes.remainder(60);
+    return '${h}h ${m}m';
   }
 }
 
@@ -2462,6 +3186,12 @@ class SettingsView extends ConsumerWidget {
         ),
 
         SizedBox(height: dpi.space(32)),
+        _SettingsHeader(title: 'Seguridad'),
+        SizedBox(height: dpi.space(12)),
+
+        _BiometricSection(profile: profile),
+
+        SizedBox(height: dpi.space(32)),
         _SettingsHeader(title: 'Cuentas'),
         SizedBox(height: dpi.space(12)),
 
@@ -2640,6 +3370,167 @@ class _ThemeOption extends StatelessWidget {
   }
 }
 
+class _BiometricSection extends ConsumerStatefulWidget {
+  const _BiometricSection({required this.profile});
+  final AdminAccessProfile profile;
+
+  @override
+  ConsumerState<_BiometricSection> createState() => _BiometricSectionState();
+}
+
+class _BiometricSectionState extends ConsumerState<_BiometricSection> {
+  bool _busy = false;
+
+  Future<void> _toggle(bool enable, SavedAccount account) async {
+    if (_busy) return;
+    final email = account.email;
+    if (email.isEmpty) return;
+
+    setState(() => _busy = true);
+    try {
+      // When enabling, require a successful biometric scan to confirm intent.
+      if (enable) {
+        final biometric = ref.read(biometricAuthServiceProvider);
+        final result = await biometric.authenticate(
+          reason: 'Confirma tu identidad para activar el acceso biométrico',
+        );
+        if (result != BiometricResult.success) {
+          if (!mounted) return;
+          if (result == BiometricResult.lockedOut) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Biometría bloqueada. Inténtalo más tarde.')),
+            );
+          } else if (result == BiometricResult.notEnrolled) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Configura tu huella o Face ID en el sistema primero.')),
+            );
+          }
+          return;
+        }
+      }
+
+      final ok = await ref.read(authGateViewModelProvider.notifier).setBiometricEnabled(email, enable);
+      if (!mounted) return;
+      if (ok) {
+        // Force the FutureProvider for accounts to refresh on the rebuild.
+        ref.invalidate(savedAccountsServiceProvider);
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(enable ? 'Acceso biométrico activado.' : 'Acceso biométrico desactivado.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final available = ref.watch(biometricAvailableProvider);
+    final label = ref.watch(biometricLabelProvider).asData?.value ?? 'Biometría';
+
+    return available.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, _) => const SizedBox.shrink(),
+      data: (isAvailable) {
+        if (!isAvailable) {
+          return Container(
+            padding: EdgeInsets.all(dpi.space(16)),
+            decoration: BoxDecoration(
+              color: MangoThemeFactory.cardColor(context),
+              borderRadius: BorderRadius.circular(dpi.radius(20)),
+              border: Border.all(color: MangoThemeFactory.borderColor(context)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.fingerprint_rounded, color: MangoThemeFactory.mutedText(context), size: dpi.icon(22)),
+                SizedBox(width: dpi.space(12)),
+                Expanded(
+                  child: Text(
+                    'Este dispositivo no tiene biometría configurada.',
+                    style: TextStyle(fontSize: dpi.font(12), color: MangoThemeFactory.mutedText(context)),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return FutureBuilder<List<SavedAccount>>(
+          future: ref.read(savedAccountsServiceProvider).loadAccounts(),
+          builder: (context, snapshot) {
+            final accounts = snapshot.data ?? const <SavedAccount>[];
+            final current = accounts
+                .where((a) => a.email == widget.profile.email)
+                .firstOrNull;
+            final enabled = current?.biometricEnabled ?? false;
+            final canToggle = current != null && !_busy;
+
+            return Container(
+              padding: EdgeInsets.all(dpi.space(16)),
+              decoration: BoxDecoration(
+                color: MangoThemeFactory.cardColor(context),
+                borderRadius: BorderRadius.circular(dpi.radius(20)),
+                border: Border.all(color: MangoThemeFactory.borderColor(context)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: dpi.scale(44),
+                    height: dpi.scale(44),
+                    decoration: BoxDecoration(
+                      color: MangoThemeFactory.mango.withValues(alpha: isDark ? 0.2 : 0.12),
+                      borderRadius: BorderRadius.circular(dpi.radius(12)),
+                    ),
+                    child: Icon(Icons.fingerprint_rounded, color: MangoThemeFactory.mango, size: dpi.icon(24)),
+                  ),
+                  SizedBox(width: dpi.space(12)),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Iniciar sesión con $label',
+                          style: TextStyle(fontSize: dpi.font(14), fontWeight: FontWeight.w700),
+                        ),
+                        SizedBox(height: dpi.space(2)),
+                        Text(
+                          enabled
+                              ? 'Activado para esta cuenta. Toca tu cuenta en la pantalla de inicio para entrar con $label.'
+                              : 'Confirma tu identidad rápidamente sin escribir tu contraseña.',
+                          style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(width: dpi.space(8)),
+                  if (_busy)
+                    SizedBox(
+                      width: dpi.scale(20),
+                      height: dpi.scale(20),
+                      child: const CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Switch(
+                      value: enabled,
+                      onChanged: canToggle ? (v) => _toggle(v, current) : null,
+                      activeThumbColor: MangoThemeFactory.mango,
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
 class _AccountsSection extends ConsumerStatefulWidget {
   const _AccountsSection({required this.currentProfile});
   final AdminAccessProfile currentProfile;
@@ -2650,7 +3541,7 @@ class _AccountsSection extends ConsumerStatefulWidget {
 
 class _AccountsSectionState extends ConsumerState<_AccountsSection> {
   List<SavedAccount> _otherAccounts = [];
-  bool _switching = false;
+  String? _switchingEmail;
 
   @override
   void initState() {
@@ -2670,21 +3561,18 @@ class _AccountsSectionState extends ConsumerState<_AccountsSection> {
   }
 
   Future<void> _switchTo(SavedAccount account) async {
-    if (_switching) return;
-    setState(() => _switching = true);
+    if (_switchingEmail != null) return;
+    setState(() => _switchingEmail = account.email);
 
-    // Intentar con token guardado primero
-    if (account.refreshToken != null) {
-      final error = await ref
-          .read(authGateViewModelProvider.notifier)
-          .switchAccountByToken(account.refreshToken!);
-      if (error == null) return; // éxito
-    }
-
-    // Token expirado o no existe → pedir contraseña en dialog
+    final error = await ref
+        .read(authGateViewModelProvider.notifier)
+        .switchAccountByToken(account);
+        
     if (mounted) {
-      setState(() => _switching = false);
-      _showPasswordDialog(account);
+      setState(() => _switchingEmail = null);
+      if (error != null) {
+        _showPasswordDialog(account);
+      }
     }
   }
 
@@ -2778,6 +3666,7 @@ class _AccountsSectionState extends ConsumerState<_AccountsSection> {
     );
   }
 
+
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
@@ -2796,7 +3685,7 @@ class _AccountsSectionState extends ConsumerState<_AccountsSection> {
             ..._otherAccounts.map((account) => Padding(
               padding: EdgeInsets.only(bottom: dpi.space(8)),
               child: InkWell(
-                onTap: _switching ? null : () => _switchTo(account),
+                onTap: _switchingEmail != null ? null : () => _switchTo(account),
                 borderRadius: BorderRadius.circular(dpi.radius(14)),
                 child: Container(
                   padding: EdgeInsets.all(dpi.space(14)),
@@ -2852,7 +3741,7 @@ class _AccountsSectionState extends ConsumerState<_AccountsSection> {
                           ],
                         ),
                       ),
-                      _switching
+                      _switchingEmail == account.email
                           ? SizedBox(
                               width: dpi.scale(22),
                               height: dpi.scale(22),

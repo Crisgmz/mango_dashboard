@@ -262,6 +262,7 @@ class CashRegisterDataService {
       registerName: registerName,
       closedAt: DateTime.tryParse(row['closed_at']?.toString() ?? '') ?? DateTime.now(),
       closedByName: usersById[userId] ?? 'Desconocido',
+      openedAt: DateTime.tryParse(row['opened_at']?.toString() ?? ''),
       deviceName: row['device_name']?.toString(),
       openingAmount: openingAmount,
       closingAmount: closingAmount,
@@ -275,6 +276,51 @@ class CashRegisterDataService {
       totalWithdrawals: tx.withdrawals,
       totalExpenses: tx.expenses,
     );
+  }
+
+  /// Loads NCFs (fiscal documents) issued during a cash session, grouped by type.
+  /// Used by the Reporte Z view.
+  Future<List<NcfTypeSummary>> loadNcfsForSession({
+    required String businessId,
+    required DateTime openedAt,
+    required DateTime closedAt,
+  }) async {
+    final rows = await _client
+        .from('fiscal_documents')
+        .select('ncf_type, ncf_number, total, status, issued_at')
+        .eq('business_id', businessId)
+        .gte('issued_at', openedAt.toUtc().toIso8601String())
+        .lte('issued_at', closedAt.toUtc().toIso8601String())
+        .eq('status', 'active')
+        .order('issued_at', ascending: true);
+
+    final grouped = <String, _NcfGroup>{};
+    for (final row in List<Map<String, dynamic>>.from(rows)) {
+      final type = row['ncf_type']?.toString() ?? 'OTRO';
+      final number = row['ncf_number']?.toString();
+      final total = _toDouble(row['total']);
+      final group = grouped[type] ??= _NcfGroup();
+      group.count += 1;
+      group.total += total;
+      if (group.firstNumber == null && number != null && number.isNotEmpty) {
+        group.firstNumber = number;
+      }
+      if (number != null && number.isNotEmpty) {
+        group.lastNumber = number;
+      }
+    }
+
+    final result = grouped.entries
+        .map((e) => NcfTypeSummary(
+              type: e.key,
+              count: e.value.count,
+              total: e.value.total,
+              firstNumber: e.value.firstNumber,
+              lastNumber: e.value.lastNumber,
+            ))
+        .toList()
+      ..sort((a, b) => a.type.compareTo(b.type));
+    return result;
   }
 
   double _toDouble(dynamic value) {
@@ -296,4 +342,11 @@ class _SessionPay {
   double transfer = 0;
   double other = 0;
   double get total => cash + card + transfer + other;
+}
+
+class _NcfGroup {
+  int count = 0;
+  double total = 0;
+  String? firstNumber;
+  String? lastNumber;
 }

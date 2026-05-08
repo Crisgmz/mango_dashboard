@@ -4,6 +4,7 @@ import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../theme/theme_data_factory.dart';
+import 'growth_chip.dart';
 
 class DashboardKpiCards extends StatelessWidget {
   const DashboardKpiCards({
@@ -23,9 +24,6 @@ class DashboardKpiCards extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final changePercent = summary.salesChangePercent;
-    final isPositive = changePercent >= 0;
-
     return LayoutBuilder(
       builder: (context, constraints) {
         final crossAxisCount = constraints.maxWidth > 600 ? 4 : 2;
@@ -45,10 +43,13 @@ class DashboardKpiCards extends StatelessWidget {
               icon: Icons.trending_up_rounded,
               color: MangoThemeFactory.success,
               accentBackground: true,
-              subtitle: changePercent == 0
-                  ? 'Sin datos de ayer'
-                  : '${isPositive ? '+' : ''}${changePercent.toStringAsFixed(1)}% vs ayer',
+              subtitle: comparisonLabelFor(summary.filter),
               subtitleColor: Colors.white70,
+              trailing: GrowthChip(
+                current: summary.totalSales,
+                previous: summary.previousDaySales,
+                compact: true,
+              ),
               onTap: onSalesTap,
             ),
             _KpiCard(
@@ -94,6 +95,7 @@ class _KpiCard extends StatelessWidget {
     required this.accentBackground,
     this.subtitle,
     this.subtitleColor,
+    this.trailing,
     this.onTap,
   });
 
@@ -104,6 +106,7 @@ class _KpiCard extends StatelessWidget {
   final bool accentBackground;
   final String? subtitle;
   final Color? subtitleColor;
+  final Widget? trailing;
   final VoidCallback? onTap;
 
   @override
@@ -139,14 +142,30 @@ class _KpiCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: dpi.scale(36),
-            height: dpi.scale(36),
-            decoration: BoxDecoration(
-              color: iconBg,
-              borderRadius: BorderRadius.circular(dpi.radius(10)),
-            ),
-            child: Icon(icon, color: iconColor, size: dpi.icon(20)),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: trailing != null
+                ? MainAxisAlignment.spaceBetween
+                : MainAxisAlignment.start,
+            children: [
+              Container(
+                width: dpi.scale(36),
+                height: dpi.scale(36),
+                decoration: BoxDecoration(
+                  color: iconBg,
+                  borderRadius: BorderRadius.circular(dpi.radius(10)),
+                ),
+                child: Icon(icon, color: iconColor, size: dpi.icon(20)),
+              ),
+              if (trailing != null)
+                Flexible(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: trailing!,
+                  ),
+                ),
+            ],
           ),
           const Spacer(),
           Text(

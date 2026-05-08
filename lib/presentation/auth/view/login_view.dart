@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/di/providers.dart';
+import '../../../core/auth/biometric_auth_service.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/auth/saved_account.dart';
 import '../../../presentation/theme/theme_data_factory.dart';
@@ -39,7 +40,43 @@ class _LoginViewState extends ConsumerState<LoginView> {
     await _loadSavedAccounts();
   }
 
-  void _selectSavedAccount(SavedAccount account) {
+  Future<void> _selectSavedAccount(SavedAccount account) async {
+    // If this account has biometric unlock enabled, try it first.
+    if (account.biometricEnabled) {
+      final biometric = ref.read(biometricAuthServiceProvider);
+      final available = await biometric.isAvailable();
+      if (available) {
+        final result = await biometric.authenticate(
+          reason: 'Confirma tu identidad para entrar como ${account.displayName}',
+        );
+        if (!mounted) return;
+        if (result == BiometricResult.success) {
+          final err = await ref
+              .read(authGateViewModelProvider.notifier)
+              .switchAccountByToken(account);
+          if (err == null) return; // session restored — auth gate will navigate
+          if (!mounted) return;
+          // Token + saved password failed → fall back to manual login.
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('La sesión expiró. Ingresa tu contraseña.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } else if (result == BiometricResult.lockedOut) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Biometría bloqueada. Usa tu contraseña.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        // For cancelled / failed / error: fall through to manual flow without
+        // showing an error — user can still type their password.
+      }
+    }
+
     _emailController.text = account.email;
     _passwordController.clear();
     _passwordFocusNode.requestFocus();
@@ -323,15 +360,29 @@ class _SavedAccountsList extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              account.displayName,
-                              style: TextStyle(
-                                fontSize: dpi.font(14),
-                                fontWeight: FontWeight.w700,
-                                color: isSelected ? MangoThemeFactory.mango : null,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    account.displayName,
+                                    style: TextStyle(
+                                      fontSize: dpi.font(14),
+                                      fontWeight: FontWeight.w700,
+                                      color: isSelected ? MangoThemeFactory.mango : null,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (account.biometricEnabled) ...[
+                                  SizedBox(width: dpi.space(6)),
+                                  Icon(
+                                    Icons.fingerprint_rounded,
+                                    size: dpi.icon(14),
+                                    color: MangoThemeFactory.mango,
+                                  ),
+                                ],
+                              ],
                             ),
                             Text(
                               account.email,

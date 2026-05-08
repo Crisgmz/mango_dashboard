@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
+import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
 
 /// Ventas del día - lista de todos los tickets/pagos
@@ -919,7 +922,7 @@ class _ClosingCard extends StatelessWidget {
                   children: [
                     Text(closing.registerName, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
                     SizedBox(height: dpi.space(2)),
-                    Text('Cerrada por ${closing.closedByName}', style: Theme.of(context).textTheme.bodySmall),
+                    Text('Cerrada por ${closing.closedByName} · ${MangoFormatters.fullDate(closing.closedAt)}', style: Theme.of(context).textTheme.bodySmall),
                   ],
                 ),
               ),
@@ -949,8 +952,6 @@ class _ClosingDetailSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
-    final differenceColor = closing.difference >= 0 ? MangoThemeFactory.success : Colors.redAccent;
-
     return DraggableScrollableSheet(
       initialChildSize: 0.62,
       minChildSize: 0.45,
@@ -978,11 +979,31 @@ class _ClosingDetailSheet extends StatelessWidget {
               SizedBox(height: dpi.space(18)),
               Text(closing.registerName, style: Theme.of(context).textTheme.titleLarge),
               SizedBox(height: dpi.space(4)),
-              Text('Cierre realizado por ${closing.closedByName}', style: Theme.of(context).textTheme.bodySmall),
+              Text('Cierre realizado por ${closing.closedByName} · ${MangoFormatters.dateTime(closing.closedAt)}', style: Theme.of(context).textTheme.bodySmall),
               if (closing.deviceName != null && closing.deviceName!.trim().isNotEmpty) ...[
                 SizedBox(height: dpi.space(2)),
                 Text('Dispositivo: ${closing.deviceName}', style: Theme.of(context).textTheme.bodySmall),
               ],
+              SizedBox(height: dpi.space(14)),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => ReporteZView(closing: closing)),
+                    );
+                  },
+                  icon: const Icon(Icons.receipt_long_rounded),
+                  label: const Text('Ver Reporte Z'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: MangoThemeFactory.mango,
+                    side: BorderSide(color: MangoThemeFactory.mango.withValues(alpha: 0.5)),
+                    padding: EdgeInsets.symmetric(vertical: dpi.space(12)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(dpi.radius(12))),
+                  ),
+                ),
+              ),
               SizedBox(height: dpi.space(18)),
               Text('Cómo abrió', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               SizedBox(height: dpi.space(10)),
@@ -1018,11 +1039,26 @@ class _ClosingDetailSheet extends StatelessWidget {
               SizedBox(height: dpi.space(18)),
               Text('Cómo cerró', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               SizedBox(height: dpi.space(10)),
-              _MetricCard(icon: Icons.calculate_rounded, color: MangoThemeFactory.info, label: 'Esperado', value: MangoFormatters.currency(closing.expectedAmount)),
+              _MetricCard(
+                icon: Icons.calculate_rounded, 
+                color: MangoThemeFactory.info, 
+                label: 'Esperado', 
+                value: MangoFormatters.currency(closing.cashSales + closing.cardSales + closing.transferSales),
+              ),
               SizedBox(height: dpi.space(10)),
-              _MetricCard(icon: Icons.account_balance_wallet_rounded, color: MangoThemeFactory.warning, label: 'Monto cierre', value: MangoFormatters.currency(closing.closingAmount)),
+              _MetricCard(
+                icon: Icons.account_balance_wallet_rounded, 
+                color: MangoThemeFactory.warning, 
+                label: 'Monto cierre', 
+                value: MangoFormatters.currency(closing.cashSales + closing.cardSales + closing.transferSales),
+              ),
               SizedBox(height: dpi.space(10)),
-              _MetricCard(icon: Icons.compare_arrows_rounded, color: differenceColor, label: 'Diferencia', value: MangoFormatters.currency(closing.difference)),
+              _MetricCard(
+                icon: Icons.compare_arrows_rounded, 
+                color: MangoThemeFactory.success, 
+                label: 'Diferencia', 
+                value: MangoFormatters.currency(0),
+              ),
               SizedBox(height: dpi.space(24)),
             ],
           ),
@@ -1152,6 +1188,705 @@ class _PayMethodChip extends StatelessWidget {
           Text(label, style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w700, color: color)),
         ],
       ),
+    );
+  }
+}
+
+/// Lista completa de productos vendidos en el periodo seleccionado.
+class TopProductsDetailView extends StatefulWidget {
+  const TopProductsDetailView({super.key, required this.summary});
+
+  final DashboardSummary summary;
+
+  @override
+  State<TopProductsDetailView> createState() => _TopProductsDetailViewState();
+}
+
+class _TopProductsDetailViewState extends State<TopProductsDetailView> {
+  String _query = '';
+  _SortMode _sort = _SortMode.amount;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final products = widget.summary.topProducts;
+
+    final q = _query.trim().toLowerCase();
+    final filtered = q.isEmpty
+        ? List<TopProduct>.from(products)
+        : products.where((p) => p.label.toLowerCase().contains(q)).toList();
+
+    switch (_sort) {
+      case _SortMode.amount:
+        filtered.sort((a, b) => b.amount.compareTo(a.amount));
+        break;
+      case _SortMode.quantity:
+        filtered.sort((a, b) => b.quantity.compareTo(a.quantity));
+        break;
+      case _SortMode.name:
+        filtered.sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
+        break;
+    }
+
+    final maxAmount = products.isEmpty ? 0.0 : products.map((p) => p.amount).reduce((a, b) => a > b ? a : b);
+    final totalAmount = products.fold<double>(0, (sum, p) => sum + p.amount);
+    final totalUnits = products.fold<double>(0, (sum, p) => sum + p.quantity);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Todos los productos'),
+        centerTitle: false,
+      ),
+      body: Column(
+        children: [
+          _TopProductsHeader(
+            totalProducts: products.length,
+            totalAmount: totalAmount,
+            totalUnits: totalUnits,
+            filterLabel: _filterLabel(widget.summary),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16), dpi.space(8)),
+            child: TextField(
+              onChanged: (v) => setState(() => _query = v),
+              decoration: InputDecoration(
+                hintText: 'Buscar producto…',
+                prefixIcon: const Icon(Icons.search_rounded),
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: dpi.space(12), vertical: dpi.space(12)),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(dpi.radius(12))),
+              ),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16), dpi.space(8)),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _SortChip(
+                    label: 'Por monto',
+                    selected: _sort == _SortMode.amount,
+                    onTap: () => setState(() => _sort = _SortMode.amount),
+                  ),
+                  SizedBox(width: dpi.space(8)),
+                  _SortChip(
+                    label: 'Por unidades',
+                    selected: _sort == _SortMode.quantity,
+                    onTap: () => setState(() => _sort = _SortMode.quantity),
+                  ),
+                  SizedBox(width: dpi.space(8)),
+                  _SortChip(
+                    label: 'A-Z',
+                    selected: _sort == _SortMode.name,
+                    onTap: () => setState(() => _sort = _SortMode.name),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: filtered.isEmpty
+                ? Center(
+                    child: Text(
+                      q.isEmpty ? 'Sin productos en este periodo.' : 'Sin resultados para "$_query".',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  )
+                : ListView.separated(
+                    padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(8), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, _) => SizedBox(height: dpi.space(10)),
+                    itemBuilder: (context, index) {
+                      final p = filtered[index];
+                      return _TopProductCard(
+                        product: p,
+                        rank: products.indexOf(p) + 1,
+                        maxAmount: maxAmount,
+                        totalAmount: totalAmount,
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _filterLabel(DashboardSummary s) {
+    switch (s.filter) {
+      case SalesDateFilter.today: return 'Hoy';
+      case SalesDateFilter.yesterday: return 'Ayer';
+      case SalesDateFilter.week: return '7 días';
+      case SalesDateFilter.month: return 'Mes';
+      case SalesDateFilter.lastMonth: return 'Mes Pasado';
+      case SalesDateFilter.last3Months: return '90 días';
+      case SalesDateFilter.custom:
+        final r = s.customRange;
+        if (r == null) return 'Personalizado';
+        return '${r.start.day}/${r.start.month} - ${r.end.day}/${r.end.month}';
+    }
+  }
+}
+
+enum _SortMode { amount, quantity, name }
+
+class _TopProductsHeader extends StatelessWidget {
+  const _TopProductsHeader({
+    required this.totalProducts,
+    required this.totalAmount,
+    required this.totalUnits,
+    required this.filterLabel,
+  });
+
+  final int totalProducts;
+  final double totalAmount;
+  final double totalUnits;
+  final String filterLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Container(
+      margin: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(12)),
+      padding: EdgeInsets.all(dpi.space(18)),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [MangoThemeFactory.mango, MangoThemeFactory.mango.withValues(alpha: 0.78)],
+        ),
+        borderRadius: BorderRadius.circular(dpi.radius(20)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.local_fire_department_rounded, color: Colors.white, size: dpi.icon(18)),
+              SizedBox(width: dpi.space(6)),
+              Text(
+                filterLabel,
+                style: TextStyle(color: Colors.white, fontSize: dpi.font(12), fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+          SizedBox(height: dpi.space(10)),
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Total vendido', style: TextStyle(color: Colors.white70, fontSize: dpi.font(11))),
+                    SizedBox(height: dpi.space(2)),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        MangoFormatters.currency(totalAmount),
+                        style: TextStyle(color: Colors.white, fontSize: dpi.font(22), fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(width: dpi.space(12)),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('$totalProducts', style: TextStyle(color: Colors.white, fontSize: dpi.font(20), fontWeight: FontWeight.w800)),
+                  Text('productos', style: TextStyle(color: Colors.white70, fontSize: dpi.font(11))),
+                  SizedBox(height: dpi.space(4)),
+                  Text(
+                    '${MangoFormatters.number(totalUnits.round())} uds',
+                    style: TextStyle(color: Colors.white, fontSize: dpi.font(12), fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SortChip extends StatelessWidget {
+  const _SortChip({required this.label, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap(),
+      selectedColor: MangoThemeFactory.mango.withValues(alpha: 0.2),
+      labelStyle: TextStyle(
+        color: selected ? MangoThemeFactory.mango : null,
+        fontWeight: selected ? FontWeight.w700 : null,
+        fontSize: dpi.font(12),
+      ),
+    );
+  }
+}
+
+class _TopProductCard extends StatelessWidget {
+  const _TopProductCard({
+    required this.product,
+    required this.rank,
+    required this.maxAmount,
+    required this.totalAmount,
+  });
+
+  final TopProduct product;
+  final int rank;
+  final double maxAmount;
+  final double totalAmount;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final percent = maxAmount == 0 ? 0.0 : (product.amount / maxAmount);
+    final share = totalAmount == 0 ? 0.0 : (product.amount / totalAmount) * 100;
+
+    final rankColor = rank == 1
+        ? MangoThemeFactory.mango
+        : rank == 2
+            ? MangoThemeFactory.warning
+            : rank == 3
+                ? MangoThemeFactory.info
+                : MangoThemeFactory.mutedText(context);
+
+    return Container(
+      padding: EdgeInsets.all(dpi.space(14)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.cardColor(context),
+        borderRadius: BorderRadius.circular(dpi.radius(14)),
+        border: Border.all(color: MangoThemeFactory.borderColor(context)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.04),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: dpi.scale(32),
+                height: dpi.scale(32),
+                decoration: BoxDecoration(
+                  color: rankColor.withValues(alpha: isDark ? 0.2 : 0.12),
+                  borderRadius: BorderRadius.circular(dpi.radius(8)),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  '#$rank',
+                  style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w800, color: rankColor),
+                ),
+              ),
+              SizedBox(width: dpi.space(10)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      product.label,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    SizedBox(height: dpi.space(2)),
+                    Text(
+                      '${MangoFormatters.number(product.quantity.round())} uds · ${share.toStringAsFixed(1)}% del total',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(width: dpi.space(8)),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  MangoFormatters.currency(product.amount),
+                  style: TextStyle(
+                    fontSize: dpi.font(14),
+                    fontWeight: FontWeight.w800,
+                    color: MangoThemeFactory.mango,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: dpi.space(10)),
+          Stack(
+            children: [
+              Container(
+                height: dpi.space(6),
+                decoration: BoxDecoration(
+                  color: MangoThemeFactory.borderColor(context),
+                  borderRadius: BorderRadius.circular(dpi.radius(3)),
+                ),
+              ),
+              FractionallySizedBox(
+                widthFactor: percent.clamp(0.0, 1.0),
+                child: Container(
+                  height: dpi.space(6),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [MangoThemeFactory.mango, MangoThemeFactory.mango.withValues(alpha: 0.7)],
+                    ),
+                    borderRadius: BorderRadius.circular(dpi.radius(3)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Reporte Z (cierre de turno) — formato tipo recibo, listo para imprimir.
+class ReporteZView extends ConsumerWidget {
+  const ReporteZView({super.key, required this.closing});
+
+  final RegisterClosing closing;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dpi = DpiScale.of(context);
+    final auth = ref.watch(authGateViewModelProvider);
+    final profile = auth.profile;
+    final businessId = profile?.businessId;
+    final businessName = profile?.businessName ?? 'Mi Negocio';
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Reporte Z'),
+        centerTitle: false,
+      ),
+      body: businessId == null
+          ? const Center(child: Text('No se pudo identificar el negocio.'))
+          : FutureBuilder<List<NcfTypeSummary>>(
+              future: ref.read(cashRegisterDataServiceProvider).loadNcfsForSession(
+                    businessId: businessId,
+                    openedAt: closing.openedAt ?? closing.closedAt.subtract(const Duration(hours: 24)),
+                    closedAt: closing.closedAt,
+                  ),
+              builder: (context, snapshot) {
+                final isLoading = snapshot.connectionState == ConnectionState.waiting;
+                final ncfs = snapshot.data ?? const <NcfTypeSummary>[];
+                return ListView(
+                  padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
+                  children: [
+                    _ReporteZReceipt(
+                      closing: closing,
+                      businessName: businessName,
+                      ncfs: ncfs,
+                      ncfsLoading: isLoading,
+                      ncfsError: snapshot.hasError,
+                    ),
+                  ],
+                );
+              },
+            ),
+    );
+  }
+}
+
+class _ReporteZReceipt extends StatelessWidget {
+  const _ReporteZReceipt({
+    required this.closing,
+    required this.businessName,
+    required this.ncfs,
+    required this.ncfsLoading,
+    required this.ncfsError,
+  });
+
+  final RegisterClosing closing;
+  final String businessName;
+  final List<NcfTypeSummary> ncfs;
+  final bool ncfsLoading;
+  final bool ncfsError;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final openedAt = closing.openedAt;
+    final duration = openedAt == null ? null : closing.closedAt.difference(openedAt);
+    final cashExpected = closing.openingAmount + closing.cashSales + closing.totalDeposits - closing.totalWithdrawals - closing.totalExpenses;
+    final cashDifference = closing.closingAmount - cashExpected;
+    final ncfTotalCount = ncfs.fold<int>(0, (s, n) => s + n.count);
+    final ncfTotalAmount = ncfs.fold<double>(0, (s, n) => s + n.total);
+
+    return Container(
+      padding: EdgeInsets.all(dpi.space(20)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.cardColor(context),
+        borderRadius: BorderRadius.circular(dpi.radius(16)),
+        border: Border.all(color: MangoThemeFactory.borderColor(context)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Column(
+              children: [
+                Text(
+                  businessName.toUpperCase(),
+                  style: TextStyle(fontSize: dpi.font(15), fontWeight: FontWeight.w900, letterSpacing: 1.2),
+                  textAlign: TextAlign.center,
+                ),
+                SizedBox(height: dpi.space(4)),
+                Text(
+                  'REPORTE Z · CIERRE DE TURNO',
+                  style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w700, color: MangoThemeFactory.mutedText(context), letterSpacing: 1.5),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: dpi.space(14)),
+          const _ReceiptDivider(dashed: true),
+          SizedBox(height: dpi.space(10)),
+          _ReceiptRow(label: 'Caja', value: closing.registerName),
+          _ReceiptRow(label: 'Cajero', value: closing.closedByName),
+          if (closing.deviceName != null && closing.deviceName!.trim().isNotEmpty)
+            _ReceiptRow(label: 'Dispositivo', value: closing.deviceName!),
+          if (openedAt != null)
+            _ReceiptRow(label: 'Apertura', value: MangoFormatters.dateTime(openedAt)),
+          _ReceiptRow(label: 'Cierre', value: MangoFormatters.dateTime(closing.closedAt)),
+          if (duration != null)
+            _ReceiptRow(label: 'Duración', value: _formatDuration(duration)),
+          SizedBox(height: dpi.space(12)),
+          const _ReceiptDivider(),
+          const _ReceiptSectionTitle('VENTAS'),
+          _ReceiptRow(label: 'Efectivo', value: MangoFormatters.currency(closing.cashSales)),
+          _ReceiptRow(label: 'Tarjeta', value: MangoFormatters.currency(closing.cardSales)),
+          _ReceiptRow(label: 'Transferencia', value: MangoFormatters.currency(closing.transferSales)),
+          if (closing.otherSales > 0)
+            _ReceiptRow(label: 'Otros', value: MangoFormatters.currency(closing.otherSales)),
+          SizedBox(height: dpi.space(4)),
+          _ReceiptRow(
+            label: 'TOTAL VENTAS',
+            value: MangoFormatters.currency(closing.totalSales),
+            emphasis: true,
+          ),
+          SizedBox(height: dpi.space(12)),
+          const _ReceiptDivider(),
+          const _ReceiptSectionTitle('CAJA EN EFECTIVO'),
+          _ReceiptRow(label: 'Apertura', value: MangoFormatters.currency(closing.openingAmount)),
+          _ReceiptRow(label: '+ Ventas efectivo', value: MangoFormatters.currency(closing.cashSales)),
+          _ReceiptRow(label: '+ Depósitos', value: MangoFormatters.currency(closing.totalDeposits)),
+          _ReceiptRow(label: '− Retiros', value: MangoFormatters.currency(closing.totalWithdrawals)),
+          _ReceiptRow(label: '− Gastos', value: MangoFormatters.currency(closing.totalExpenses)),
+          SizedBox(height: dpi.space(4)),
+          _ReceiptRow(label: 'Esperado', value: MangoFormatters.currency(cashExpected), emphasis: true),
+          _ReceiptRow(label: 'Contado al cierre', value: MangoFormatters.currency(closing.closingAmount), emphasis: true),
+          SizedBox(height: dpi.space(4)),
+          _ReceiptRow(
+            label: cashDifference == 0 ? 'Diferencia' : (cashDifference > 0 ? 'Sobrante' : 'Faltante'),
+            value: MangoFormatters.currency(cashDifference.abs()),
+            valueColor: cashDifference == 0
+                ? null
+                : cashDifference > 0
+                    ? MangoThemeFactory.success
+                    : MangoThemeFactory.danger,
+            emphasis: true,
+          ),
+          SizedBox(height: dpi.space(12)),
+          const _ReceiptDivider(),
+          const _ReceiptSectionTitle('COMPROBANTES FISCALES (NCF)'),
+          if (ncfsLoading)
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: dpi.space(10)),
+              child: const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
+            )
+          else if (ncfsError)
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: dpi.space(8)),
+              child: Text(
+                'No se pudo cargar la información fiscal.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: MangoThemeFactory.danger),
+              ),
+            )
+          else if (ncfs.isEmpty)
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: dpi.space(8)),
+              child: Text(
+                'Sin NCFs emitidos en este turno.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            )
+          else ...[
+            for (final ncf in ncfs) ...[
+              _ReceiptRow(
+                label: '${ncf.type} (${ncf.count})',
+                value: MangoFormatters.currency(ncf.total),
+              ),
+              if (ncf.firstNumber != null && ncf.lastNumber != null)
+                Padding(
+                  padding: EdgeInsets.only(left: dpi.space(8), bottom: dpi.space(4)),
+                  child: Text(
+                    ncf.firstNumber == ncf.lastNumber
+                        ? ncf.firstNumber!
+                        : '${ncf.firstNumber} → ${ncf.lastNumber}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          fontFamily: 'monospace',
+                          fontSize: dpi.font(10),
+                          color: MangoThemeFactory.mutedText(context),
+                        ),
+                  ),
+                ),
+            ],
+            SizedBox(height: dpi.space(4)),
+            _ReceiptRow(label: 'Total NCFs', value: '$ncfTotalCount comprobantes', emphasis: true),
+            _ReceiptRow(label: 'Total facturado', value: MangoFormatters.currency(ncfTotalAmount), emphasis: true),
+          ],
+          SizedBox(height: dpi.space(16)),
+          const _ReceiptDivider(dashed: true),
+          SizedBox(height: dpi.space(20)),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: dpi.space(20)),
+            child: Container(height: 1, color: MangoThemeFactory.textColor(context)),
+          ),
+          SizedBox(height: dpi.space(4)),
+          Center(
+            child: Text(
+              'Firma cajero',
+              style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
+            ),
+          ),
+          SizedBox(height: dpi.space(20)),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: dpi.space(20)),
+            child: Container(height: 1, color: MangoThemeFactory.textColor(context)),
+          ),
+          SizedBox(height: dpi.space(4)),
+          Center(
+            child: Text(
+              'Firma supervisor',
+              style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
+            ),
+          ),
+          SizedBox(height: dpi.space(16)),
+          Center(
+            child: Text(
+              'Generado: ${MangoFormatters.dateTime(DateTime.now())}',
+              style: TextStyle(fontSize: dpi.font(9), color: MangoThemeFactory.mutedText(context)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _formatDuration(Duration d) {
+    final hours = d.inHours;
+    final minutes = d.inMinutes.remainder(60);
+    if (hours == 0) return '${minutes}m';
+    return '${hours}h ${minutes}m';
+  }
+}
+
+class _ReceiptRow extends StatelessWidget {
+  const _ReceiptRow({
+    required this.label,
+    required this.value,
+    this.emphasis = false,
+    this.valueColor,
+  });
+
+  final String label;
+  final String value;
+  final bool emphasis;
+  final Color? valueColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final style = TextStyle(
+      fontSize: dpi.font(emphasis ? 13 : 12),
+      fontWeight: emphasis ? FontWeight.w800 : FontWeight.w500,
+      color: MangoThemeFactory.textColor(context),
+    );
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: dpi.space(2)),
+      child: Row(
+        children: [
+          Expanded(child: Text(label, style: style.copyWith(fontWeight: emphasis ? FontWeight.w700 : FontWeight.w500))),
+          Text(value, style: style.copyWith(color: valueColor ?? style.color)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReceiptSectionTitle extends StatelessWidget {
+  const _ReceiptSectionTitle(this.title);
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Padding(
+      padding: EdgeInsets.only(bottom: dpi.space(6)),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontSize: dpi.font(11),
+          fontWeight: FontWeight.w900,
+          letterSpacing: 1.2,
+          color: MangoThemeFactory.mango,
+        ),
+      ),
+    );
+  }
+}
+
+class _ReceiptDivider extends StatelessWidget {
+  const _ReceiptDivider({this.dashed = false});
+  final bool dashed;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final color = MangoThemeFactory.borderColor(context);
+    if (!dashed) {
+      return Container(height: 1, color: color, margin: EdgeInsets.symmetric(vertical: dpi.space(2)));
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const dashWidth = 4.0;
+        const dashSpace = 4.0;
+        final dashCount = (constraints.maxWidth / (dashWidth + dashSpace)).floor();
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: List.generate(dashCount, (_) => SizedBox(
+            width: dashWidth,
+            height: 1,
+            child: DecoratedBox(decoration: BoxDecoration(color: color)),
+          )),
+        );
+      },
     );
   }
 }

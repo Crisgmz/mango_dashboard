@@ -89,11 +89,11 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
+            VALUE "CompanyName", "do.mangopos" "\0"
             VALUE "FileDescription", "mango_dashboard" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "mango_dashboard" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 do.mangopos. All rights reserved." "\0"
             VALUE "OriginalFilename", "mango_dashboard.exe" "\0"
             VALUE "ProductName", "mango_dashboard" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"

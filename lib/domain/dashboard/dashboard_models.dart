@@ -2,7 +2,15 @@ import 'package:flutter/material.dart';
 
 import '../auth/admin_access_profile.dart';
 
-enum SalesDateFilter { today, yesterday, week, month, lastMonth, last3Months }
+enum SalesDateFilter { today, yesterday, week, month, lastMonth, last3Months, custom }
+
+@immutable
+class SalesByCategory {
+  const SalesByCategory({required this.label, required this.amount});
+
+  final String label;
+  final double amount;
+}
 
 @immutable
 class DashboardSummary {
@@ -16,6 +24,8 @@ class DashboardSummary {
     required this.catalogItems,
     required this.liveOrders,
     required this.closedOrders,
+    required this.salesByCategory,
+    this.customRange,
     this.pendingAmount = 0,
     this.previousDaySales = 0,
     this.hourlySales = const [],
@@ -31,16 +41,18 @@ class DashboardSummary {
   final int totalTickets;
   final double averageTicket;
   final int activeOrders;
+  final List<TopProduct> topProducts;
+  final List<CatalogItem> catalogItems;
+  final List<LiveOrderItem> liveOrders;
+  final List<LiveOrderItem> closedOrders;
+  final List<SalesByCategory> salesByCategory;
   final double pendingAmount;
   final double previousDaySales;
   final List<HourlySale> hourlySales;
   final List<SalesByMethod> salesByMethod;
   final TopSeller? topSeller;
-  final List<TopProduct> topProducts;
-  final List<CatalogItem> catalogItems;
-  final List<LiveOrderItem> liveOrders;
-  final List<LiveOrderItem> closedOrders;
   final SalesDateFilter filter;
+  final DateTimeRange? customRange;
   final List<TicketItem> tickets;
   final List<PendingTable> pendingTables;
 
@@ -195,6 +207,10 @@ class LiveOrderItem {
     required this.total,
     required this.status,
     this.items = const [],
+    this.zone,
+    this.tableId,
+    this.openedAt,
+    this.peopleCount,
   });
 
   final String id;
@@ -203,6 +219,46 @@ class LiveOrderItem {
   final double total;
   final String status;
   final List<LiveChildItem> items;
+  final String? zone;
+  final String? tableId;
+  final DateTime? openedAt;
+  final int? peopleCount;
+}
+
+@immutable
+class TableLayoutItem {
+  const TableLayoutItem({
+    required this.id,
+    required this.label,
+    required this.zoneId,
+    required this.zoneName,
+    this.capacity,
+    this.shape,
+    this.isActive = true,
+  });
+
+  final String id;
+  final String label;
+  final String zoneId;
+  final String zoneName;
+  final int? capacity;
+  final String? shape;
+  final bool isActive;
+}
+
+@immutable
+class ZoneLayout {
+  const ZoneLayout({
+    required this.id,
+    required this.name,
+    required this.tables,
+    this.sortIndex = 0,
+  });
+
+  final String id;
+  final String name;
+  final int sortIndex;
+  final List<TableLayoutItem> tables;
 }
 
 @immutable
@@ -284,6 +340,7 @@ class RegisterClosing {
     required this.registerName,
     required this.closedAt,
     required this.closedByName,
+    this.openedAt,
     this.deviceName,
     this.openingAmount = 0,
     this.closingAmount = 0,
@@ -302,6 +359,7 @@ class RegisterClosing {
   final String registerName;
   final DateTime closedAt;
   final String closedByName;
+  final DateTime? openedAt;
   final String? deviceName;
   final double openingAmount;
   final double closingAmount;
@@ -316,4 +374,21 @@ class RegisterClosing {
   final double totalExpenses;
 
   double get difference => closingAmount - expectedAmount;
+}
+
+@immutable
+class NcfTypeSummary {
+  const NcfTypeSummary({
+    required this.type,
+    required this.count,
+    required this.total,
+    this.firstNumber,
+    this.lastNumber,
+  });
+
+  final String type;
+  final int count;
+  final double total;
+  final String? firstNumber;
+  final String? lastNumber;
 }

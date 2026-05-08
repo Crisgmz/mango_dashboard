@@ -30,6 +30,15 @@ class SavedAccountsService {
     await _persist(accounts);
   }
 
+  /// Updates an existing account in-place (preserves order). No-op if not found.
+  Future<void> updateAccount(SavedAccount account) async {
+    final accounts = await loadAccounts();
+    final idx = accounts.indexWhere((a) => a.email == account.email);
+    if (idx < 0) return;
+    accounts[idx] = account;
+    await _persist(accounts);
+  }
+
   Future<void> _persist(List<SavedAccount> accounts) async {
     final prefs = await SharedPreferences.getInstance();
     final encoded = jsonEncode(accounts.map((a) => a.toJson()).toList());

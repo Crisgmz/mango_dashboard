@@ -11,7 +11,11 @@ Future<void> main() async {
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
 
   await SupabaseBootstrap.initialize();
-  await LocalNotificationHelper.initialize();
+  try {
+    await LocalNotificationHelper.initialize();
+  } catch (_) {
+    // Notifications not available on this platform — continue without them.
+  }
   
   runApp(const ProviderScope(child: MangoDashboardApp()));
 

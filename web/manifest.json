@@ -1,11 +1,11 @@
 {
-    "name": "mango_dashboard",
-    "short_name": "mango_dashboard",
+    "name": "Mango Dashboard",
+    "short_name": "Mango Dashboard",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#FF9800",
+    "theme_color": "#FF9800",
+    "description": "Panel administrativo de MangoPOS — ventas, órdenes, caja y reportes en tiempo real.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

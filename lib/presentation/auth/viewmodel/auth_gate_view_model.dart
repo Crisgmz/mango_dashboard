@@ -55,6 +55,13 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
   bool _bootstrapping = false;
   static const _maxRetries = 3;
 
+  /// Set transiently by [signIn] so the bootstrap that follows (whether
+  /// triggered by us or by the Supabase auth subscription) persists the
+  /// password alongside the refresh token. Without this the password is
+  /// never saved on first login, breaking the biometric/auto-switch
+  /// fallback chain when the refresh token eventually rotates out.
+  String? _pendingPasswordForSave;
+
   Future<void> bootstrap() async {
     // Skip concurrent bootstraps. Supabase's auth subscription fires
     // bootstrap whenever the session changes (signIn / tokenRefreshed /
@@ -78,7 +85,7 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
         // Guardar cuenta automáticamente al resolver acceso. Falla aquí
         // (ej. SharedPreferences corrupto) NO debe romper el login.
         try {
-          await _saveCurrentAccount(profile);
+          await _saveCurrentAccount(profile, password: _pendingPasswordForSave);
         } catch (_) {
           // Persisting saved-account metadata is best-effort.
         }
@@ -176,6 +183,10 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
 
   Future<void> signIn({required String email, required String password}) async {
     state = state.copyWith(isLoading: true, clearError: true);
+    // Set before service.signIn so the auth-state subscription's bootstrap
+    // (which may race with our explicit one below) also sees the password
+    // and persists it on the saved account.
+    _pendingPasswordForSave = password;
     try {
       await _ref.read(adminAccessServiceProvider).signIn(email: email, password: password);
       await bootstrap();
@@ -183,6 +194,8 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
       state = state.copyWith(isLoading: false, error: _friendlyAuthError(e));
     } catch (e) {
       state = state.copyWith(isLoading: false, error: _friendlyNetworkError(e));
+    } finally {
+      _pendingPasswordForSave = null;
     }
   }
 

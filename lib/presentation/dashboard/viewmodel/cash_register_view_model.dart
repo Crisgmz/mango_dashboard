@@ -45,12 +45,23 @@ class CashRegisterViewModel extends StateNotifier<CashRegisterState> {
           .loadSummary(businessId);
       state = CashRegisterState(summary: summary);
     } catch (e) {
-      final msg = e.toString();
-      if (msg.contains('SocketException') || msg.contains('Failed host lookup') || msg.contains('Network is unreachable')) {
-        state = const CashRegisterState(error: 'Sin conexión a internet.');
-      } else {
-        state = const CashRegisterState(error: 'No se pudo cargar las cajas. Intenta de nuevo.');
+      // If we already have a cached summary, fail silently — show stale data
+      // instead of blanking the page with a "sin conexión" error on every blip.
+      if (state.summary != null) {
+        state = state.copyWith(isLoading: false);
+        return;
       }
+      final msg = e.toString().toLowerCase();
+      final isNetwork = msg.contains('socketexception') ||
+          msg.contains('failed host lookup') ||
+          msg.contains('network is unreachable') ||
+          msg.contains('connection refused') ||
+          msg.contains('connection closed');
+      state = CashRegisterState(
+        error: isNetwork
+            ? 'Sin conexión a internet.'
+            : 'No se pudo cargar las cajas. Intenta de nuevo.',
+      );
     }
   }
 }

@@ -31,8 +31,15 @@ import '../widgets/month_projection_card.dart';
 import '../widgets/product_projection_card.dart';
 import '../widgets/audit_card.dart';
 import '../widgets/cashier_performance_card.dart';
+import '../widgets/commands_card.dart';
+import '../widgets/customers_card.dart';
+import '../widgets/modifiers_card.dart';
 import '../widgets/waiter_performance_card.dart';
+import '../../inventory/view/inventory_view.dart';
 import 'audit_detail_view.dart';
+import 'commands_timeline_view.dart';
+import 'customer_analytics_view.dart';
+import 'modifiers_breakdown_view.dart';
 import 'person_sales_detail_view.dart';
 import 'kpi_detail_views.dart';
 
@@ -348,7 +355,10 @@ class HomeView extends StatelessWidget {
       return const DashboardSkeleton(key: ValueKey('skeleton_home'));
     }
 
-    if (dataState.error != null) {
+    // Show the full error screen only when we have absolutely no data to show.
+    // If there's a cached summary we render it normally — the refresh failure
+    // is hidden so a transient blip doesn't blank the dashboard.
+    if (dataState.error != null && dataState.summary == null) {
       return RefreshIndicator(
         key: const ValueKey('error_home'),
         onRefresh: onRefresh,
@@ -1466,6 +1476,59 @@ class SalesView extends ConsumerWidget {
         );
         break;
 
+      case SalesCard.commands:
+        body = CommandsCard(
+          ticketCount: summary.tickets.length,
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => CommandsTimelineView(
+                tickets: summary.tickets,
+                totalSales: summary.totalSales,
+                periodLabel: periodLabelFor(summary.filter),
+              ),
+            ),
+          ),
+        );
+        break;
+
+      case SalesCard.modifiers:
+        body = ModifiersCard(
+          onTap: () {
+            final start = summary.periodStart ??
+                DateTime.now().subtract(const Duration(hours: 24));
+            final end = summary.periodEnd ?? DateTime.now();
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ModifiersBreakdownView(
+                  start: start,
+                  end: end,
+                  periodLabel: periodLabelFor(summary.filter),
+                ),
+              ),
+            );
+          },
+        );
+        break;
+
+      case SalesCard.customers:
+        body = CustomersCard(
+          onTap: () {
+            final start = summary.periodStart ??
+                DateTime.now().subtract(const Duration(hours: 24));
+            final end = summary.periodEnd ?? DateTime.now();
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => CustomerAnalyticsView(
+                  start: start,
+                  end: end,
+                  periodLabel: periodLabelFor(summary.filter),
+                ),
+              ),
+            );
+          },
+        );
+        break;
+
       case SalesCard.topProducts:
         body = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2407,114 +2470,374 @@ class _OrdersViewState extends State<OrdersView> {
   }
 }
 
-class _OrderCard extends StatelessWidget {
+class _OrderCard extends StatefulWidget {
   const _OrderCard({required this.order});
   final LiveOrderItem order;
 
   @override
+  State<_OrderCard> createState() => _OrderCardState();
+}
+
+class _OrderCardState extends State<_OrderCard> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
+    final order = widget.order;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hasItems = order.items.isNotEmpty;
+    final hasExtras = order.items.any((i) => i.extras.isNotEmpty);
+    // Show metadata block only when there's something extra to surface beyond
+    // what the always-visible header already shows.
+    final showMetadata = order.openedAt != null ||
+        (order.peopleCount != null && order.peopleCount! > 0) ||
+        order.id.isNotEmpty;
+
     return Padding(
       padding: EdgeInsets.only(bottom: dpi.space(12)),
-      child: InkWell(
-        onTap: () => _showOrderDetails(context, order),
-        borderRadius: BorderRadius.circular(dpi.radius(20)),
-        child: Container(
-          padding: EdgeInsets.all(dpi.space(16)),
-          decoration: BoxDecoration(
-            color: MangoThemeFactory.cardColor(context),
-            borderRadius: BorderRadius.circular(dpi.radius(20)),
-            border: Border.all(color: MangoThemeFactory.borderColor(context)),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: dpi.scale(42),
-                height: dpi.scale(42),
-                decoration: BoxDecoration(
-                  color: MangoThemeFactory.mango.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(dpi.radius(12)),
-                ),
-                child: Icon(Icons.restaurant_rounded, color: MangoThemeFactory.mango, size: dpi.icon(22)),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          borderRadius: BorderRadius.circular(dpi.radius(20)),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: EdgeInsets.all(dpi.space(16)),
+            decoration: BoxDecoration(
+              color: MangoThemeFactory.cardColor(context),
+              borderRadius: BorderRadius.circular(dpi.radius(20)),
+              border: Border.all(
+                color: _expanded
+                    ? MangoThemeFactory.mango.withValues(alpha: 0.45)
+                    : MangoThemeFactory.borderColor(context),
               ),
-              SizedBox(width: dpi.space(14)),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(order.title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                        if (order.zone != null) ...[
-                          SizedBox(width: dpi.space(8)),
-                          Container(
-                            padding: EdgeInsets.symmetric(horizontal: dpi.space(6), vertical: dpi.space(2)),
-                            decoration: BoxDecoration(
-                              color: MangoThemeFactory.mango.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(dpi.radius(4)),
-                            ),
-                            child: Text(
-                              order.zone!,
-                              style: TextStyle(
-                                fontSize: dpi.font(9),
-                                fontWeight: FontWeight.w800,
-                                color: MangoThemeFactory.mango,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    if (order.subtitle.toLowerCase() != 'sent_to_kitchen') ...[
-                      SizedBox(height: dpi.space(2)),
-                      Text(order.subtitle, style: Theme.of(context).textTheme.bodySmall),
-                    ],
-                  ],
-                ),
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    MangoFormatters.currency(order.total),
-                    style: TextStyle(
-                      fontSize: dpi.font(16),
-                      fontWeight: FontWeight.w800,
-                      color: MangoThemeFactory.textColor(context),
-                    ),
-                  ),
-                  SizedBox(height: dpi.space(4)),
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: dpi.space(8), vertical: dpi.space(3)),
-                    decoration: BoxDecoration(
-                      color: MangoThemeFactory.success.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(dpi.radius(6)),
-                    ),
-                    child: Text(
-                      'ACTIVA',
+              boxShadow: _expanded
+                  ? [
+                      BoxShadow(
+                        color: MangoThemeFactory.mango.withValues(alpha: isDark ? 0.18 : 0.08),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _OrderHeader(order: order, expanded: _expanded),
+                if (hasItems) ...[
+                  SizedBox(height: dpi.space(12)),
+                  Divider(height: 1, color: MangoThemeFactory.borderColor(context)),
+                  SizedBox(height: dpi.space(10)),
+                  ...List.generate(order.items.length, (index) {
+                    final it = order.items[index];
+                    return Padding(
+                      padding: EdgeInsets.only(
+                        bottom: index == order.items.length - 1 ? 0 : dpi.space(8),
+                      ),
+                      child: _OrderItemRow(item: it, showExtras: _expanded),
+                    );
+                  }),
+                  if (!_expanded && hasExtras) ...[
+                    SizedBox(height: dpi.space(6)),
+                    Text(
+                      'Toca para ver modificadores',
                       style: TextStyle(
                         fontSize: dpi.font(10),
-                        fontWeight: FontWeight.w800,
-                        color: MangoThemeFactory.success,
+                        color: MangoThemeFactory.mutedText(context),
+                        fontStyle: FontStyle.italic,
                       ),
                     ),
-                  ),
+                  ],
                 ],
-              ),
-            ],
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 180),
+                  alignment: Alignment.topLeft,
+                  child: !_expanded || !showMetadata
+                      ? const SizedBox.shrink()
+                      : Padding(
+                          padding: EdgeInsets.only(top: dpi.space(12)),
+                          child: _OrderMetadata(order: order),
+                        ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
+}
 
-  void _showOrderDetails(BuildContext context, LiveOrderItem order) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) => _OrderDetailsSheet(order: order),
+class _OrderHeader extends StatelessWidget {
+  const _OrderHeader({required this.order, required this.expanded});
+  final LiveOrderItem order;
+  final bool expanded;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Row(
+      children: [
+        Container(
+          width: dpi.scale(42),
+          height: dpi.scale(42),
+          decoration: BoxDecoration(
+            color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(dpi.radius(12)),
+          ),
+          child: Icon(Icons.restaurant_rounded, color: MangoThemeFactory.mango, size: dpi.icon(22)),
+        ),
+        SizedBox(width: dpi.space(14)),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      order.title,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (order.zone != null) ...[
+                    SizedBox(width: dpi.space(8)),
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: dpi.space(6), vertical: dpi.space(2)),
+                      decoration: BoxDecoration(
+                        color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(dpi.radius(4)),
+                      ),
+                      child: Text(
+                        order.zone!,
+                        style: TextStyle(
+                          fontSize: dpi.font(9),
+                          fontWeight: FontWeight.w800,
+                          color: MangoThemeFactory.mango,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              if (order.subtitle.toLowerCase() != 'sent_to_kitchen') ...[
+                SizedBox(height: dpi.space(2)),
+                Text(
+                  order.subtitle,
+                  style: Theme.of(context).textTheme.bodySmall,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ],
+          ),
+        ),
+        SizedBox(width: dpi.space(8)),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              MangoFormatters.currency(order.total),
+              style: TextStyle(
+                fontSize: dpi.font(16),
+                fontWeight: FontWeight.w800,
+                color: MangoThemeFactory.textColor(context),
+              ),
+            ),
+            SizedBox(height: dpi.space(4)),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: dpi.space(8), vertical: dpi.space(3)),
+                  decoration: BoxDecoration(
+                    color: MangoThemeFactory.success.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(dpi.radius(6)),
+                  ),
+                  child: Text(
+                    'ACTIVA',
+                    style: TextStyle(
+                      fontSize: dpi.font(10),
+                      fontWeight: FontWeight.w800,
+                      color: MangoThemeFactory.success,
+                    ),
+                  ),
+                ),
+                SizedBox(width: dpi.space(4)),
+                AnimatedRotation(
+                  turns: expanded ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 180),
+                  child: Icon(
+                    Icons.expand_more_rounded,
+                    size: dpi.icon(18),
+                    color: MangoThemeFactory.mutedText(context),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ],
     );
+  }
+}
+
+class _OrderItemRow extends StatelessWidget {
+  const _OrderItemRow({required this.item, required this.showExtras});
+  final LiveChildItem item;
+  final bool showExtras;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: dpi.scale(28),
+          height: dpi.scale(28),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            item.quantity.toStringAsFixed(0),
+            style: TextStyle(
+              fontSize: dpi.font(12),
+              fontWeight: FontWeight.bold,
+              color: MangoThemeFactory.mango,
+            ),
+          ),
+        ),
+        SizedBox(width: dpi.space(12)),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                item.name,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (showExtras && item.extras.isNotEmpty) ...[
+                SizedBox(height: dpi.space(2)),
+                Text(
+                  item.extras.join(' · '),
+                  style: TextStyle(
+                    fontSize: dpi.font(10),
+                    color: MangoThemeFactory.mutedText(context),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        SizedBox(width: dpi.space(8)),
+        Text(
+          MangoFormatters.currency(item.total),
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: dpi.font(13)),
+        ),
+      ],
+    );
+  }
+}
+
+class _OrderMetadata extends StatelessWidget {
+  const _OrderMetadata({required this.order});
+  final LiveOrderItem order;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final pieces = <Widget>[];
+
+    if (order.openedAt != null) {
+      pieces.add(_metaRow(
+        context,
+        Icons.schedule_rounded,
+        'Abierta',
+        '${MangoFormatters.dateTime(order.openedAt!)} · hace ${_elapsed(order.openedAt!)}',
+      ));
+    }
+    if (order.peopleCount != null && order.peopleCount! > 0) {
+      pieces.add(_metaRow(
+        context,
+        Icons.groups_rounded,
+        'Comensales',
+        '${order.peopleCount}',
+      ));
+    }
+    if (order.id.isNotEmpty) {
+      pieces.add(_metaRow(
+        context,
+        Icons.tag_rounded,
+        'ID',
+        order.id,
+        monospace: true,
+      ));
+    }
+
+    return Container(
+      padding: EdgeInsets.all(dpi.space(12)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.altSurface(context),
+        borderRadius: BorderRadius.circular(dpi.radius(12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < pieces.length; i++) ...[
+            pieces[i],
+            if (i < pieces.length - 1) SizedBox(height: dpi.space(6)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _metaRow(BuildContext context, IconData icon, String label, String value,
+      {bool monospace = false}) {
+    final dpi = DpiScale.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: dpi.icon(14), color: MangoThemeFactory.mutedText(context)),
+        SizedBox(width: dpi.space(8)),
+        SizedBox(
+          width: dpi.scale(78),
+          child: Text(
+            label,
+            style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+              fontSize: dpi.font(11),
+              fontWeight: FontWeight.w600,
+              fontFamily: monospace ? 'monospace' : null,
+              color: MangoThemeFactory.textColor(context),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  static String _elapsed(DateTime opened) {
+    final diff = DateTime.now().difference(opened);
+    if (diff.inMinutes < 1) return 'recién';
+    if (diff.inHours < 1) return '${diff.inMinutes}m';
+    final h = diff.inHours;
+    final m = diff.inMinutes.remainder(60);
+    return '${h}h ${m}m';
   }
 }
 
@@ -3310,6 +3633,12 @@ class SettingsView extends ConsumerWidget {
             ),
           ),
         ),
+
+        SizedBox(height: dpi.space(32)),
+        _SettingsHeader(title: 'Inventario'),
+        SizedBox(height: dpi.space(12)),
+
+        _InventoryShortcut(),
 
         SizedBox(height: dpi.space(32)),
         _SettingsHeader(title: 'Seguridad'),
@@ -4153,6 +4482,69 @@ class _SalesLayoutTile extends StatelessWidget {
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Entry to the inventory module from Ajustes. Pure navigation — no data
+/// load here; the inventory view fetches lazily on open.
+class _InventoryShortcut extends StatelessWidget {
+  const _InventoryShortcut();
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return InkWell(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const InventoryView()),
+      ),
+      borderRadius: BorderRadius.circular(dpi.radius(16)),
+      child: Container(
+        padding: EdgeInsets.all(dpi.space(16)),
+        decoration: BoxDecoration(
+          color: MangoThemeFactory.cardColor(context),
+          borderRadius: BorderRadius.circular(dpi.radius(16)),
+          border: Border.all(color: MangoThemeFactory.borderColor(context)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: dpi.scale(40),
+              height: dpi.scale(40),
+              decoration: BoxDecoration(
+                color: MangoThemeFactory.mango.withValues(alpha: isDark ? 0.2 : 0.12),
+                borderRadius: BorderRadius.circular(dpi.radius(10)),
+              ),
+              child: Icon(Icons.inventory_2_rounded,
+                  color: MangoThemeFactory.mango, size: dpi.icon(22)),
+            ),
+            SizedBox(width: dpi.space(12)),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Ver inventario',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                  SizedBox(height: dpi.space(2)),
+                  Text(
+                    'Stock por insumo en tiempo real · lista de compras para stock bajo',
+                    style: TextStyle(
+                        fontSize: dpi.font(11),
+                        color: MangoThemeFactory.mutedText(context)),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right_rounded, color: MangoThemeFactory.mutedText(context)),
           ],
         ),
       ),

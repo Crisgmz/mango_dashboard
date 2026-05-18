@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 
 import 'admin_business_membership.dart';
 
+const Object _unset = Object();
+
 @immutable
 class AdminAccessProfile {
   const AdminAccessProfile({
@@ -28,10 +30,15 @@ class AdminAccessProfile {
   final bool allowed;
   final List<AdminBusinessMembership> memberships;
 
+  /// Returns a copy with overridden fields.
+  /// Nullable fields use a sentinel so callers can explicitly clear them
+  /// (passing `null`) — without it, `??` would mask the new null and keep
+  /// the stale value, which caused the header to show the previous
+  /// sucursal name after a branch switch.
   AdminAccessProfile copyWith({
     String? businessId,
-    String? businessName,
-    String? branchName,
+    Object? businessName = _unset,
+    Object? branchName = _unset,
     String? rawRole,
     String? normalizedRole,
     bool? allowed,
@@ -42,8 +49,8 @@ class AdminAccessProfile {
       userName: userName,
       email: email,
       businessId: businessId ?? this.businessId,
-      businessName: businessName ?? this.businessName,
-      branchName: branchName ?? this.branchName,
+      businessName: identical(businessName, _unset) ? this.businessName : businessName as String?,
+      branchName: identical(branchName, _unset) ? this.branchName : branchName as String?,
       rawRole: rawRole ?? this.rawRole,
       normalizedRole: normalizedRole ?? this.normalizedRole,
       allowed: allowed ?? this.allowed,

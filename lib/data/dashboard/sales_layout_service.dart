@@ -12,6 +12,9 @@ enum SalesCard {
   waiterPerformance,
   cashierPerformance,
   audit,
+  commands,
+  modifiers,
+  customers,
 }
 
 extension SalesCardLabel on SalesCard {
@@ -38,6 +41,12 @@ extension SalesCardLabel on SalesCard {
         return 'Rendimiento por cajero';
       case SalesCard.audit:
         return 'Auditoría de pérdidas';
+      case SalesCard.commands:
+        return 'Comandas del periodo';
+      case SalesCard.modifiers:
+        return 'Ventas por modificador';
+      case SalesCard.customers:
+        return 'Clientes';
     }
   }
 }
@@ -52,6 +61,9 @@ const List<SalesCard> kDefaultSalesLayout = [
   SalesCard.salesByCategory,
   SalesCard.waiterPerformance,
   SalesCard.cashierPerformance,
+  SalesCard.customers,
+  SalesCard.commands,
+  SalesCard.modifiers,
   SalesCard.topProducts,
   SalesCard.audit,
 ];

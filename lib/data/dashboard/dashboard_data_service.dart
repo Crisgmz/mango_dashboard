@@ -553,6 +553,192 @@ class DashboardDataService {
     );
   }
 
+  /// Loads customer analytics for the period — aggregates payments by RNC
+  /// (preferred) or normalized customer name. Customers without RNC AND
+  /// without name are excluded (treated as anonymous walk-ins).
+  Future<List<CustomerSummary>> loadCustomerAnalytics({
+    required String businessId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final rows = await _client
+        .from('payments')
+        .select('order_id, amount, change_amount, status, created_at, customer_rnc, customer_name')
+        .eq('business_id', businessId)
+        .gte('created_at', start.toUtc().toIso8601String())
+        .lt('created_at', end.toUtc().toIso8601String())
+        .not('status', 'in', '(void,cancelled)');
+
+    final agg = <String, _CustomerAgg>{};
+    for (final row in List<Map<String, dynamic>>.from(rows)) {
+      final rnc = row['customer_rnc']?.toString().trim();
+      final name = row['customer_name']?.toString().trim();
+      final hasRnc = rnc != null && rnc.isNotEmpty;
+      final hasName = name != null && name.isNotEmpty;
+      if (!hasRnc && !hasName) continue; // anonymous — skip
+
+      final key = hasRnc ? 'rnc:$rnc' : 'name:${name!.toLowerCase()}';
+      final entry = agg.putIfAbsent(key, _CustomerAgg.new);
+      final net = _netAmount(row['amount'], row['change_amount']);
+      final createdAt =
+          DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now();
+      final orderId = row['order_id']?.toString();
+
+      entry.totalSpent += net;
+      if (orderId != null && orderId.isNotEmpty) {
+        entry.orderIds.add(orderId);
+      } else {
+        // No order_id (rare) — still count as a visit.
+        entry.bareVisits += 1;
+      }
+      entry.firstVisit = entry.firstVisit == null || createdAt.isBefore(entry.firstVisit!)
+          ? createdAt
+          : entry.firstVisit;
+      entry.lastVisit = entry.lastVisit == null || createdAt.isAfter(entry.lastVisit!)
+          ? createdAt
+          : entry.lastVisit;
+      // Keep the prettiest name we've seen (longest non-empty).
+      if (hasName && (entry.displayName == null || name.length > entry.displayName!.length)) {
+        entry.displayName = name;
+      }
+      if (hasRnc) entry.rnc = rnc;
+    }
+
+    return agg.entries
+        .map((e) {
+          final visits = e.value.orderIds.length + e.value.bareVisits;
+          return CustomerSummary(
+            customerKey: e.key,
+            displayName: e.value.displayName ?? e.value.rnc ?? 'Cliente',
+            rnc: e.value.rnc,
+            totalSpent: e.value.totalSpent,
+            visitCount: visits,
+            firstVisit: e.value.firstVisit ?? DateTime.now(),
+            lastVisit: e.value.lastVisit ?? DateTime.now(),
+          );
+        })
+        .toList()
+      ..sort((a, b) => b.totalSpent.compareTo(a.totalSpent));
+  }
+
+  /// Loads all visits (payments) made by a single customer in the period.
+  /// Used by the customer drill-down view. Caller passes the same key/rnc
+  /// returned by [loadCustomerAnalytics].
+  Future<List<CustomerVisit>> loadCustomerVisits({
+    required String businessId,
+    required String customerKey,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final isRnc = customerKey.startsWith('rnc:');
+    final value = customerKey.substring(customerKey.indexOf(':') + 1);
+
+    var query = _client
+        .from('payments')
+        .select(
+            'id, order_id, amount, change_amount, status, created_at, customer_rnc, customer_name, payment_methods(code), orders(table_sessions(dining_tables(label, code)))')
+        .eq('business_id', businessId)
+        .gte('created_at', start.toUtc().toIso8601String())
+        .lt('created_at', end.toUtc().toIso8601String())
+        .not('status', 'in', '(void,cancelled)');
+
+    if (isRnc) {
+      query = query.eq('customer_rnc', value);
+    } else {
+      query = query.ilike('customer_name', value);
+    }
+
+    final rows = await query.order('created_at', ascending: false);
+
+    return List<Map<String, dynamic>>.from(rows).map((row) {
+      final pm = row['payment_methods'];
+      final order = row['orders'];
+      final session = order is Map<String, dynamic> ? order['table_sessions'] : null;
+      final table = session is Map<String, dynamic> ? session['dining_tables'] : null;
+      return CustomerVisit(
+        orderId: row['order_id']?.toString() ?? '',
+        amount: _netAmount(row['amount'], row['change_amount']),
+        createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+        tableLabel: table is Map<String, dynamic>
+            ? (table['label']?.toString() ?? table['code']?.toString())
+            : null,
+        paymentMethodCode: pm is Map<String, dynamic> ? pm['code']?.toString() : null,
+      );
+    }).toList(growable: false);
+  }
+
+  /// Loads modifiers (extras / options like "Extra queso") aggregated for the
+  /// period. Sourced from `order_item_modifiers` joined via order_items →
+  /// orders → table_sessions for the business + period filter.
+  Future<List<ModifierSummary>> loadModifiersBreakdown({
+    required String businessId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final rows = await _client
+        .from('order_item_modifiers')
+        .select(
+            'name, qty, price_delta, order_items!inner(status, orders!inner(created_at, table_sessions!inner(business_id)))')
+        .eq('order_items.orders.table_sessions.business_id', businessId)
+        .gte('order_items.orders.created_at', start.toUtc().toIso8601String())
+        .lt('order_items.orders.created_at', end.toUtc().toIso8601String())
+        .neq('order_items.status', 'void');
+
+    final agg = <String, _ModifierAgg>{};
+    for (final row in List<Map<String, dynamic>>.from(rows)) {
+      final name = row['name']?.toString().trim();
+      if (name == null || name.isEmpty) continue;
+      final qty = _toDouble(row['qty']);
+      final unitQty = qty == 0 ? 1.0 : qty;
+      final delta = _toDouble(row['price_delta']);
+      final entry = agg.putIfAbsent(name, _ModifierAgg.new);
+      entry.count += unitQty;
+      entry.revenue += delta * unitQty;
+    }
+
+    final result = agg.entries
+        .map((e) => ModifierSummary(
+              name: e.key,
+              count: e.value.count,
+              revenue: e.value.revenue,
+            ))
+        .toList()
+      ..sort((a, b) {
+        // Sort by revenue desc; if both are zero, fall back to count desc.
+        final byRev = b.revenue.compareTo(a.revenue);
+        if (byRev != 0) return byRev;
+        return b.count.compareTo(a.count);
+      });
+    return result;
+  }
+
+  /// Loads the items (productos) of a single order. Used by the comandas
+  /// timeline view to lazy-expand each ticket without bloating the period
+  /// query.
+  Future<List<LiveChildItem>> loadItemsForOrder(String orderId) async {
+    if (orderId.isEmpty) return const [];
+    final rows = await _client
+        .from('order_items')
+        .select('product_name, qty, quantity, total, status, order_item_modifiers(name, qty)')
+        .eq('order_id', orderId);
+    return List<Map<String, dynamic>>.from(rows)
+        .where((row) => row['status']?.toString() != 'void')
+        .map((row) {
+          final modifiers = row['order_item_modifiers'] as List? ?? [];
+          final extras = modifiers
+              .map((m) => m is Map<String, dynamic> ? m['name']?.toString() : null)
+              .whereType<String>()
+              .toList();
+          return LiveChildItem(
+            name: row['product_name']?.toString() ?? 'Producto',
+            quantity: _toDouble(row['qty'] ?? row['quantity']),
+            total: _toDouble(row['total']),
+            extras: extras,
+          );
+        })
+        .toList(growable: false);
+  }
+
   /// Loads the audit breakdown for a period: voided items, cancelled
   /// payments, and discounted orders. Used by the lazy `AuditDetailView`.
   /// Resolves waiter/cashier names via a single batched profiles query.
@@ -924,4 +1110,19 @@ class _CashierAgg {
   double total = 0;
   int ticketCount = 0;
   final Set<String> orderIds = <String>{};
+}
+
+class _ModifierAgg {
+  double count = 0;
+  double revenue = 0;
+}
+
+class _CustomerAgg {
+  double totalSpent = 0;
+  final Set<String> orderIds = <String>{};
+  int bareVisits = 0;
+  DateTime? firstVisit;
+  DateTime? lastVisit;
+  String? displayName;
+  String? rnc;
 }

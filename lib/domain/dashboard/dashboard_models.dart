@@ -212,6 +212,90 @@ class PendingTable {
   final int itemCount;
 }
 
+/// Customer aggregated across all payments in the period — grouped by
+/// RNC when available, falling back to a normalized name when not. Used by
+/// the customer analytics screen to surface recurring vs new customers.
+@immutable
+class CustomerSummary {
+  const CustomerSummary({
+    required this.customerKey,
+    required this.displayName,
+    required this.totalSpent,
+    required this.visitCount,
+    required this.firstVisit,
+    required this.lastVisit,
+    this.rnc,
+  });
+
+  /// Stable identifier within the period — either the RNC (preferred) or
+  /// the normalized lower-case name when no RNC is captured.
+  final String customerKey;
+
+  /// Prettiest name available for display.
+  final String displayName;
+
+  /// Nullable: anonymous-but-named customers won't have one.
+  final String? rnc;
+
+  final double totalSpent;
+  final int visitCount;
+  final DateTime firstVisit;
+  final DateTime lastVisit;
+
+  double get averageTicket => visitCount == 0 ? 0 : totalSpent / visitCount;
+
+  /// True when first and only visit fell inside the period — proxy for
+  /// "new customer" (we don't have full history here).
+  bool get isFirstTime => visitCount == 1 && firstVisit == lastVisit;
+
+  /// True when there's more than one visit in the period.
+  bool get isRecurring => visitCount > 1;
+
+  int daysSinceLastVisit(DateTime now) {
+    return now.difference(lastVisit).inDays;
+  }
+}
+
+/// One visit (= one payment row) used in the customer drill-down.
+@immutable
+class CustomerVisit {
+  const CustomerVisit({
+    required this.orderId,
+    required this.amount,
+    required this.createdAt,
+    this.tableLabel,
+    this.paymentMethodCode,
+  });
+
+  final String orderId;
+  final double amount;
+  final DateTime createdAt;
+  final String? tableLabel;
+  final String? paymentMethodCode;
+}
+
+/// Single modifier (extra/option, e.g. "Extra queso") aggregated across all
+/// orders in the period. Loaded lazily by the modifiers report screen.
+@immutable
+class ModifierSummary {
+  const ModifierSummary({
+    required this.name,
+    required this.count,
+    required this.revenue,
+  });
+
+  /// Verbatim from `order_item_modifiers.name`.
+  final String name;
+
+  /// Total quantity of this modifier across all orders in the period (sum
+  /// of `qty`, defaulting to 1 per row when null).
+  final double count;
+
+  /// Sum of `(price_delta or 0) * qty` for every occurrence — i.e. the
+  /// money this modifier added to the period's revenue.
+  final double revenue;
+}
+
 /// Aggregated sales attributed to a single waiter for the current period.
 /// Sourced from `payments` joined with `orders → table_sessions.waiter_user_id`.
 @immutable

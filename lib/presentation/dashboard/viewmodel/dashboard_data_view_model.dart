@@ -141,6 +141,17 @@ class DashboardDataViewModel extends StateNotifier<DashboardDataState> {
         return;
       }
       _retryCount = 0;
+      // If we already have data (hydrated from cache or from a prior load),
+      // fail silently. The user keeps seeing the snapshot while the next
+      // refresh tries again — much better UX than blanking the screen with
+      // "Sin conexión" every time the network blips.
+      if (state.summary != null) {
+        state = state.copyWith(
+          isLoading: false,
+          isRefreshing: false,
+        );
+        return;
+      }
       state = state.copyWith(
         isLoading: false,
         isRefreshing: false,

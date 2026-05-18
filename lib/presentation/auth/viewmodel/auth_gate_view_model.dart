@@ -99,6 +99,22 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
       );
     } catch (e) {
       final errorStr = e.toString();
+      final errorLower = errorStr.toLowerCase();
+      final isNetworkError = errorLower.contains('socketexception') ||
+          errorLower.contains('failed host lookup') ||
+          errorLower.contains('network is unreachable') ||
+          errorLower.contains('connection refused') ||
+          errorLower.contains('connection closed') ||
+          errorLower.contains('timeoutexception') ||
+          errorLower.contains('timed out');
+
+      // If we were already authenticated and the failure is a network blip,
+      // keep the session as-is. Kicking the user back to the login screen
+      // every time wifi hiccups is terrible UX — they can re-pull to refresh.
+      if (isNetworkError && state.isAuthenticated && state.profile != null) {
+        state = state.copyWith(isLoading: false, clearError: true);
+        return;
+      }
 
       // Para errores transitorios (500, token HMAC), reintentar una vez antes de cerrar sesión
       if (errorStr.contains('500') || errorStr.contains('refresh_token_hmac_key')) {

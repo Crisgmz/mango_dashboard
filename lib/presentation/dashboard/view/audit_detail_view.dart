@@ -4,9 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../widgets/period_filter_bar.dart';
 
 /// Loss-prevention view: lists voided items, cancelled payments, and
 /// discounted orders for a period in three tabs.
@@ -28,10 +30,20 @@ class AuditDetailView extends ConsumerStatefulWidget {
 
 class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
   late Future<({AuditSummary summary, AuditDetail detail})> _future;
+  late DateTime _start;
+  late DateTime _end;
+  late String _periodLabel;
+  DetailPeriod _period = DetailPeriod.initial;
+  DateTimeRange? _customRange;
+  String _query = '';
+  AuditDetail _loaded = const AuditDetail();
 
   @override
   void initState() {
     super.initState();
+    _start = widget.start;
+    _end = widget.end;
+    _periodLabel = widget.periodLabel ?? 'Periodo';
     _future = _load();
   }
 
@@ -44,11 +56,140 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
         detail: const AuditDetail(),
       );
     }
-    return ref.read(dashboardDataServiceProvider).loadAuditDetail(
+    final result = await ref.read(dashboardDataServiceProvider).loadAuditDetail(
           businessId: businessId,
-          start: widget.start,
-          end: widget.end,
+          start: _start,
+          end: _end,
         );
+    if (mounted) setState(() => _loaded = result.detail);
+    return result;
+  }
+
+  void _applyPeriod(DetailPeriod period) {
+    if (period == DetailPeriod.initial) {
+      setState(() {
+        _period = DetailPeriod.initial;
+        _start = widget.start;
+        _end = widget.end;
+        _periodLabel = widget.periodLabel ?? 'Periodo';
+        _future = _load();
+      });
+      return;
+    }
+    final range = rangeForDetailPeriod(period, DateTime.now());
+    if (range == null) return;
+    setState(() {
+      _period = period;
+      _start = range.start;
+      _end = range.end;
+      _periodLabel = labelForDetailPeriod(period);
+      _future = _load();
+    });
+  }
+
+  Future<void> _pickCustomRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 3),
+      lastDate: now,
+      initialDateRange: _customRange ??
+          DateTimeRange(start: _start, end: _end.subtract(const Duration(days: 1))),
+    );
+    if (picked == null || !mounted) return;
+    final start = DateTime(picked.start.year, picked.start.month, picked.start.day);
+    final end = DateTime(picked.end.year, picked.end.month, picked.end.day)
+        .add(const Duration(days: 1));
+    setState(() {
+      _period = DetailPeriod.custom;
+      _customRange = picked;
+      _start = start;
+      _end = end;
+      _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
+      _future = _load();
+    });
+  }
+
+  bool _matchesQuery(String text) {
+    if (_query.isEmpty) return true;
+    return text.toLowerCase().contains(_query.toLowerCase());
+  }
+
+  List<VoidedItem> get _filteredVoids => _loaded.voidedItems
+      .where((v) => _matchesQuery(
+          '${v.productName} ${v.tableLabel ?? ''} ${v.waiterName ?? ''}'))
+      .toList();
+
+  List<CancelledPayment> get _filteredCancellations => _loaded.cancelledPayments
+      .where((p) => _matchesQuery(
+          '${p.tableLabel ?? ''} ${p.cashierName ?? ''} ${p.methodCode ?? ''}'))
+      .toList();
+
+  List<DiscountedOrder> get _filteredDiscounts => _loaded.discountedOrders
+      .where((d) => _matchesQuery(
+          '${d.tableLabel ?? ''} ${d.customerName ?? ''} ${d.waiterName ?? ''}'))
+      .toList();
+
+  List<List<String>> _rowsForExport() {
+    final rows = <List<String>>[];
+    for (final v in _filteredVoids) {
+      rows.add([
+        'Void',
+        _formatDateTime(v.createdAt),
+        '${v.productName} (${v.quantity.toStringAsFixed(0)})',
+        v.amount.toStringAsFixed(2),
+        [v.tableLabel, if (v.waiterName != null) 'Mesero: ${v.waiterName}']
+            .whereType<String>()
+            .join(' · '),
+      ]);
+    }
+    for (final p in _filteredCancellations) {
+      rows.add([
+        p.status == 'void' ? 'Pago anulado' : 'Cancelación',
+        _formatDateTime(p.createdAt),
+        p.methodCode == null
+            ? 'Pago cancelado'
+            : 'Pago cancelado (${_methodLabel(p.methodCode!)})',
+        p.amount.toStringAsFixed(2),
+        [p.tableLabel, if (p.cashierName != null) 'Cajero: ${p.cashierName}']
+            .whereType<String>()
+            .join(' · '),
+      ]);
+    }
+    for (final d in _filteredDiscounts) {
+      rows.add([
+        'Descuento',
+        _formatDateTime(d.createdAt),
+        '${d.tableLabel ?? 'Orden'} (${(d.percent * 100).toStringAsFixed(1)}%)',
+        d.discount.toStringAsFixed(2),
+        [
+          'Total ${MangoFormatters.currency(d.total)}',
+          if (d.customerName != null && d.customerName!.trim().isNotEmpty)
+            d.customerName!,
+          if (d.waiterName != null) 'Mesero: ${d.waiterName}',
+        ].join(' · '),
+      ]);
+    }
+    return rows;
+  }
+
+  Future<void> _exportCsv() async {
+    await ReportExportService.exportCsv(
+      filename: 'auditoria_${_periodLabel.replaceAll(' ', '_')}',
+      headers: const ['Tipo', 'Fecha', 'Detalle', 'Monto', 'Referencias'],
+      rows: _rowsForExport(),
+      subject: 'Reporte de auditoría · $_periodLabel',
+    );
+  }
+
+  Future<void> _exportPdf() async {
+    await ReportExportService.exportPdf(
+      filename: 'auditoria_${_periodLabel.replaceAll(' ', '_')}',
+      title: 'Auditoría',
+      subtitle: 'Periodo: $_periodLabel',
+      headers: const ['Tipo', 'Fecha', 'Detalle', 'Monto', 'Referencias'],
+      rows: _rowsForExport(),
+    );
   }
 
   @override
@@ -60,6 +201,15 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
         appBar: AppBar(
           title: const Text('Auditoría'),
           centerTitle: false,
+          actions: [
+            ExportMenuButton(
+              enabled: _loaded.voidedItems.isNotEmpty ||
+                  _loaded.cancelledPayments.isNotEmpty ||
+                  _loaded.discountedOrders.isNotEmpty,
+              onExportCsv: _exportCsv,
+              onExportPdf: _exportPdf,
+            ),
+          ],
           bottom: const TabBar(
             indicatorColor: MangoThemeFactory.mango,
             labelColor: MangoThemeFactory.mango,
@@ -73,9 +223,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
         body: FutureBuilder<({AuditSummary summary, AuditDetail detail})>(
           future: _future,
           builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
+            final loading = snapshot.connectionState == ConnectionState.waiting;
             if (snapshot.hasError) {
               return Center(
                 child: Padding(
@@ -89,21 +237,47 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
               );
             }
 
-            final data = snapshot.data;
-            final summary = data?.summary ?? const AuditSummary();
-            final detail = data?.detail ?? const AuditDetail();
+            final summary = snapshot.data?.summary ?? const AuditSummary();
 
             return Column(
               children: [
-                _AuditHeader(summary: summary, periodLabel: widget.periodLabel),
-                Expanded(
-                  child: TabBarView(
-                    children: [
-                      _VoidedItemsTab(items: detail.voidedItems),
-                      _CancelledPaymentsTab(items: detail.cancelledPayments),
-                      _DiscountedOrdersTab(items: detail.discountedOrders),
-                    ],
+                _AuditHeader(summary: summary, periodLabel: _periodLabel),
+                SizedBox(height: dpi.space(8)),
+                PeriodFilterBar(
+                  selected: _period,
+                  customRange: _customRange,
+                  initialLabel: widget.periodLabel,
+                  onSelected: _applyPeriod,
+                  onPickCustom: _pickCustomRange,
+                  accent: MangoThemeFactory.danger,
+                ),
+                SizedBox(height: dpi.space(10)),
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: dpi.space(16)),
+                  child: TextField(
+                    onChanged: (v) => setState(() => _query = v),
+                    decoration: InputDecoration(
+                      hintText: 'Buscar producto, mesa, cajero…',
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(
+                          horizontal: dpi.space(12), vertical: dpi.space(12)),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(dpi.radius(12))),
+                    ),
                   ),
+                ),
+                SizedBox(height: dpi.space(8)),
+                Expanded(
+                  child: loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : TabBarView(
+                          children: [
+                            _VoidedItemsTab(items: _filteredVoids),
+                            _CancelledPaymentsTab(items: _filteredCancellations),
+                            _DiscountedOrdersTab(items: _filteredDiscounts),
+                          ],
+                        ),
                 ),
               ],
             );
@@ -112,6 +286,25 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
       ),
     );
   }
+}
+
+String _methodLabel(String code) {
+  switch (code) {
+    case 'cash':
+      return 'Efectivo';
+    case 'card':
+      return 'Tarjeta';
+    case 'transfer':
+      return 'Transferencia';
+    default:
+      return code;
+  }
+}
+
+String _formatDateTime(DateTime t) {
+  final h = t.hour.toString().padLeft(2, '0');
+  final m = t.minute.toString().padLeft(2, '0');
+  return '${t.day}/${t.month}/${t.year} $h:$m';
 }
 
 class _AuditHeader extends StatelessWidget {

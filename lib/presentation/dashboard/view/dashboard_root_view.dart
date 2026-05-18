@@ -40,6 +40,7 @@ import 'audit_detail_view.dart';
 import 'commands_timeline_view.dart';
 import 'customer_analytics_view.dart';
 import 'modifiers_breakdown_view.dart';
+import 'reports_hub_view.dart';
 import 'person_sales_detail_view.dart';
 import 'kpi_detail_views.dart';
 
@@ -211,6 +212,7 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
       // Refreshes happen silently in the background — values just change in
       // place. The freshness badge in HomeView already shows "Actualizado
       // hace Xm" when relevant, no need for a top loader.
+      drawer: MainDrawer(profile: profile, cashState: cashRegisterState),
       body: SafeArea(
         child: IndexedStack(index: _currentIndex, children: pages),
       ),
@@ -498,11 +500,31 @@ class _HomeHeader extends ConsumerStatefulWidget {
 
 class _HomeHeaderState extends ConsumerState<_HomeHeader> {
   List<SavedAccount> _otherAccounts = [];
+  Timer? _greetingTicker;
 
   @override
   void initState() {
     super.initState();
     _loadOtherAccounts();
+    _scheduleGreetingRefresh();
+  }
+
+  @override
+  void dispose() {
+    _greetingTicker?.cancel();
+    super.dispose();
+  }
+
+  void _scheduleGreetingRefresh() {
+    _greetingTicker?.cancel();
+    final now = DateTime.now();
+    final nextHour = DateTime(now.year, now.month, now.day, now.hour).add(const Duration(hours: 1));
+    final delay = nextHour.difference(now);
+    _greetingTicker = Timer(delay, () {
+      if (!mounted) return;
+      setState(() {});
+      _scheduleGreetingRefresh();
+    });
   }
 
   @override
@@ -538,118 +560,99 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        SizedBox(height: dpi.space(4)),
         Row(
           children: [
-            Expanded(
-              child: InkWell(
-                onTap: canSwitch ? () => _showSelector(context) : null,
-                borderRadius: BorderRadius.circular(dpi.radius(12)),
-                child: Padding(
-                  padding: EdgeInsets.symmetric(vertical: dpi.space(12)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        greeting,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              fontWeight: FontWeight.w500,
-                              color: MangoThemeFactory.mutedText(context),
-                            ),
-                      ),
-                      SizedBox(height: dpi.space(2)),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Flexible(
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 300),
-                              child: Text(
-                                profile.userName,
-                                key: ValueKey(profile.userName),
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .headlineMedium
-                                    ?.copyWith(fontWeight: FontWeight.w900),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ),
-                          if (canSwitch) ...[
-                            SizedBox(width: dpi.space(4)),
-                            Icon(
-                              Icons.keyboard_arrow_down_rounded,
-                              color: MangoThemeFactory.mango,
-                              size: dpi.icon(24),
-                            ),
-                          ],
-                        ],
-                      ),
-                      Text(
-                        businessName,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              letterSpacing: 0.5,
-                            ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(width: dpi.space(8)),
+            Builder(builder: (context) {
+              return _HeaderIconButton(
+                icon: Icons.menu_rounded,
+                onTap: () => Scaffold.of(context).openDrawer(),
+              );
+            }),
+            const Spacer(),
             Consumer(builder: (context, cRef, _) {
               final notifState = cRef.watch(notificationViewModelProvider);
               final unread = notifState.unreadCount;
-              return GestureDetector(
+              return _HeaderIconButton(
+                icon: unread > 0
+                    ? Icons.notifications_rounded
+                    : Icons.notifications_outlined,
+                iconColor: unread > 0 ? MangoThemeFactory.mango : null,
+                badgeText: unread > 0 ? (unread > 9 ? '9+' : '$unread') : null,
                 onTap: () => _showNotifications(context, cRef),
-                child: SizedBox(
-                  width: dpi.scale(40),
-                  height: dpi.scale(40),
-                  child: Stack(
-                    children: [
-                      Center(
-                        child: Icon(
-                          unread > 0 ? Icons.notifications_rounded : Icons.notifications_outlined,
-                          color: unread > 0 ? MangoThemeFactory.mango : MangoThemeFactory.mutedText(context),
-                          size: dpi.icon(24),
-                        ),
-                      ),
-                      if (unread > 0)
-                        Positioned(
-                          right: 2,
-                          top: 2,
-                          child: Container(
-                            padding: EdgeInsets.all(dpi.space(4)),
-                            decoration: const BoxDecoration(
-                              color: Colors.red,
-                              shape: BoxShape.circle,
-                            ),
-                            constraints: BoxConstraints(minWidth: dpi.scale(18), minHeight: dpi.scale(18)),
-                            child: Text(
-                              unread > 9 ? '9+' : '$unread',
-                              style: TextStyle(color: Colors.white, fontSize: dpi.font(9), fontWeight: FontWeight.w800),
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
               );
             }),
-            SizedBox(width: dpi.space(4)),
+            SizedBox(width: dpi.space(8)),
             Container(
-              width: dpi.scale(46),
-              height: dpi.scale(46),
-              padding: EdgeInsets.all(dpi.space(8)),
+              width: dpi.scale(42),
+              height: dpi.scale(42),
+              padding: EdgeInsets.all(dpi.space(7)),
               decoration: BoxDecoration(
                 color: MangoThemeFactory.cardColor(context),
-                borderRadius: BorderRadius.circular(dpi.radius(16)),
+                borderRadius: BorderRadius.circular(dpi.radius(14)),
                 border: Border.all(color: MangoThemeFactory.borderColor(context)),
               ),
               child: Image.asset('assets/logo/logo.png', fit: BoxFit.contain),
             ),
           ],
+        ),
+        SizedBox(height: dpi.space(10)),
+        InkWell(
+          onTap: canSwitch ? () => _showSelector(context) : null,
+          borderRadius: BorderRadius.circular(dpi.radius(12)),
+          child: Padding(
+            padding: EdgeInsets.symmetric(vertical: dpi.space(4)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  greeting,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w500,
+                        color: MangoThemeFactory.mutedText(context),
+                      ),
+                ),
+                SizedBox(height: dpi.space(2)),
+                Row(
+                  children: [
+                    Flexible(
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 300),
+                        child: Text(
+                          profile.userName,
+                          key: ValueKey(profile.userName),
+                          style: Theme.of(context)
+                              .textTheme
+                              .headlineMedium
+                              ?.copyWith(fontWeight: FontWeight.w900),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                    if (canSwitch) ...[
+                      SizedBox(width: dpi.space(4)),
+                      Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        color: MangoThemeFactory.mango,
+                        size: dpi.icon(24),
+                      ),
+                    ],
+                  ],
+                ),
+                SizedBox(height: dpi.space(2)),
+                Text(
+                  businessName,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        letterSpacing: 0.5,
+                        color: MangoThemeFactory.mutedText(context),
+                      ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
         ),
       ],
     );
@@ -697,9 +700,70 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
 
   String _greetingByTime() {
     final hour = DateTime.now().hour;
+    if (hour < 5) return 'Buenas noches';
     if (hour < 12) return 'Buenos días';
-    if (hour < 18) return 'Buenas tardes';
+    if (hour < 19) return 'Buenas tardes';
     return 'Buenas noches';
+  }
+}
+
+class _HeaderIconButton extends StatelessWidget {
+  const _HeaderIconButton({
+    required this.icon,
+    required this.onTap,
+    this.iconColor,
+    this.badgeText,
+  });
+
+  final IconData icon;
+  final VoidCallback onTap;
+  final Color? iconColor;
+  final String? badgeText;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: dpi.scale(42),
+        height: dpi.scale(42),
+        child: Stack(
+          children: [
+            Center(
+              child: Icon(
+                icon,
+                color: iconColor ?? MangoThemeFactory.textColor(context),
+                size: dpi.icon(24),
+              ),
+            ),
+            if (badgeText != null)
+              Positioned(
+                right: 2,
+                top: 2,
+                child: Container(
+                  padding: EdgeInsets.all(dpi.space(4)),
+                  decoration: const BoxDecoration(
+                    color: Colors.red,
+                    shape: BoxShape.circle,
+                  ),
+                  constraints: BoxConstraints(
+                      minWidth: dpi.scale(18), minHeight: dpi.scale(18)),
+                  child: Text(
+                    badgeText!,
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: dpi.font(9),
+                        fontWeight: FontWeight.w800),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -3418,6 +3482,340 @@ class BusinessSelectorCard extends ConsumerWidget {
   }
 }
 
+class MainDrawer extends ConsumerStatefulWidget {
+  const MainDrawer({super.key, required this.profile, required this.cashState});
+
+  final AdminAccessProfile profile;
+  final CashRegisterState cashState;
+
+  @override
+  ConsumerState<MainDrawer> createState() => _MainDrawerState();
+}
+
+class _MainDrawerState extends ConsumerState<MainDrawer> {
+  List<SavedAccount> _otherAccounts = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOtherAccounts();
+  }
+
+  Future<void> _loadOtherAccounts() async {
+    final all = await ref.read(savedAccountsServiceProvider).loadAccounts();
+    if (mounted) {
+      setState(() {
+        _otherAccounts = all
+            .where((a) => a.email != widget.profile.email)
+            .toList();
+      });
+    }
+  }
+
+  void _openAccountSelector(BuildContext context) {
+    Navigator.of(context).pop();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => _BusinessAccountSelectorSheet(
+        profile: widget.profile,
+        otherAccounts: _otherAccounts,
+        onBranchSelected: (id) {
+          Navigator.pop(ctx);
+          ref.read(authGateViewModelProvider.notifier).switchBusiness(id);
+        },
+        onAccountSwitchByToken: (account) async {
+          final error = await ref
+              .read(authGateViewModelProvider.notifier)
+              .switchAccountByToken(account);
+          if (error == null && ctx.mounted) Navigator.pop(ctx);
+          return error;
+        },
+        onAccountSwitchWithPassword: (email, password) async {
+          final error = await ref
+              .read(authGateViewModelProvider.notifier)
+              .switchAccountWithPassword(email: email, password: password);
+          if (error == null && ctx.mounted) Navigator.pop(ctx);
+          return error;
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final profile = widget.profile;
+    final cashState = widget.cashState;
+    final hasMultipleBranches =
+        profile.memberships.where((m) => m.allowed).length > 1;
+    final canSwitch = hasMultipleBranches || _otherAccounts.isNotEmpty;
+    final businessName = profile.branchName?.trim().isNotEmpty == true
+        ? profile.branchName!
+        : (profile.businessName ?? 'Sin nombre');
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final drawerColor = isDark
+        ? MangoThemeFactory.cardColor(context)
+        : Colors.white;
+    return Drawer(
+      backgroundColor: drawerColor,
+      surfaceTintColor: drawerColor,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                  dpi.space(18), dpi.space(18), dpi.space(18), dpi.space(12)),
+              child: Row(
+                children: [
+                  Container(
+                    width: dpi.scale(46),
+                    height: dpi.scale(46),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(colors: [
+                        MangoThemeFactory.mango,
+                        MangoThemeFactory.mango.withValues(alpha: 0.7),
+                      ]),
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      profile.userName.isNotEmpty
+                          ? profile.userName[0].toUpperCase()
+                          : 'U',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: dpi.font(18),
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: dpi.space(12)),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          profile.userName,
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          businessName,
+                          style: TextStyle(
+                            fontSize: dpi.font(12),
+                            color: MangoThemeFactory.mutedText(context),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Divider(
+                height: 1,
+                color: MangoThemeFactory.borderColor(context)
+                    .withValues(alpha: 0.5)),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.symmetric(vertical: dpi.space(8)),
+                children: [
+                  _DrawerTile(
+                    icon: Icons.point_of_sale_rounded,
+                    accent: MangoThemeFactory.info,
+                    label: 'Caja',
+                    subtitle: cashState.summary != null
+                        ? '${cashState.summary!.openRegistersCount} abiertas · ${cashState.summary!.totalRegisters} total'
+                        : 'Cierres y registradoras',
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => CashRegisterDetailView(
+                            summary: cashState.summary,
+                            error: cashState.error,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  _DrawerTile(
+                    icon: Icons.inventory_2_rounded,
+                    accent: MangoThemeFactory.mango,
+                    label: 'Inventario',
+                    subtitle: 'Stock en tiempo real · lista de compras',
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const InventoryView()),
+                      );
+                    },
+                  ),
+                  _DrawerTile(
+                    icon: Icons.assessment_rounded,
+                    accent: MangoThemeFactory.warning,
+                    label: 'Reportes',
+                    subtitle: 'Ventas, productos, clientes, auditoría',
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const ReportsHubView()),
+                      );
+                    },
+                  ),
+                  _DrawerTile(
+                    icon: Icons.switch_account_rounded,
+                    accent: MangoThemeFactory.success,
+                    label: 'Cuentas',
+                    subtitle: canSwitch
+                        ? 'Cambiar de negocio o usuario'
+                        : 'Solo este negocio disponible',
+                    enabled: canSwitch,
+                    onTap: () => _openAccountSelector(context),
+                  ),
+                ],
+              ),
+            ),
+            Divider(
+                height: 1,
+                color: MangoThemeFactory.borderColor(context)
+                    .withValues(alpha: 0.5)),
+            InkWell(
+              onTap: () {
+                Navigator.of(context).pop();
+                ref.read(authGateViewModelProvider.notifier).signOut();
+              },
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                    horizontal: dpi.space(18), vertical: dpi.space(14)),
+                child: Row(
+                  children: [
+                    Container(
+                      width: dpi.scale(38),
+                      height: dpi.scale(38),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: isDark ? 0.18 : 0.1),
+                        borderRadius: BorderRadius.circular(dpi.radius(10)),
+                      ),
+                      child: Icon(Icons.logout_rounded,
+                          color: Colors.redAccent, size: dpi.icon(20)),
+                    ),
+                    SizedBox(width: dpi.space(14)),
+                    Text(
+                      'Cerrar sesión',
+                      style: TextStyle(
+                        color: Colors.redAccent,
+                        fontWeight: FontWeight.w700,
+                        fontSize: dpi.font(14),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.all(dpi.space(14)),
+              child: Text(
+                'MangoPOS · Dashboard',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: dpi.font(10),
+                  color: MangoThemeFactory.mutedText(context),
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DrawerTile extends StatelessWidget {
+  const _DrawerTile({
+    required this.icon,
+    required this.accent,
+    required this.label,
+    required this.subtitle,
+    required this.onTap,
+    this.enabled = true,
+  });
+
+  final IconData icon;
+  final Color accent;
+  final String label;
+  final String subtitle;
+  final VoidCallback onTap;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+            horizontal: dpi.space(18), vertical: dpi.space(12)),
+        child: Row(
+          children: [
+            Container(
+              width: dpi.scale(38),
+              height: dpi.scale(38),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: isDark ? 0.2 : 0.12),
+                borderRadius: BorderRadius.circular(dpi.radius(10)),
+              ),
+              child: Icon(icon, color: accent, size: dpi.icon(20)),
+            ),
+            SizedBox(width: dpi.space(14)),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: enabled
+                              ? null
+                              : MangoThemeFactory.mutedText(context),
+                        ),
+                  ),
+                  SizedBox(height: dpi.space(2)),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: dpi.font(11),
+                      color: MangoThemeFactory.mutedText(context),
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            if (enabled)
+              Icon(Icons.chevron_right_rounded,
+                  color: MangoThemeFactory.mutedText(context)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class SettingsView extends ConsumerWidget {
   const SettingsView({
     super.key,
@@ -3435,7 +3833,6 @@ class SettingsView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final dpi = DpiScale.of(context);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return RefreshIndicator(
       onRefresh: onRefresh,
@@ -3529,227 +3926,13 @@ class SettingsView extends ConsumerWidget {
         ),
 
         SizedBox(height: dpi.space(32)),
-        _SettingsHeader(title: 'Caja'),
-        SizedBox(height: dpi.space(12)),
-
-        // --- Caja Summary Cards ---
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final cards = [
-              _CashSummaryCard(
-                title: 'Cajas registradas',
-                value: cashState.summary != null
-                    ? MangoFormatters.number(cashState.summary!.activeRegisters)
-                    : (cashState.isLoading ? '...' : '—'),
-                subtitle: cashState.summary != null
-                    ? '${cashState.summary!.totalRegisters} total · ${cashState.summary!.inactiveRegistersCount} inactivas'
-                    : 'Cajas activas del negocio',
-                icon: Icons.point_of_sale_rounded,
-                color: MangoThemeFactory.info,
-              ),
-              _CashSummaryCard(
-                title: 'Cajas abiertas',
-                value: cashState.summary != null
-                    ? MangoFormatters.number(cashState.summary!.openRegistersCount)
-                    : (cashState.isLoading ? '...' : '—'),
-                subtitle: cashState.summary != null
-                    ? 'Con sesión abierta ahora'
-                    : 'Sesiones abiertas',
-                icon: Icons.lock_open_rounded,
-                color: MangoThemeFactory.mango,
-              ),
-              _CashSummaryCard(
-                title: 'Top caja (ventas)',
-                value: cashState.summary?.topRegister != null
-                    ? MangoFormatters.currency(cashState.summary!.topRegister!.totalSales)
-                    : (cashState.isLoading ? '...' : '—'),
-                subtitle: cashState.summary?.topRegister != null
-                    ? cashState.summary!.topRegister!.registerName
-                    : 'Caja con más ventas visibles',
-                icon: Icons.emoji_events_rounded,
-                color: MangoThemeFactory.success,
-              ),
-            ];
-            final crossCount = constraints.maxWidth >= 760 ? 3 : 1;
-            return GridView.count(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisCount: crossCount,
-              crossAxisSpacing: dpi.space(12),
-              mainAxisSpacing: dpi.space(12),
-              childAspectRatio: crossCount == 3 ? 1.3 : 2.1,
-              children: cards,
-            );
-          },
-        ),
-        SizedBox(height: dpi.space(12)),
-
-        // --- Gestionar Cierres Button ---
-        InkWell(
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => CashRegisterDetailView(summary: cashState.summary, error: cashState.error),
-            ),
-          ),
-          borderRadius: BorderRadius.circular(dpi.radius(16)),
-          child: Container(
-            padding: EdgeInsets.all(dpi.space(16)),
-            decoration: BoxDecoration(
-              color: MangoThemeFactory.cardColor(context),
-              borderRadius: BorderRadius.circular(dpi.radius(16)),
-              border: Border.all(color: MangoThemeFactory.borderColor(context)),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: dpi.scale(36),
-                  height: dpi.scale(36),
-                  decoration: BoxDecoration(
-                    color: MangoThemeFactory.mango.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(dpi.radius(10)),
-                  ),
-                  child: Icon(Icons.assignment_rounded, color: MangoThemeFactory.mango, size: dpi.icon(20)),
-                ),
-                SizedBox(width: dpi.space(14)),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Gestionar Cierres',
-                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: dpi.font(15), color: MangoThemeFactory.textColor(context)),
-                      ),
-                      Text(
-                        cashState.summary != null
-                            ? '${cashState.summary!.openRegistersCount} abiertas · ${cashState.summary!.closings.length} cierres recientes'
-                            : 'Ver historial de cierres de caja',
-                        style: TextStyle(fontSize: dpi.font(12), color: MangoThemeFactory.mutedText(context)),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(Icons.chevron_right_rounded, color: MangoThemeFactory.mutedText(context)),
-              ],
-            ),
-          ),
-        ),
-
-        SizedBox(height: dpi.space(32)),
-        _SettingsHeader(title: 'Inventario'),
-        SizedBox(height: dpi.space(12)),
-
-        _InventoryShortcut(),
-
-        SizedBox(height: dpi.space(32)),
         _SettingsHeader(title: 'Seguridad'),
         SizedBox(height: dpi.space(12)),
 
         _BiometricSection(profile: profile),
 
-        SizedBox(height: dpi.space(32)),
-        _SettingsHeader(title: 'Cuentas'),
-        SizedBox(height: dpi.space(12)),
-
-        _AccountsSection(currentProfile: profile),
-
-        SizedBox(height: dpi.space(32)),
-        _SettingsHeader(title: 'Sesión'),
-        SizedBox(height: dpi.space(12)),
-
-        InkWell(
-          onTap: () => ref.read(authGateViewModelProvider.notifier).signOut(),
-          borderRadius: BorderRadius.circular(dpi.radius(16)),
-          child: Container(
-            padding: EdgeInsets.all(dpi.space(16)),
-            decoration: BoxDecoration(
-              color: isDark ? Colors.red.withValues(alpha: 0.1) : Colors.red.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(dpi.radius(16)),
-              border: Border.all(color: Colors.red.withValues(alpha: 0.2)),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.logout_rounded, color: Colors.redAccent, size: dpi.icon(22)),
-                SizedBox(width: dpi.space(14)),
-                Text(
-                  'Cerrar sesión',
-                  style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w700, fontSize: dpi.font(15)),
-                ),
-                const Spacer(),
-                Icon(Icons.chevron_right_rounded, color: Colors.redAccent.withValues(alpha: 0.5)),
-              ],
-            ),
-          ),
-        ),
         SizedBox(height: dpi.space(40)),
       ],
-      ),
-    );
-  }
-}
-
-class _CashSummaryCard extends StatelessWidget {
-  const _CashSummaryCard({
-    required this.title,
-    required this.value,
-    required this.subtitle,
-    required this.icon,
-    required this.color,
-  });
-
-  final String title;
-  final String value;
-  final String subtitle;
-  final IconData icon;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final dpi = DpiScale.of(context);
-
-    return Container(
-      padding: EdgeInsets.all(dpi.space(16)),
-      decoration: BoxDecoration(
-        color: MangoThemeFactory.cardColor(context),
-        borderRadius: BorderRadius.circular(dpi.radius(20)),
-        border: Border.all(color: MangoThemeFactory.borderColor(context)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: dpi.scale(36),
-            height: dpi.scale(36),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(dpi.radius(10)),
-            ),
-            child: Icon(icon, color: color, size: dpi.icon(20)),
-          ),
-          SizedBox(height: dpi.space(10)),
-          Text(
-            title,
-            style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context), fontWeight: FontWeight.w500),
-          ),
-          SizedBox(height: dpi.space(2)),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: dpi.font(22), fontWeight: FontWeight.w800, color: MangoThemeFactory.textColor(context)),
-            ),
-          ),
-          SizedBox(height: dpi.space(4)),
-          Text(
-            subtitle,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: dpi.font(12), color: MangoThemeFactory.mutedText(context)),
-          ),
-        ],
       ),
     );
   }
@@ -3982,268 +4165,6 @@ class _BiometricSectionState extends ConsumerState<_BiometricSection> {
           },
         );
       },
-    );
-  }
-}
-
-class _AccountsSection extends ConsumerStatefulWidget {
-  const _AccountsSection({required this.currentProfile});
-  final AdminAccessProfile currentProfile;
-
-  @override
-  ConsumerState<_AccountsSection> createState() => _AccountsSectionState();
-}
-
-class _AccountsSectionState extends ConsumerState<_AccountsSection> {
-  List<SavedAccount> _otherAccounts = [];
-  String? _switchingEmail;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadAccounts();
-  }
-
-  Future<void> _loadAccounts() async {
-    final all = await ref.read(savedAccountsServiceProvider).loadAccounts();
-    if (mounted) {
-      setState(() {
-        _otherAccounts = all
-            .where((a) => a.email != widget.currentProfile.email)
-            .toList();
-      });
-    }
-  }
-
-  Future<void> _switchTo(SavedAccount account) async {
-    if (_switchingEmail != null) return;
-    setState(() => _switchingEmail = account.email);
-
-    final error = await ref
-        .read(authGateViewModelProvider.notifier)
-        .switchAccountByToken(account);
-        
-    if (mounted) {
-      setState(() => _switchingEmail = null);
-      if (error != null) {
-        _showPasswordDialog(account);
-      }
-    }
-  }
-
-  void _showPasswordDialog(SavedAccount account) {
-    final passwordController = TextEditingController();
-    String? dialogError;
-    bool dialogLoading = false;
-
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          final dpi = DpiScale.of(context);
-
-          Future<void> doSwitch() async {
-            setDialogState(() { dialogLoading = true; dialogError = null; });
-            final error = await ref
-                .read(authGateViewModelProvider.notifier)
-                .switchAccountWithPassword(
-                  email: account.email,
-                  password: passwordController.text,
-                );
-            if (error != null) {
-              setDialogState(() { dialogLoading = false; dialogError = error; });
-            } else if (context.mounted) {
-              Navigator.pop(context);
-            }
-          }
-
-          return AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(dpi.radius(20))),
-            title: Text('Cambiar a ${account.displayName}'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'La sesión expiró. Ingresa tu contraseña.',
-                  style: TextStyle(fontSize: dpi.font(13), color: MangoThemeFactory.mutedText(context)),
-                ),
-                SizedBox(height: dpi.space(16)),
-                TextField(
-                  controller: passwordController,
-                  obscureText: true,
-                  autofocus: true,
-                  enabled: !dialogLoading,
-                  decoration: InputDecoration(
-                    labelText: 'Contraseña',
-                    prefixIcon: const Icon(Icons.lock_outline_rounded),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(dpi.radius(10))),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(dpi.radius(10)),
-                      borderSide: const BorderSide(color: MangoThemeFactory.mango, width: 1.5),
-                    ),
-                  ),
-                  onSubmitted: (_) => doSwitch(),
-                ),
-                if (dialogError != null) ...[
-                  SizedBox(height: dpi.space(12)),
-                  Container(
-                    width: double.infinity,
-                    padding: EdgeInsets.all(dpi.space(10)),
-                    decoration: BoxDecoration(
-                      color: MangoThemeFactory.danger.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(dpi.radius(8)),
-                    ),
-                    child: Text(
-                      dialogError!,
-                      style: TextStyle(color: MangoThemeFactory.danger, fontSize: dpi.font(12)),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: dialogLoading ? null : () => Navigator.pop(context),
-                child: const Text('Cancelar'),
-              ),
-              FilledButton(
-                onPressed: dialogLoading ? null : doSwitch,
-                style: FilledButton.styleFrom(backgroundColor: MangoThemeFactory.mango),
-                child: dialogLoading
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Text('Entrar'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-
-  @override
-  Widget build(BuildContext context) {
-    final dpi = DpiScale.of(context);
-
-    return Container(
-      padding: EdgeInsets.all(dpi.space(16)),
-      decoration: BoxDecoration(
-        color: MangoThemeFactory.cardColor(context),
-        borderRadius: BorderRadius.circular(dpi.radius(20)),
-        border: Border.all(color: MangoThemeFactory.borderColor(context)),
-      ),
-      child: Column(
-        children: [
-          // Otras cuentas guardadas
-          if (_otherAccounts.isNotEmpty)
-            ..._otherAccounts.map((account) => Padding(
-              padding: EdgeInsets.only(bottom: dpi.space(8)),
-              child: InkWell(
-                onTap: _switchingEmail != null ? null : () => _switchTo(account),
-                borderRadius: BorderRadius.circular(dpi.radius(14)),
-                child: Container(
-                  padding: EdgeInsets.all(dpi.space(14)),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(dpi.radius(14)),
-                    border: Border.all(color: MangoThemeFactory.borderColor(context)),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: dpi.scale(38),
-                        height: dpi.scale(38),
-                        decoration: BoxDecoration(
-                          color: MangoThemeFactory.mango.withValues(alpha: 0.15),
-                          shape: BoxShape.circle,
-                        ),
-                        alignment: Alignment.center,
-                        child: Text(
-                          account.displayName.isNotEmpty
-                              ? account.displayName[0].toUpperCase()
-                              : account.email[0].toUpperCase(),
-                          style: TextStyle(
-                            fontSize: dpi.font(16),
-                            fontWeight: FontWeight.w800,
-                            color: MangoThemeFactory.mango,
-                          ),
-                        ),
-                      ),
-                      SizedBox(width: dpi.space(12)),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              account.displayName,
-                              style: TextStyle(fontWeight: FontWeight.w700, fontSize: dpi.font(14)),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            Text(
-                              account.email,
-                              style: TextStyle(fontSize: dpi.font(12), color: MangoThemeFactory.mutedText(context)),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            if (account.businessName != null)
-                              Text(
-                                account.businessName!,
-                                style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                          ],
-                        ),
-                      ),
-                      _switchingEmail == account.email
-                          ? SizedBox(
-                              width: dpi.scale(22),
-                              height: dpi.scale(22),
-                              child: CircularProgressIndicator(strokeWidth: 2, color: MangoThemeFactory.mango),
-                            )
-                          : Icon(Icons.swap_horiz_rounded, color: MangoThemeFactory.mango, size: dpi.icon(22)),
-                    ],
-                  ),
-                ),
-              ),
-            )),
-
-          // Agregar otra cuenta
-          InkWell(
-            onTap: () {
-              // Cerrar sesión para ir al login donde se pueden agregar cuentas
-              ref.read(authGateViewModelProvider.notifier).signOut();
-            },
-            borderRadius: BorderRadius.circular(dpi.radius(14)),
-            child: Container(
-              padding: EdgeInsets.all(dpi.space(14)),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(dpi.radius(14)),
-                border: Border.all(
-                  color: MangoThemeFactory.mango.withValues(alpha: 0.3),
-                  style: BorderStyle.solid,
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.person_add_alt_1_rounded, color: MangoThemeFactory.mango, size: dpi.icon(20)),
-                  SizedBox(width: dpi.space(10)),
-                  Text(
-                    'Agregar otra cuenta',
-                    style: TextStyle(
-                      color: MangoThemeFactory.mango,
-                      fontWeight: FontWeight.w700,
-                      fontSize: dpi.font(14),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -4482,69 +4403,6 @@ class _SalesLayoutTile extends StatelessWidget {
                 ),
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Entry to the inventory module from Ajustes. Pure navigation — no data
-/// load here; the inventory view fetches lazily on open.
-class _InventoryShortcut extends StatelessWidget {
-  const _InventoryShortcut();
-
-  @override
-  Widget build(BuildContext context) {
-    final dpi = DpiScale.of(context);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return InkWell(
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const InventoryView()),
-      ),
-      borderRadius: BorderRadius.circular(dpi.radius(16)),
-      child: Container(
-        padding: EdgeInsets.all(dpi.space(16)),
-        decoration: BoxDecoration(
-          color: MangoThemeFactory.cardColor(context),
-          borderRadius: BorderRadius.circular(dpi.radius(16)),
-          border: Border.all(color: MangoThemeFactory.borderColor(context)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: dpi.scale(40),
-              height: dpi.scale(40),
-              decoration: BoxDecoration(
-                color: MangoThemeFactory.mango.withValues(alpha: isDark ? 0.2 : 0.12),
-                borderRadius: BorderRadius.circular(dpi.radius(10)),
-              ),
-              child: Icon(Icons.inventory_2_rounded,
-                  color: MangoThemeFactory.mango, size: dpi.icon(22)),
-            ),
-            SizedBox(width: dpi.space(12)),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Ver inventario',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w800),
-                  ),
-                  SizedBox(height: dpi.space(2)),
-                  Text(
-                    'Stock por insumo en tiempo real · lista de compras para stock bajo',
-                    style: TextStyle(
-                        fontSize: dpi.font(11),
-                        color: MangoThemeFactory.mutedText(context)),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right_rounded, color: MangoThemeFactory.mutedText(context)),
           ],
         ),
       ),

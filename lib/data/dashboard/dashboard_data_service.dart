@@ -553,8 +553,8 @@ class DashboardDataService {
     );
   }
 
-  /// Loads customer analytics for the period — aggregates payments by RNC
-  /// (preferred) or normalized customer name. Customers without RNC AND
+  /// Loads customer analytics for the period — aggregates fiscal documents by
+  /// RNC (preferred) or normalized customer name. Customers without RNC AND
   /// without name are excluded (treated as anonymous walk-ins).
   Future<List<CustomerSummary>> loadCustomerAnalytics({
     required String businessId,
@@ -562,12 +562,12 @@ class DashboardDataService {
     required DateTime end,
   }) async {
     final rows = await _client
-        .from('payments')
-        .select('order_id, amount, change_amount, status, created_at, customer_rnc, customer_name')
+        .from('fiscal_documents')
+        .select('order_id, total, status, created_at, customer_rnc, customer_name')
         .eq('business_id', businessId)
         .gte('created_at', start.toUtc().toIso8601String())
         .lt('created_at', end.toUtc().toIso8601String())
-        .not('status', 'in', '(void,cancelled)');
+        .eq('status', 'active');
 
     final agg = <String, _CustomerAgg>{};
     for (final row in List<Map<String, dynamic>>.from(rows)) {
@@ -579,12 +579,12 @@ class DashboardDataService {
 
       final key = hasRnc ? 'rnc:$rnc' : 'name:${name!.toLowerCase()}';
       final entry = agg.putIfAbsent(key, _CustomerAgg.new);
-      final net = _netAmount(row['amount'], row['change_amount']);
+      final amount = _toDouble(row['total']);
       final createdAt =
           DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now();
       final orderId = row['order_id']?.toString();
 
-      entry.totalSpent += net;
+      entry.totalSpent += amount;
       if (orderId != null && orderId.isNotEmpty) {
         entry.orderIds.add(orderId);
       } else {
@@ -634,13 +634,13 @@ class DashboardDataService {
     final value = customerKey.substring(customerKey.indexOf(':') + 1);
 
     var query = _client
-        .from('payments')
+        .from('fiscal_documents')
         .select(
-            'id, order_id, amount, change_amount, status, created_at, customer_rnc, customer_name, payment_methods(code), orders(table_sessions(dining_tables(label, code)))')
+            'id, order_id, total, status, created_at, customer_rnc, customer_name, payments(payment_methods(code)), orders(table_sessions(dining_tables(label, code)))')
         .eq('business_id', businessId)
         .gte('created_at', start.toUtc().toIso8601String())
         .lt('created_at', end.toUtc().toIso8601String())
-        .not('status', 'in', '(void,cancelled)');
+        .eq('status', 'active');
 
     if (isRnc) {
       query = query.eq('customer_rnc', value);
@@ -651,13 +651,14 @@ class DashboardDataService {
     final rows = await query.order('created_at', ascending: false);
 
     return List<Map<String, dynamic>>.from(rows).map((row) {
-      final pm = row['payment_methods'];
+      final payment = row['payments'];
+      final pm = payment is Map<String, dynamic> ? payment['payment_methods'] : null;
       final order = row['orders'];
       final session = order is Map<String, dynamic> ? order['table_sessions'] : null;
       final table = session is Map<String, dynamic> ? session['dining_tables'] : null;
       return CustomerVisit(
         orderId: row['order_id']?.toString() ?? '',
-        amount: _netAmount(row['amount'], row['change_amount']),
+        amount: _toDouble(row['total']),
         createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
         tableLabel: table is Map<String, dynamic>
             ? (table['label']?.toString() ?? table['code']?.toString())
@@ -678,7 +679,7 @@ class DashboardDataService {
     final rows = await _client
         .from('order_item_modifiers')
         .select(
-            'name, qty, price_delta, order_items!inner(status, orders!inner(created_at, table_sessions!inner(business_id)))')
+            'name, qty, price, order_items!inner(status, orders!inner(created_at, table_sessions!inner(business_id)))')
         .eq('order_items.orders.table_sessions.business_id', businessId)
         .gte('order_items.orders.created_at', start.toUtc().toIso8601String())
         .lt('order_items.orders.created_at', end.toUtc().toIso8601String())
@@ -690,10 +691,10 @@ class DashboardDataService {
       if (name == null || name.isEmpty) continue;
       final qty = _toDouble(row['qty']);
       final unitQty = qty == 0 ? 1.0 : qty;
-      final delta = _toDouble(row['price_delta']);
+      final unitPrice = _toDouble(row['price']);
       final entry = agg.putIfAbsent(name, _ModifierAgg.new);
       entry.count += unitQty;
-      entry.revenue += delta * unitQty;
+      entry.revenue += unitPrice * unitQty;
     }
 
     final result = agg.entries
@@ -709,6 +710,95 @@ class DashboardDataService {
         if (byRev != 0) return byRev;
         return b.count.compareTo(a.count);
       });
+    return result;
+  }
+
+  /// Loads tickets (completed payments) for an arbitrary period. Mirrors the
+  /// in-line logic used by `loadSummary` so the Sales report can re-fetch
+  /// with a different date range without reloading the whole dashboard.
+  Future<({double totalSales, List<TicketItem> tickets})> loadTicketsForPeriod({
+    required String businessId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final rows = await _client
+        .from('payments')
+        .select('amount, change_amount, status, order_id, created_at, payment_methods(code)')
+        .eq('business_id', businessId)
+        .gte('created_at', start.toUtc().toIso8601String())
+        .lt('created_at', end.toUtc().toIso8601String());
+
+    double totalSales = 0;
+    final tickets = <TicketItem>[];
+    for (final row in List<Map<String, dynamic>>.from(rows)) {
+      final status = row['status']?.toString();
+      if (status == 'void' || status == 'cancelled') continue;
+      final net = _netAmount(row['amount'], row['change_amount']);
+      totalSales += net;
+      final pm = row['payment_methods'];
+      final pmCode = pm is Map<String, dynamic> ? pm['code']?.toString() : null;
+      tickets.add(TicketItem(
+        orderId: row['order_id']?.toString() ?? '',
+        amount: net,
+        createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+        paymentMethodCode: pmCode,
+      ));
+    }
+    tickets.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return (totalSales: totalSales, tickets: tickets);
+  }
+
+  /// Top products for an arbitrary period. Aggregates `order_items` for the
+  /// orders linked to non-cancelled payments within the range.
+  Future<List<TopProduct>> loadTopProductsForPeriod({
+    required String businessId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final paymentRows = await _client
+        .from('payments')
+        .select('order_id, status')
+        .eq('business_id', businessId)
+        .gte('created_at', start.toUtc().toIso8601String())
+        .lt('created_at', end.toUtc().toIso8601String());
+
+    final orderIds = List<Map<String, dynamic>>.from(paymentRows)
+        .where((r) {
+          final s = r['status']?.toString();
+          return s != 'void' && s != 'cancelled';
+        })
+        .map((r) => r['order_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    if (orderIds.isEmpty) return const [];
+
+    final itemRows = await _batchedInFilter(
+      table: 'order_items',
+      select: 'order_id, product_name, quantity, qty, total, status',
+      filterColumn: 'order_id',
+      values: orderIds.toList(),
+    );
+
+    final Map<String, TopProduct> agg = {};
+    for (final row in itemRows) {
+      if (row['status']?.toString() == 'void') continue;
+      final label = row['product_name']?.toString().trim().isNotEmpty == true
+          ? row['product_name'].toString().trim()
+          : 'Producto';
+      final amount = _toDouble(row['total']);
+      final qty = _toDouble(row['qty'] ?? row['quantity']);
+      final current = agg[label];
+      agg[label] = TopProduct(
+        label: label,
+        amount: (current?.amount ?? 0) + amount,
+        quantity: (current?.quantity ?? 0) + qty,
+      );
+    }
+
+    final result = agg.values.toList()
+      ..sort((a, b) => b.amount.compareTo(a.amount));
     return result;
   }
 

@@ -25,11 +25,15 @@ class AdminAccessService {
       orElse: () => memberships.first,
     );
 
+    final profileName = await _loadProfileFullName(user.id);
     final metadata = user.userMetadata;
-    final displayName = metadata?['full_name']?.toString() ?? 
-                       metadata?['name']?.toString() ?? 
-                       user.email?.split('@').first ?? 
-                       'Admin';
+    final displayName = _firstNonEmpty([
+          profileName,
+          metadata?['full_name']?.toString(),
+          metadata?['name']?.toString(),
+          user.email?.split('@').first,
+        ]) ??
+        'Admin';
 
     return AdminAccessProfile(
       userId: user.id,
@@ -43,6 +47,28 @@ class AdminAccessService {
       allowed: selected.allowed,
       memberships: memberships,
     );
+  }
+
+  Future<String?> _loadProfileFullName(String userId) async {
+    try {
+      final row = await _client
+          .from('profiles')
+          .select('full_name')
+          .eq('id', userId)
+          .maybeSingle();
+      final name = row?['full_name']?.toString().trim();
+      return (name == null || name.isEmpty) ? null : name;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? _firstNonEmpty(Iterable<String?> values) {
+    for (final v in values) {
+      final trimmed = v?.trim();
+      if (trimmed != null && trimmed.isNotEmpty) return trimmed;
+    }
+    return null;
   }
 
   Future<List<AdminBusinessMembership>> _loadMemberships(String userId) async {

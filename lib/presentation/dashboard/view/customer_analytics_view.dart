@@ -4,9 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../widgets/period_filter_bar.dart';
 import 'customer_detail_view.dart';
 
 /// Customer analytics: ranks customers (RNC or named) by spend in the
@@ -31,24 +33,132 @@ enum _Filter { all, recurring, firstTime }
 
 class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
   late Future<List<CustomerSummary>> _future;
+  late DateTime _start;
+  late DateTime _end;
+  late String _periodLabel;
+  DetailPeriod _period = DetailPeriod.initial;
+  DateTimeRange? _customRange;
   _Filter _filter = _Filter.all;
   String _query = '';
 
   @override
   void initState() {
     super.initState();
+    _start = widget.start;
+    _end = widget.end;
+    _periodLabel = widget.periodLabel ?? 'Periodo';
     _future = _load();
   }
+
+  List<CustomerSummary> _loaded = const [];
 
   Future<List<CustomerSummary>> _load() async {
     final profile = ref.read(authGateViewModelProvider).profile;
     final businessId = profile?.businessId;
     if (businessId == null) return const [];
-    return ref.read(dashboardDataServiceProvider).loadCustomerAnalytics(
+    final rows = await ref.read(dashboardDataServiceProvider).loadCustomerAnalytics(
           businessId: businessId,
-          start: widget.start,
-          end: widget.end,
+          start: _start,
+          end: _end,
         );
+    if (mounted) setState(() => _loaded = rows);
+    return rows;
+  }
+
+  List<CustomerSummary> get _filteredForExport {
+    return _loaded.where((c) {
+      switch (_filter) {
+        case _Filter.recurring:
+          if (!c.isRecurring) return false;
+          break;
+        case _Filter.firstTime:
+          if (!c.isFirstTime) return false;
+          break;
+        case _Filter.all:
+          break;
+      }
+      if (_query.isEmpty) return true;
+      final q = _query.toLowerCase();
+      return c.displayName.toLowerCase().contains(q) ||
+          (c.rnc?.toLowerCase().contains(q) ?? false);
+    }).toList();
+  }
+
+  List<List<String>> _rowsForExport() {
+    return _filteredForExport
+        .map((c) => [
+              c.displayName,
+              c.rnc ?? '',
+              c.visitCount.toString(),
+              c.totalSpent.toStringAsFixed(2),
+              c.averageTicket.toStringAsFixed(2),
+              c.isRecurring
+                  ? 'Recurrente'
+                  : (c.isFirstTime ? 'Nuevo' : ''),
+            ])
+        .toList();
+  }
+
+  Future<void> _exportCsv() async {
+    await ReportExportService.exportCsv(
+      filename: 'clientes_${_periodLabel.replaceAll(' ', '_')}',
+      headers: const ['Cliente', 'RNC', 'Visitas', 'Total', 'Ticket promedio', 'Tipo'],
+      rows: _rowsForExport(),
+      subject: 'Reporte de clientes · $_periodLabel',
+    );
+  }
+
+  Future<void> _exportPdf() async {
+    await ReportExportService.exportPdf(
+      filename: 'clientes_${_periodLabel.replaceAll(' ', '_')}',
+      title: 'Clientes',
+      subtitle: 'Periodo: $_periodLabel',
+      headers: const ['Cliente', 'RNC', 'Visitas', 'Total', 'Ticket promedio', 'Tipo'],
+      rows: _rowsForExport(),
+    );
+  }
+
+  void _applyPeriod(DetailPeriod period) {
+    if (period == DetailPeriod.initial) {
+      setState(() {
+        _period = DetailPeriod.initial;
+        _start = widget.start;
+        _end = widget.end;
+        _periodLabel = widget.periodLabel ?? 'Periodo';
+        _future = _load();
+      });
+      return;
+    }
+    final range = rangeForDetailPeriod(period, DateTime.now());
+    if (range == null) return;
+    setState(() {
+      _period = period;
+      _start = range.start;
+      _end = range.end;
+      _periodLabel = labelForDetailPeriod(period);
+      _future = _load();
+    });
+  }
+
+  Future<void> _pickCustomRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 3),
+      lastDate: now,
+      initialDateRange: _customRange ?? DateTimeRange(start: _start, end: _end.subtract(const Duration(days: 1))),
+    );
+    if (picked == null || !mounted) return;
+    final start = DateTime(picked.start.year, picked.start.month, picked.start.day);
+    final end = DateTime(picked.end.year, picked.end.month, picked.end.day).add(const Duration(days: 1));
+    setState(() {
+      _period = DetailPeriod.custom;
+      _customRange = picked;
+      _start = start;
+      _end = end;
+      _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
+      _future = _load();
+    });
   }
 
   @override
@@ -58,25 +168,19 @@ class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
       appBar: AppBar(
         title: const Text('Clientes'),
         centerTitle: false,
+        actions: [
+          ExportMenuButton(
+            enabled: _loaded.isNotEmpty,
+            onExportCsv: _exportCsv,
+            onExportPdf: _exportPdf,
+          ),
+        ],
       ),
       body: FutureBuilder<List<CustomerSummary>>(
         future: _future,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(
-              child: Padding(
-                padding: EdgeInsets.all(dpi.space(20)),
-                child: Text(
-                  'No se pudo cargar la información de clientes.',
-                  style: TextStyle(color: MangoThemeFactory.danger),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            );
-          }
+          final loading = snapshot.connectionState == ConnectionState.waiting;
+          final hasError = snapshot.hasError;
           final all = snapshot.data ?? const <CustomerSummary>[];
           final totalSpent = all.fold<double>(0, (s, c) => s + c.totalSpent);
           final totalVisits = all.fold<int>(0, (s, c) => s + c.visitCount);
@@ -107,8 +211,16 @@ class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
                 totalSpent: totalSpent,
                 totalVisits: totalVisits,
                 recurringCount: recurringCount,
-                periodLabel: widget.periodLabel,
+                periodLabel: _periodLabel,
               ),
+              PeriodFilterBar(
+                selected: _period,
+                customRange: _customRange,
+                initialLabel: widget.periodLabel,
+                onSelected: _applyPeriod,
+                onPickCustom: _pickCustomRange,
+              ),
+              SizedBox(height: dpi.space(10)),
               Padding(
                 padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16), dpi.space(8)),
                 child: TextField(
@@ -153,38 +265,56 @@ class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
               ),
               SizedBox(height: dpi.space(8)),
               Expanded(
-                child: filtered.isEmpty
-                    ? Center(
+                child: Builder(builder: (context) {
+                  if (loading) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (hasError) {
+                    return Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(dpi.space(20)),
                         child: Text(
-                          _query.isEmpty
-                              ? 'No hay clientes en este filtro.'
-                              : 'Sin resultados para "$_query".',
-                          style: Theme.of(context).textTheme.bodySmall,
+                          'No se pudo cargar la información de clientes.',
+                          style: TextStyle(color: MangoThemeFactory.danger),
+                          textAlign: TextAlign.center,
                         ),
-                      )
-                    : ListView.separated(
-                        padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16),
-                            dpi.space(16) + MediaQuery.of(context).padding.bottom),
-                        itemCount: filtered.length,
-                        separatorBuilder: (_, _) => SizedBox(height: dpi.space(8)),
-                        itemBuilder: (context, index) {
-                          final customer = filtered[index];
-                          return _CustomerTile(
-                            rank: index + 1,
-                            customer: customer,
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => CustomerDetailView(
-                                  customer: customer,
-                                  start: widget.start,
-                                  end: widget.end,
-                                  periodLabel: widget.periodLabel,
-                                ),
-                              ),
-                            ),
-                          );
-                        },
                       ),
+                    );
+                  }
+                  if (filtered.isEmpty) {
+                    return Center(
+                      child: Text(
+                        _query.isEmpty
+                            ? 'No hay clientes en este filtro.'
+                            : 'Sin resultados para "$_query".',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    );
+                  }
+                  return ListView.separated(
+                    padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16),
+                        dpi.space(16) + MediaQuery.of(context).padding.bottom),
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, _) => SizedBox(height: dpi.space(8)),
+                    itemBuilder: (context, index) {
+                      final customer = filtered[index];
+                      return _CustomerTile(
+                        rank: index + 1,
+                        customer: customer,
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => CustomerDetailView(
+                              customer: customer,
+                              start: _start,
+                              end: _end,
+                              periodLabel: _periodLabel,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                }),
               ),
             ],
           );
@@ -200,13 +330,13 @@ class _Header extends StatelessWidget {
     required this.totalSpent,
     required this.totalVisits,
     required this.recurringCount,
-    this.periodLabel,
+    required this.periodLabel,
   });
   final int customerCount;
   final double totalSpent;
   final int totalVisits;
   final int recurringCount;
-  final String? periodLabel;
+  final String periodLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -229,7 +359,7 @@ class _Header extends StatelessWidget {
               Icon(Icons.people_alt_rounded, color: Colors.white, size: dpi.icon(18)),
               SizedBox(width: dpi.space(6)),
               Text(
-                periodLabel == null ? 'Clientes' : 'Clientes · $periodLabel',
+                'Clientes · $periodLabel',
                 style: TextStyle(
                     color: Colors.white,
                     fontSize: dpi.font(12),

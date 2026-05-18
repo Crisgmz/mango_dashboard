@@ -6,48 +6,274 @@ import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/cash_register/reporte_z_pdf_builder.dart';
+import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../widgets/growth_chip.dart';
+import '../widgets/period_filter_bar.dart';
 
 /// Ventas del día - lista de todos los tickets/pagos
-class SalesDetailView extends StatelessWidget {
+class SalesDetailView extends ConsumerStatefulWidget {
   const SalesDetailView({super.key, required this.summary});
 
   final DashboardSummary summary;
 
   @override
+  ConsumerState<SalesDetailView> createState() => _SalesDetailViewState();
+}
+
+class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
+  late DateTime _start;
+  late DateTime _end;
+  late String _periodLabel;
+  DetailPeriod _period = DetailPeriod.initial;
+  DateTimeRange? _customRange;
+  String _query = '';
+
+  late List<TicketItem> _tickets;
+  late double _totalSales;
+  bool _loading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _start = widget.summary.periodStart ??
+        DateTime.now().subtract(const Duration(days: 1));
+    _end = widget.summary.periodEnd ?? DateTime.now();
+    _periodLabel = periodLabelFor(widget.summary.filter);
+    _tickets = widget.summary.tickets;
+    _totalSales = widget.summary.totalSales;
+  }
+
+  Future<void> _reload() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final businessId = widget.summary.profile.businessId;
+      final result = await ref
+          .read(dashboardDataServiceProvider)
+          .loadTicketsForPeriod(
+            businessId: businessId,
+            start: _start,
+            end: _end,
+          );
+      if (!mounted) return;
+      setState(() {
+        _tickets = result.tickets;
+        _totalSales = result.totalSales;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'No se pudo cargar las ventas.';
+      });
+    }
+  }
+
+  void _applyPeriod(DetailPeriod period) {
+    if (period == DetailPeriod.initial) {
+      setState(() {
+        _period = DetailPeriod.initial;
+        _start = widget.summary.periodStart ??
+            DateTime.now().subtract(const Duration(days: 1));
+        _end = widget.summary.periodEnd ?? DateTime.now();
+        _periodLabel = periodLabelFor(widget.summary.filter);
+      });
+      _reload();
+      return;
+    }
+    final range = rangeForDetailPeriod(period, DateTime.now());
+    if (range == null) return;
+    setState(() {
+      _period = period;
+      _start = range.start;
+      _end = range.end;
+      _periodLabel = labelForDetailPeriod(period);
+    });
+    _reload();
+  }
+
+  Future<void> _pickCustomRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 3),
+      lastDate: now,
+      initialDateRange: _customRange ??
+          DateTimeRange(start: _start, end: _end.subtract(const Duration(days: 1))),
+    );
+    if (picked == null || !mounted) return;
+    final start = DateTime(picked.start.year, picked.start.month, picked.start.day);
+    final end = DateTime(picked.end.year, picked.end.month, picked.end.day)
+        .add(const Duration(days: 1));
+    setState(() {
+      _period = DetailPeriod.custom;
+      _customRange = picked;
+      _start = start;
+      _end = end;
+      _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
+    });
+    _reload();
+  }
+
+  List<TicketItem> get _filteredTickets {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return _tickets;
+    return _tickets
+        .where((t) =>
+            t.orderId.toLowerCase().contains(q) ||
+            (t.paymentMethodCode ?? '').toLowerCase().contains(q))
+        .toList();
+  }
+
+  List<List<String>> _rowsForExport() {
+    return _filteredTickets
+        .map((t) => [
+              t.orderId,
+              _formatDateTime(t.createdAt),
+              t.paymentMethodCode ?? '',
+              t.amount.toStringAsFixed(2),
+            ])
+        .toList();
+  }
+
+  Future<void> _exportCsv() async {
+    await ReportExportService.exportCsv(
+      filename: 'ventas_${_periodLabel.replaceAll(' ', '_')}',
+      headers: const ['Orden', 'Fecha', 'Método', 'Monto'],
+      rows: _rowsForExport(),
+      subject: 'Reporte de ventas · $_periodLabel',
+    );
+  }
+
+  Future<void> _exportPdf() async {
+    await ReportExportService.exportPdf(
+      filename: 'ventas_${_periodLabel.replaceAll(' ', '_')}',
+      title: 'Ventas',
+      subtitle: 'Periodo: $_periodLabel · Total: '
+          '${MangoFormatters.currency(_totalSales)}',
+      headers: const ['Orden', 'Fecha', 'Método', 'Monto'],
+      rows: _rowsForExport(),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
-    final tickets = summary.tickets;
-
+    final tickets = _filteredTickets;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Ventas del día'),
+        title: const Text('Ventas'),
         centerTitle: false,
+        actions: [
+          ExportMenuButton(
+            enabled: _tickets.isNotEmpty,
+            onExportCsv: _exportCsv,
+            onExportPdf: _exportPdf,
+          ),
+        ],
       ),
-      body: tickets.isEmpty
-          ? Center(
-              child: Text('No hay ventas registradas.', style: Theme.of(context).textTheme.bodySmall),
-            )
-          : ListView.builder(
-              padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
-              itemCount: tickets.length + 1,
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  return _SalesSummaryHeader(summary: summary);
-                }
-                final ticket = tickets[index - 1];
-                return _TicketCard(ticket: ticket, index: index);
-              },
+      body: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                dpi.space(16), dpi.space(16), dpi.space(16), 0),
+            child: _SalesSummaryHeader(
+              totalSales: _totalSales,
+              totalTickets: tickets.length,
+              periodLabel: _periodLabel,
             ),
+          ),
+          SizedBox(height: dpi.space(12)),
+          PeriodFilterBar(
+            selected: _period,
+            customRange: _customRange,
+            initialLabel: periodLabelFor(widget.summary.filter),
+            onSelected: _applyPeriod,
+            onPickCustom: _pickCustomRange,
+            accent: MangoThemeFactory.success,
+          ),
+          SizedBox(height: dpi.space(10)),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: dpi.space(16)),
+            child: TextField(
+              onChanged: (v) => setState(() => _query = v),
+              decoration: InputDecoration(
+                hintText: 'Buscar por orden o método de pago…',
+                prefixIcon: const Icon(Icons.search_rounded),
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(
+                    horizontal: dpi.space(12), vertical: dpi.space(12)),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(dpi.radius(12))),
+              ),
+            ),
+          ),
+          SizedBox(height: dpi.space(10)),
+          Expanded(
+            child: Builder(builder: (context) {
+              if (_loading) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (_error != null) {
+                return Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(dpi.space(20)),
+                    child: Text(_error!,
+                        style: TextStyle(color: MangoThemeFactory.danger),
+                        textAlign: TextAlign.center),
+                  ),
+                );
+              }
+              if (tickets.isEmpty) {
+                return Center(
+                  child: Text(
+                    _query.isEmpty
+                        ? 'No hay ventas en este periodo.'
+                        : 'Sin resultados para "$_query".',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                );
+              }
+              return ListView.builder(
+                padding: EdgeInsets.fromLTRB(
+                    dpi.space(16),
+                    0,
+                    dpi.space(16),
+                    dpi.space(16) + MediaQuery.of(context).padding.bottom),
+                itemCount: tickets.length,
+                itemBuilder: (context, index) =>
+                    _TicketCard(ticket: tickets[index], index: index + 1),
+              );
+            }),
+          ),
+        ],
+      ),
     );
   }
 }
 
+String _formatDateTime(DateTime t) {
+  final h = t.hour.toString().padLeft(2, '0');
+  final m = t.minute.toString().padLeft(2, '0');
+  return '${t.day}/${t.month}/${t.year} $h:$m';
+}
+
 class _SalesSummaryHeader extends StatelessWidget {
-  const _SalesSummaryHeader({required this.summary});
-  final DashboardSummary summary;
+  const _SalesSummaryHeader({
+    required this.totalSales,
+    required this.totalTickets,
+    required this.periodLabel,
+  });
+  final double totalSales;
+  final int totalTickets;
+  final String periodLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -68,7 +294,7 @@ class _SalesSummaryHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Total del día',
+                  'Ventas · $periodLabel',
                   style: TextStyle(color: Colors.white70, fontSize: dpi.font(12), fontWeight: FontWeight.w500),
                 ),
                 SizedBox(height: dpi.space(4)),
@@ -76,7 +302,7 @@ class _SalesSummaryHeader extends StatelessWidget {
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    MangoFormatters.currency(summary.totalSales),
+                    MangoFormatters.currency(totalSales),
                     style: TextStyle(color: Colors.white, fontSize: dpi.font(26), fontWeight: FontWeight.w800),
                   ),
                 ),
@@ -88,7 +314,7 @@ class _SalesSummaryHeader extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                '${summary.totalTickets}',
+                '$totalTickets',
                 style: TextStyle(color: Colors.white, fontSize: dpi.font(22), fontWeight: FontWeight.w800),
               ),
               Text(
@@ -1217,29 +1443,115 @@ class _PayMethodChip extends StatelessWidget {
 }
 
 /// Lista completa de productos vendidos en el periodo seleccionado.
-class TopProductsDetailView extends StatefulWidget {
+class TopProductsDetailView extends ConsumerStatefulWidget {
   const TopProductsDetailView({super.key, required this.summary});
 
   final DashboardSummary summary;
 
   @override
-  State<TopProductsDetailView> createState() => _TopProductsDetailViewState();
+  ConsumerState<TopProductsDetailView> createState() => _TopProductsDetailViewState();
 }
 
-class _TopProductsDetailViewState extends State<TopProductsDetailView> {
+class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
   String _query = '';
   _SortMode _sort = _SortMode.amount;
+  late DateTime _start;
+  late DateTime _end;
+  late String _periodLabel;
+  DetailPeriod _period = DetailPeriod.initial;
+  DateTimeRange? _customRange;
+  late List<TopProduct> _products;
+  bool _loading = false;
+  String? _error;
 
   @override
-  Widget build(BuildContext context) {
-    final dpi = DpiScale.of(context);
-    final products = widget.summary.topProducts;
+  void initState() {
+    super.initState();
+    _start = widget.summary.periodStart ??
+        DateTime.now().subtract(const Duration(days: 1));
+    _end = widget.summary.periodEnd ?? DateTime.now();
+    _periodLabel = periodLabelFor(widget.summary.filter);
+    _products = widget.summary.topProducts;
+  }
 
+  Future<void> _reload() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final result = await ref
+          .read(dashboardDataServiceProvider)
+          .loadTopProductsForPeriod(
+            businessId: widget.summary.profile.businessId,
+            start: _start,
+            end: _end,
+          );
+      if (!mounted) return;
+      setState(() {
+        _products = result;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'No se pudo cargar los productos.';
+      });
+    }
+  }
+
+  void _applyPeriod(DetailPeriod period) {
+    if (period == DetailPeriod.initial) {
+      setState(() {
+        _period = DetailPeriod.initial;
+        _start = widget.summary.periodStart ??
+            DateTime.now().subtract(const Duration(days: 1));
+        _end = widget.summary.periodEnd ?? DateTime.now();
+        _periodLabel = periodLabelFor(widget.summary.filter);
+      });
+      _reload();
+      return;
+    }
+    final range = rangeForDetailPeriod(period, DateTime.now());
+    if (range == null) return;
+    setState(() {
+      _period = period;
+      _start = range.start;
+      _end = range.end;
+      _periodLabel = labelForDetailPeriod(period);
+    });
+    _reload();
+  }
+
+  Future<void> _pickCustomRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 3),
+      lastDate: now,
+      initialDateRange: _customRange ??
+          DateTimeRange(start: _start, end: _end.subtract(const Duration(days: 1))),
+    );
+    if (picked == null || !mounted) return;
+    final start = DateTime(picked.start.year, picked.start.month, picked.start.day);
+    final end = DateTime(picked.end.year, picked.end.month, picked.end.day)
+        .add(const Duration(days: 1));
+    setState(() {
+      _period = DetailPeriod.custom;
+      _customRange = picked;
+      _start = start;
+      _end = end;
+      _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
+    });
+    _reload();
+  }
+
+  List<TopProduct> _applyFilterAndSort(List<TopProduct> source) {
     final q = _query.trim().toLowerCase();
     final filtered = q.isEmpty
-        ? List<TopProduct>.from(products)
-        : products.where((p) => p.label.toLowerCase().contains(q)).toList();
-
+        ? List<TopProduct>.from(source)
+        : source.where((p) => p.label.toLowerCase().contains(q)).toList();
     switch (_sort) {
       case _SortMode.amount:
         filtered.sort((a, b) => b.amount.compareTo(a.amount));
@@ -1248,27 +1560,82 @@ class _TopProductsDetailViewState extends State<TopProductsDetailView> {
         filtered.sort((a, b) => b.quantity.compareTo(a.quantity));
         break;
       case _SortMode.name:
-        filtered.sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
+        filtered
+            .sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
         break;
     }
+    return filtered;
+  }
 
-    final maxAmount = products.isEmpty ? 0.0 : products.map((p) => p.amount).reduce((a, b) => a > b ? a : b);
-    final totalAmount = products.fold<double>(0, (sum, p) => sum + p.amount);
-    final totalUnits = products.fold<double>(0, (sum, p) => sum + p.quantity);
+  List<List<String>> _rowsForExport() {
+    return _applyFilterAndSort(_products)
+        .map((p) => [
+              p.label,
+              p.quantity.toStringAsFixed(p.quantity.truncateToDouble() == p.quantity ? 0 : 2),
+              p.amount.toStringAsFixed(2),
+            ])
+        .toList();
+  }
+
+  Future<void> _exportCsv() async {
+    await ReportExportService.exportCsv(
+      filename: 'productos_${_periodLabel.replaceAll(' ', '_')}',
+      headers: const ['Producto', 'Unidades', 'Ingreso'],
+      rows: _rowsForExport(),
+      subject: 'Productos más vendidos · $_periodLabel',
+    );
+  }
+
+  Future<void> _exportPdf() async {
+    await ReportExportService.exportPdf(
+      filename: 'productos_${_periodLabel.replaceAll(' ', '_')}',
+      title: 'Productos más vendidos',
+      subtitle: 'Periodo: $_periodLabel',
+      headers: const ['Producto', 'Unidades', 'Ingreso'],
+      rows: _rowsForExport(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final filtered = _applyFilterAndSort(_products);
+
+    final maxAmount = _products.isEmpty
+        ? 0.0
+        : _products.map((p) => p.amount).reduce((a, b) => a > b ? a : b);
+    final totalAmount = _products.fold<double>(0, (sum, p) => sum + p.amount);
+    final totalUnits = _products.fold<double>(0, (sum, p) => sum + p.quantity);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Todos los productos'),
+        title: const Text('Productos'),
         centerTitle: false,
+        actions: [
+          ExportMenuButton(
+            enabled: _products.isNotEmpty,
+            onExportCsv: _exportCsv,
+            onExportPdf: _exportPdf,
+          ),
+        ],
       ),
       body: Column(
         children: [
           _TopProductsHeader(
-            totalProducts: products.length,
+            totalProducts: _products.length,
             totalAmount: totalAmount,
             totalUnits: totalUnits,
-            filterLabel: _filterLabel(widget.summary),
+            filterLabel: _periodLabel,
           ),
+          PeriodFilterBar(
+            selected: _period,
+            customRange: _customRange,
+            initialLabel: periodLabelFor(widget.summary.filter),
+            onSelected: _applyPeriod,
+            onPickCustom: _pickCustomRange,
+            accent: MangoThemeFactory.mango,
+          ),
+          SizedBox(height: dpi.space(10)),
           Padding(
             padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16), dpi.space(8)),
             child: TextField(
@@ -1310,47 +1677,55 @@ class _TopProductsDetailViewState extends State<TopProductsDetailView> {
             ),
           ),
           Expanded(
-            child: filtered.isEmpty
-                ? Center(
-                    child: Text(
-                      q.isEmpty ? 'Sin productos en este periodo.' : 'Sin resultados para "$_query".',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  )
-                : ListView.separated(
-                    padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(8), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
-                    itemCount: filtered.length,
-                    separatorBuilder: (_, _) => SizedBox(height: dpi.space(10)),
-                    itemBuilder: (context, index) {
-                      final p = filtered[index];
-                      return _TopProductCard(
-                        product: p,
-                        rank: products.indexOf(p) + 1,
-                        maxAmount: maxAmount,
-                        totalAmount: totalAmount,
-                      );
-                    },
+            child: Builder(builder: (context) {
+              if (_loading) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (_error != null) {
+                return Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(dpi.space(20)),
+                    child: Text(_error!,
+                        style: TextStyle(color: MangoThemeFactory.danger),
+                        textAlign: TextAlign.center),
                   ),
+                );
+              }
+              if (filtered.isEmpty) {
+                return Center(
+                  child: Text(
+                    _query.isEmpty
+                        ? 'Sin productos en este periodo.'
+                        : 'Sin resultados para "$_query".',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                );
+              }
+              return ListView.separated(
+                padding: EdgeInsets.fromLTRB(
+                    dpi.space(16),
+                    dpi.space(8),
+                    dpi.space(16),
+                    dpi.space(16) + MediaQuery.of(context).padding.bottom),
+                itemCount: filtered.length,
+                separatorBuilder: (_, _) => SizedBox(height: dpi.space(10)),
+                itemBuilder: (context, index) {
+                  final p = filtered[index];
+                  return _TopProductCard(
+                    product: p,
+                    rank: _products.indexOf(p) + 1,
+                    maxAmount: maxAmount,
+                    totalAmount: totalAmount,
+                  );
+                },
+              );
+            }),
           ),
         ],
       ),
     );
   }
 
-  static String _filterLabel(DashboardSummary s) {
-    switch (s.filter) {
-      case SalesDateFilter.today: return 'Hoy';
-      case SalesDateFilter.yesterday: return 'Ayer';
-      case SalesDateFilter.week: return '7 días';
-      case SalesDateFilter.month: return 'Mes';
-      case SalesDateFilter.lastMonth: return 'Mes Pasado';
-      case SalesDateFilter.last3Months: return '90 días';
-      case SalesDateFilter.custom:
-        final r = s.customRange;
-        if (r == null) return 'Personalizado';
-        return '${r.start.day}/${r.start.month} - ${r.end.day}/${r.end.month}';
-    }
-  }
 }
 
 enum _SortMode { amount, quantity, name }

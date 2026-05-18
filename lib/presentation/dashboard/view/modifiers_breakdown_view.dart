@@ -5,8 +5,10 @@ import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
+import '../../../data/export/report_export_service.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../widgets/period_filter_bar.dart';
 
 /// Ranking of modifiers (extras / opciones) sold in the period: how many
 /// times each one was added and how much revenue it generated.
@@ -28,22 +30,111 @@ class ModifiersBreakdownView extends ConsumerStatefulWidget {
 
 class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView> {
   late Future<List<ModifierSummary>> _future;
+  late DateTime _start;
+  late DateTime _end;
+  late String _periodLabel;
+  DetailPeriod _period = DetailPeriod.initial;
+  DateTimeRange? _customRange;
+  String _query = '';
 
   @override
   void initState() {
     super.initState();
+    _start = widget.start;
+    _end = widget.end;
+    _periodLabel = widget.periodLabel ?? 'Periodo';
     _future = _load();
   }
+
+  List<ModifierSummary> _loaded = const [];
 
   Future<List<ModifierSummary>> _load() async {
     final profile = ref.read(authGateViewModelProvider).profile;
     final businessId = profile?.businessId;
     if (businessId == null) return const [];
-    return ref.read(dashboardDataServiceProvider).loadModifiersBreakdown(
+    final rows = await ref.read(dashboardDataServiceProvider).loadModifiersBreakdown(
           businessId: businessId,
-          start: widget.start,
-          end: widget.end,
+          start: _start,
+          end: _end,
         );
+    if (mounted) setState(() => _loaded = rows);
+    return rows;
+  }
+
+  List<List<String>> _rowsForExport() {
+    final q = _query.trim().toLowerCase();
+    final filtered = q.isEmpty
+        ? _loaded
+        : _loaded.where((m) => m.name.toLowerCase().contains(q)).toList();
+    return filtered
+        .map((m) => [
+              m.name,
+              m.count.round().toString(),
+              m.revenue.toStringAsFixed(2),
+            ])
+        .toList();
+  }
+
+  Future<void> _exportCsv() async {
+    await ReportExportService.exportCsv(
+      filename: 'modificadores_${_periodLabel.replaceAll(' ', '_')}',
+      headers: const ['Modificador', 'Usos', 'Ingreso'],
+      rows: _rowsForExport(),
+      subject: 'Reporte de modificadores · $_periodLabel',
+    );
+  }
+
+  Future<void> _exportPdf() async {
+    await ReportExportService.exportPdf(
+      filename: 'modificadores_${_periodLabel.replaceAll(' ', '_')}',
+      title: 'Modificadores',
+      subtitle: 'Periodo: $_periodLabel',
+      headers: const ['Modificador', 'Usos', 'Ingreso'],
+      rows: _rowsForExport(),
+    );
+  }
+
+  void _applyPeriod(DetailPeriod period) {
+    if (period == DetailPeriod.initial) {
+      setState(() {
+        _period = DetailPeriod.initial;
+        _start = widget.start;
+        _end = widget.end;
+        _periodLabel = widget.periodLabel ?? 'Periodo';
+        _future = _load();
+      });
+      return;
+    }
+    final range = rangeForDetailPeriod(period, DateTime.now());
+    if (range == null) return;
+    setState(() {
+      _period = period;
+      _start = range.start;
+      _end = range.end;
+      _periodLabel = labelForDetailPeriod(period);
+      _future = _load();
+    });
+  }
+
+  Future<void> _pickCustomRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 3),
+      lastDate: now,
+      initialDateRange: _customRange ?? DateTimeRange(start: _start, end: _end.subtract(const Duration(days: 1))),
+    );
+    if (picked == null || !mounted) return;
+    final start = DateTime(picked.start.year, picked.start.month, picked.start.day);
+    final end = DateTime(picked.end.year, picked.end.month, picked.end.day).add(const Duration(days: 1));
+    setState(() {
+      _period = DetailPeriod.custom;
+      _customRange = picked;
+      _start = start;
+      _end = end;
+      _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
+      _future = _load();
+    });
   }
 
   @override
@@ -53,26 +144,24 @@ class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView>
       appBar: AppBar(
         title: const Text('Modificadores'),
         centerTitle: false,
+        actions: [
+          ExportMenuButton(
+            enabled: _loaded.isNotEmpty,
+            onExportCsv: _exportCsv,
+            onExportPdf: _exportPdf,
+          ),
+        ],
       ),
       body: FutureBuilder<List<ModifierSummary>>(
         future: _future,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(
-              child: Padding(
-                padding: EdgeInsets.all(dpi.space(20)),
-                child: Text(
-                  'No se pudo cargar el reporte.',
-                  style: TextStyle(color: MangoThemeFactory.danger),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            );
-          }
-          final modifiers = snapshot.data ?? const <ModifierSummary>[];
+          final loading = snapshot.connectionState == ConnectionState.waiting;
+          final hasError = snapshot.hasError;
+          final all = snapshot.data ?? const <ModifierSummary>[];
+          final q = _query.trim().toLowerCase();
+          final modifiers = q.isEmpty
+              ? all
+              : all.where((m) => m.name.toLowerCase().contains(q)).toList();
           final totalUses = modifiers.fold<double>(0, (s, m) => s + m.count);
           final totalRevenue = modifiers.fold<double>(0, (s, m) => s + m.revenue);
           final maxRevenue = modifiers.isEmpty
@@ -81,37 +170,87 @@ class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView>
                   ? modifiers.first.count
                   : modifiers.first.revenue;
 
-          return ListView(
-            physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-            padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16),
-                dpi.space(16) + MediaQuery.of(context).padding.bottom),
+          return Column(
             children: [
-              _Header(
-                totalUses: totalUses,
-                totalRevenue: totalRevenue,
-                uniqueModifiers: modifiers.length,
-                periodLabel: widget.periodLabel,
+              Padding(
+                padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), 0),
+                child: _Header(
+                  totalUses: totalUses,
+                  totalRevenue: totalRevenue,
+                  uniqueModifiers: modifiers.length,
+                  periodLabel: _periodLabel,
+                ),
               ),
-              SizedBox(height: dpi.space(16)),
-              if (modifiers.isEmpty)
-                Padding(
-                  padding: EdgeInsets.symmetric(vertical: dpi.space(40)),
-                  child: Center(
-                    child: Text(
-                      'No se aplicaron modificadores en este periodo.',
-                      style: Theme.of(context).textTheme.bodySmall,
+              SizedBox(height: dpi.space(12)),
+              PeriodFilterBar(
+                selected: _period,
+                customRange: _customRange,
+                initialLabel: widget.periodLabel,
+                onSelected: _applyPeriod,
+                onPickCustom: _pickCustomRange,
+              ),
+              SizedBox(height: dpi.space(10)),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: dpi.space(16)),
+                child: TextField(
+                  onChanged: (v) => setState(() => _query = v),
+                  decoration: InputDecoration(
+                    hintText: 'Buscar modificador…',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(
+                        horizontal: dpi.space(12), vertical: dpi.space(12)),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(dpi.radius(12))),
+                  ),
+                ),
+              ),
+              SizedBox(height: dpi.space(10)),
+              Expanded(
+                child: Builder(builder: (context) {
+                  if (loading) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (hasError) {
+                    return Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(dpi.space(20)),
+                        child: Text(
+                          'No se pudo cargar el reporte.',
+                          style: TextStyle(color: MangoThemeFactory.danger),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    );
+                  }
+                  if (modifiers.isEmpty) {
+                    return Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(dpi.space(20)),
+                        child: Text(
+                          q.isEmpty
+                              ? 'No se aplicaron modificadores en este periodo.'
+                              : 'Sin resultados para "$_query".',
+                          style: Theme.of(context).textTheme.bodySmall,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    );
+                  }
+                  return ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+                    padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16),
+                        dpi.space(16) + MediaQuery.of(context).padding.bottom),
+                    itemCount: modifiers.length,
+                    separatorBuilder: (_, _) => SizedBox(height: dpi.space(10)),
+                    itemBuilder: (context, i) => _ModifierRow(
+                      rank: i + 1,
+                      data: modifiers[i],
+                      maxValue: maxRevenue,
                     ),
-                  ),
-                )
-              else
-                for (var i = 0; i < modifiers.length; i++) ...[
-                  _ModifierRow(
-                    rank: i + 1,
-                    data: modifiers[i],
-                    maxValue: maxRevenue,
-                  ),
-                  if (i < modifiers.length - 1) SizedBox(height: dpi.space(10)),
-                ],
+                  );
+                }),
+              ),
             ],
           );
         },
@@ -125,12 +264,12 @@ class _Header extends StatelessWidget {
     required this.totalUses,
     required this.totalRevenue,
     required this.uniqueModifiers,
-    this.periodLabel,
+    required this.periodLabel,
   });
   final double totalUses;
   final double totalRevenue;
   final int uniqueModifiers;
-  final String? periodLabel;
+  final String periodLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -151,7 +290,7 @@ class _Header extends StatelessWidget {
               Icon(Icons.tune_rounded, color: Colors.white, size: dpi.icon(18)),
               SizedBox(width: dpi.space(6)),
               Text(
-                periodLabel == null ? 'Modificadores' : 'Modificadores · $periodLabel',
+                'Modificadores · $periodLabel',
                 style: TextStyle(color: Colors.white, fontSize: dpi.font(12), fontWeight: FontWeight.w600),
               ),
             ],

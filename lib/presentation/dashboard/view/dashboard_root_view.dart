@@ -551,8 +551,6 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
     final dpi = DpiScale.of(context);
     final profile = widget.profile;
     final greeting = _greetingByTime();
-    final hasMultipleBranches = profile.memberships.where((m) => m.allowed).length > 1;
-    final canSwitch = hasMultipleBranches || _otherAccounts.isNotEmpty;
     final businessName = profile.branchName?.trim().isNotEmpty == true
         ? profile.branchName!
         : (profile.businessName ?? 'Sin nombre');
@@ -598,7 +596,7 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
         ),
         SizedBox(height: dpi.space(10)),
         InkWell(
-          onTap: canSwitch ? () => _showSelector(context) : null,
+          onTap: () => _showSelector(context),
           borderRadius: BorderRadius.circular(dpi.radius(12)),
           child: Padding(
             padding: EdgeInsets.symmetric(vertical: dpi.space(4)),
@@ -630,14 +628,12 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
                         ),
                       ),
                     ),
-                    if (canSwitch) ...[
-                      SizedBox(width: dpi.space(4)),
-                      Icon(
-                        Icons.keyboard_arrow_down_rounded,
-                        color: MangoThemeFactory.mango,
-                        size: dpi.icon(24),
-                      ),
-                    ],
+                    SizedBox(width: dpi.space(4)),
+                    Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      color: MangoThemeFactory.mango,
+                      size: dpi.icon(24),
+                    ),
                   ],
                 ),
                 SizedBox(height: dpi.space(2)),
@@ -902,24 +898,34 @@ class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorS
   final _passwordController = TextEditingController();
   String? _switchError;
 
+  // Formulario para agregar una nueva cuenta.
+  bool _showAddAccountForm = false;
+  final _newEmailController = TextEditingController();
+  final _newPasswordController = TextEditingController();
+  bool _obscureNewPassword = true;
+  bool _isAddingAccount = false;
+  String? _addAccountError;
+
   @override
   void dispose() {
     _passwordController.dispose();
+    _newEmailController.dispose();
+    _newPasswordController.dispose();
     super.dispose();
   }
 
   Future<void> _tryTokenSwitch(SavedAccount account) async {
-    setState(() { 
-      _switchingEmail = account.email; 
-      _switchError = null; 
-      _needsPasswordEmail = null; 
+    setState(() {
+      _switchingEmail = account.email;
+      _switchError = null;
+      _needsPasswordEmail = null;
     });
-    
+
     final error = await widget.onAccountSwitchByToken(account);
     if (!mounted) return;
-    
+
     if (error == null) return; // éxito, el sheet ya se cerró
-    
+
     // Si llegamos aquí, fallaron el token y el password guardado (si había)
     setState(() {
       _switchingEmail = null;
@@ -941,6 +947,25 @@ class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorS
         _switchError = error;
       });
     }
+  }
+
+  Future<void> _tryAddAccount() async {
+    final email = _newEmailController.text.trim();
+    final password = _newPasswordController.text;
+    if (email.isEmpty || password.isEmpty) {
+      setState(() => _addAccountError = 'Ingresa correo y contraseña.');
+      return;
+    }
+    setState(() {
+      _isAddingAccount = true;
+      _addAccountError = null;
+    });
+    final error = await widget.onAccountSwitchWithPassword(email, password);
+    if (!mounted) return;
+    setState(() {
+      _isAddingAccount = false;
+      _addAccountError = error;
+    });
   }
 
   @override
@@ -1043,19 +1068,19 @@ class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorS
             }),
           ],
 
-          // --- Otras cuentas guardadas ---
-          if (widget.otherAccounts.isNotEmpty) ...[
-            SizedBox(height: dpi.space(12)),
-            Text(
-              'OTRAS CUENTAS',
-              style: TextStyle(
-                fontSize: dpi.font(11),
-                fontWeight: FontWeight.w800,
-                color: MangoThemeFactory.mutedText(context),
-                letterSpacing: 1.2,
-              ),
+          // --- Otras cuentas guardadas + agregar ---
+          SizedBox(height: dpi.space(12)),
+          Text(
+            'OTRAS CUENTAS',
+            style: TextStyle(
+              fontSize: dpi.font(11),
+              fontWeight: FontWeight.w800,
+              color: MangoThemeFactory.mutedText(context),
+              letterSpacing: 1.2,
             ),
-            SizedBox(height: dpi.space(10)),
+          ),
+          SizedBox(height: dpi.space(10)),
+          if (widget.otherAccounts.isNotEmpty) ...[
             ...widget.otherAccounts.map((account) {
               final needsPassword = _needsPasswordEmail == account.email;
 
@@ -1204,10 +1229,242 @@ class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorS
             }),
           ],
 
+          // Botón / formulario para agregar nueva cuenta
+          _AddAccountSection(
+            expanded: _showAddAccountForm,
+            emailController: _newEmailController,
+            passwordController: _newPasswordController,
+            obscurePassword: _obscureNewPassword,
+            isLoading: _isAddingAccount,
+            errorText: _addAccountError,
+            onToggle: () {
+              setState(() {
+                _showAddAccountForm = !_showAddAccountForm;
+                if (!_showAddAccountForm) {
+                  _newEmailController.clear();
+                  _newPasswordController.clear();
+                  _addAccountError = null;
+                }
+              });
+            },
+            onToggleObscure: () =>
+                setState(() => _obscureNewPassword = !_obscureNewPassword),
+            onSubmit: _tryAddAccount,
+          ),
+
           SizedBox(height: dpi.space(10)),
         ],
       ),
     ));
+  }
+}
+
+class _AddAccountSection extends StatelessWidget {
+  const _AddAccountSection({
+    required this.expanded,
+    required this.emailController,
+    required this.passwordController,
+    required this.obscurePassword,
+    required this.isLoading,
+    required this.errorText,
+    required this.onToggle,
+    required this.onToggleObscure,
+    required this.onSubmit,
+  });
+
+  final bool expanded;
+  final TextEditingController emailController;
+  final TextEditingController passwordController;
+  final bool obscurePassword;
+  final bool isLoading;
+  final String? errorText;
+  final VoidCallback onToggle;
+  final VoidCallback onToggleObscure;
+  final Future<void> Function() onSubmit;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+      alignment: Alignment.topCenter,
+      child: InkWell(
+        onTap: expanded ? null : onToggle,
+        borderRadius: BorderRadius.circular(dpi.radius(16)),
+        child: Container(
+          padding: EdgeInsets.all(dpi.space(16)),
+          decoration: BoxDecoration(
+            color: expanded
+                ? MangoThemeFactory.mango.withValues(alpha: 0.05)
+                : MangoThemeFactory.cardColor(context),
+            borderRadius: BorderRadius.circular(dpi.radius(16)),
+            border: Border.all(
+              color: expanded
+                  ? MangoThemeFactory.mango.withValues(alpha: 0.5)
+                  : MangoThemeFactory.borderColor(context),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: dpi.scale(36),
+                    height: dpi.scale(36),
+                    decoration: BoxDecoration(
+                      color: MangoThemeFactory.mango.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(
+                      Icons.person_add_alt_1_rounded,
+                      color: MangoThemeFactory.mango,
+                      size: dpi.icon(20),
+                    ),
+                  ),
+                  SizedBox(width: dpi.space(14)),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Agregar nueva cuenta',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          'Inicia sesión con otro usuario',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: isLoading ? null : onToggle,
+                    icon: Icon(
+                      expanded
+                          ? Icons.expand_less_rounded
+                          : Icons.expand_more_rounded,
+                      color: MangoThemeFactory.mango,
+                      size: dpi.icon(22),
+                    ),
+                    padding: EdgeInsets.zero,
+                    constraints: BoxConstraints(
+                      minWidth: dpi.scale(32),
+                      minHeight: dpi.scale(32),
+                    ),
+                  ),
+                ],
+              ),
+              if (expanded) ...[
+                SizedBox(height: dpi.space(14)),
+                TextField(
+                  controller: emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
+                  autofillHints: const [AutofillHints.username],
+                  decoration: InputDecoration(
+                    labelText: 'Correo',
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.email_outlined, size: 20),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(dpi.radius(10)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(dpi.radius(10)),
+                      borderSide: const BorderSide(
+                          color: MangoThemeFactory.mango, width: 1.5),
+                    ),
+                  ),
+                ),
+                SizedBox(height: dpi.space(10)),
+                TextField(
+                  controller: passwordController,
+                  obscureText: obscurePassword,
+                  textInputAction: TextInputAction.done,
+                  autofillHints: const [AutofillHints.password],
+                  onSubmitted: (_) => onSubmit(),
+                  decoration: InputDecoration(
+                    labelText: 'Contraseña',
+                    isDense: true,
+                    prefixIcon:
+                        const Icon(Icons.lock_outline_rounded, size: 20),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        obscurePassword
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                        size: 20,
+                      ),
+                      onPressed: onToggleObscure,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(dpi.radius(10)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(dpi.radius(10)),
+                      borderSide: const BorderSide(
+                          color: MangoThemeFactory.mango, width: 1.5),
+                    ),
+                  ),
+                ),
+                if (errorText != null) ...[
+                  SizedBox(height: dpi.space(8)),
+                  Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.all(dpi.space(8)),
+                    decoration: BoxDecoration(
+                      color: MangoThemeFactory.danger.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(dpi.radius(8)),
+                    ),
+                    child: Text(
+                      errorText!,
+                      style: TextStyle(
+                          color: MangoThemeFactory.danger,
+                          fontSize: dpi.font(12)),
+                    ),
+                  ),
+                ],
+                SizedBox(height: dpi.space(12)),
+                SizedBox(
+                  width: double.infinity,
+                  height: dpi.scale(44),
+                  child: FilledButton(
+                    onPressed: isLoading ? null : onSubmit,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: MangoThemeFactory.mango,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(dpi.radius(10)),
+                      ),
+                    ),
+                    child: isLoading
+                        ? SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white.withValues(alpha: 0.8),
+                            ),
+                          )
+                        : Text(
+                            'Iniciar sesión',
+                            style: TextStyle(
+                              fontSize: dpi.font(14),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -3678,9 +3935,8 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                     accent: MangoThemeFactory.success,
                     label: 'Cuentas',
                     subtitle: canSwitch
-                        ? 'Cambiar de negocio o usuario'
-                        : 'Solo este negocio disponible',
-                    enabled: canSwitch,
+                        ? 'Cambiar de negocio o agregar usuario'
+                        : 'Agregar otra cuenta',
                     onTap: () => _openAccountSelector(context),
                   ),
                 ],
@@ -3749,7 +4005,6 @@ class _DrawerTile extends StatelessWidget {
     required this.label,
     required this.subtitle,
     required this.onTap,
-    this.enabled = true,
   });
 
   final IconData icon;
@@ -3757,14 +4012,13 @@ class _DrawerTile extends StatelessWidget {
   final String label;
   final String subtitle;
   final VoidCallback onTap;
-  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return InkWell(
-      onTap: enabled ? onTap : null,
+      onTap: onTap,
       child: Padding(
         padding: EdgeInsets.symmetric(
             horizontal: dpi.space(18), vertical: dpi.space(12)),
@@ -3788,9 +4042,6 @@ class _DrawerTile extends StatelessWidget {
                     label,
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
                           fontWeight: FontWeight.w700,
-                          color: enabled
-                              ? null
-                              : MangoThemeFactory.mutedText(context),
                         ),
                   ),
                   SizedBox(height: dpi.space(2)),
@@ -3806,9 +4057,8 @@ class _DrawerTile extends StatelessWidget {
                 ],
               ),
             ),
-            if (enabled)
-              Icon(Icons.chevron_right_rounded,
-                  color: MangoThemeFactory.mutedText(context)),
+            Icon(Icons.chevron_right_rounded,
+                color: MangoThemeFactory.mutedText(context)),
           ],
         ),
       ),

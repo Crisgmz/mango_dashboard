@@ -4,8 +4,14 @@
 	<dict>
 		<key>CADisableMinimumFrameDurationOnPhone</key>
 		<true/>
+		<key>ITSAppUsesNonExemptEncryption</key>
+		<false/>
+		<key>LSApplicationCategoryType</key>
+		<string>public.app-category.business</string>
 		<key>NSFaceIDUsageDescription</key>
 		<string>Usamos Face ID para iniciar sesión rápidamente en tu cuenta.</string>
+		<key>NSPhotoLibraryAddUsageDescription</key>
+		<string>Permite guardar reportes y comprobantes en tu galería.</string>
 		<key>CFBundleDevelopmentRegion</key>
 		<string>$(DEVELOPMENT_LANGUAGE)</string>
 		<key>CFBundleDisplayName</key>

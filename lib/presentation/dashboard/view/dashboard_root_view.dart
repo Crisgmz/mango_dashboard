@@ -11,11 +11,13 @@ import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/auth/admin_access_profile.dart';
 import '../../../domain/auth/saved_account.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
+import '../../auth/view/locked_view.dart';
 import '../../auth/view/login_view.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_controller.dart';
 import '../../theme/theme_data_factory.dart';
 import '../../../domain/notifications/dashboard_notification.dart';
+import '../../../data/dashboard/business_day_service.dart';
 import '../../../data/dashboard/sales_layout_service.dart';
 import '../viewmodel/cash_register_view_model.dart';
 import '../viewmodel/dashboard_data_view_model.dart';
@@ -72,12 +74,36 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    final notifier = ref.read(authGateViewModelProvider.notifier);
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      // Cuando la app va al fondo, marca el lock para que al volver
+      // exija biometría (solo aplica si la cuenta la tiene activada).
+      _maybeLock(notifier);
+      return;
+    }
     if (state == AppLifecycleState.resumed) {
       final authState = ref.read(authGateViewModelProvider);
       final profile = authState.profile;
-      if (authState.isAuthenticated && profile != null && profile.allowed) {
+      if (authState.isAuthenticated &&
+          !authState.isLocked &&
+          profile != null &&
+          profile.allowed) {
         unawaited(_refreshAll(profile));
       }
+    }
+  }
+
+  Future<void> _maybeLock(AuthGateViewModel notifier) async {
+    final authState = ref.read(authGateViewModelProvider);
+    final email = authState.profile?.email;
+    if (!authState.isAuthenticated || email == null || email.isEmpty) return;
+    final accounts =
+        await ref.read(savedAccountsServiceProvider).loadAccounts();
+    final account = accounts.where((a) => a.email == email).firstOrNull;
+    if (account?.biometricEnabled == true) {
+      notifier.lock();
     }
   }
 
@@ -187,6 +213,10 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
     final profile = authState.profile;
     if (profile == null || !profile.allowed) {
       return AccessDeniedView(profile: profile, themeMode: themeMode);
+    }
+
+    if (authState.isLocked) {
+      return LockedView(userName: profile.userName);
     }
 
     if (_loadedBusinessId != profile.businessId) {
@@ -489,6 +519,35 @@ class HomeView extends StatelessWidget {
   }
 }
 
+/// Muestra un SnackBar describiendo por qué falló el gate biométrico al
+/// cambiar de negocio. Recibe el [messenger] directo en vez de un context
+/// porque el widget originario puede haberse desmontado durante el switch
+/// (drawer cerrado, auto-lock, etc.) — tomar el messenger antes del await
+/// evita StateError por usar `ref`/context disposed.
+void _showBiometricFailureWithMessenger(
+    ScaffoldMessengerState? messenger, String code) {
+  if (messenger == null) return;
+  String message;
+  switch (code) {
+    case 'BIO_LOCKED':
+      message = 'Biometría bloqueada. Desbloquéala con tu código y vuelve a intentar.';
+      break;
+    case 'BIO_MISSING':
+      message = 'No hay biometría enrolada en este dispositivo.';
+      break;
+    case 'BIO_FAILED':
+      message = 'No pudimos verificar tu identidad. Inténtalo de nuevo.';
+      break;
+    case 'NO_CHANGE':
+      return; // silencioso — el switch no aplicó por otra razón.
+    default:
+      message = 'No se pudo cambiar de negocio.';
+  }
+  messenger.showSnackBar(
+    SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+  );
+}
+
 class _HomeHeader extends ConsumerStatefulWidget {
   const _HomeHeader({required this.profile});
 
@@ -655,6 +714,11 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
   }
 
   void _showSelector(BuildContext context) {
+    // Capturamos el notifier y el messenger acá. Si el switch dispara
+    // auto-lock, _HomeHeaderState se dispone mientras el callback corre y
+    // usar `ref` después de eso lanza StateError.
+    final notifier = ref.read(authGateViewModelProvider.notifier);
+    final rootMessenger = ScaffoldMessenger.maybeOf(context);
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -662,21 +726,23 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
       builder: (ctx) => _BusinessAccountSelectorSheet(
         profile: widget.profile,
         otherAccounts: _otherAccounts,
-        onBranchSelected: (id) {
-          Navigator.pop(ctx);
-          ref.read(authGateViewModelProvider.notifier).switchBusiness(id);
+        onBranchSelected: (id) async {
+          final err = await notifier.switchBusiness(id);
+          if (!ctx.mounted) return;
+          if (err == null) {
+            Navigator.pop(ctx);
+          } else {
+            _showBiometricFailureWithMessenger(rootMessenger, err);
+          }
         },
         onAccountSwitchByToken: (account) async {
-          final error = await ref
-              .read(authGateViewModelProvider.notifier)
-              .switchAccountByToken(account);
+          final error = await notifier.switchAccountByToken(account);
           if (error == null && ctx.mounted) Navigator.pop(ctx);
           return error;
         },
         onAccountSwitchWithPassword: (email, password) async {
-          final error = await ref
-              .read(authGateViewModelProvider.notifier)
-              .switchAccountWithPassword(email: email, password: password);
+          final error = await notifier.switchAccountWithPassword(
+              email: email, password: password);
           if (error == null && ctx.mounted) Navigator.pop(ctx);
           return error;
         },
@@ -924,13 +990,15 @@ class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorS
     final error = await widget.onAccountSwitchByToken(account);
     if (!mounted) return;
 
-    if (error == null) return; // éxito, el sheet ya se cerró
-
-    // Si llegamos aquí, fallaron el token y el password guardado (si había)
+    // Siempre limpiamos el spinner. Si error == null el padre debería haber
+    // hecho pop del sheet, pero si por alguna razón no lo hizo (rebuild,
+    // race con el auto-lock, etc.) no queremos que el spinner quede colgado.
     setState(() {
       _switchingEmail = null;
-      _needsPasswordEmail = account.email;
-      _switchError = 'Sesión expirada.';
+      if (error != null) {
+        _needsPasswordEmail = account.email;
+        _switchError = 'Sesión expirada.';
+      }
     });
   }
 
@@ -972,16 +1040,26 @@ class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorS
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     final allowedBranches = widget.profile.memberships.where((m) => m.allowed).toList();
+    // viewInsets.bottom = altura del teclado cuando está abierto. Lo sumamos
+    // al padding para que el contenido nunca quede tapado y se pueda scrollear
+    // si el teclado no deja espacio suficiente.
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
 
     return SafeArea(
       top: false,
-      child: Container(
-      padding: EdgeInsets.all(dpi.space(22)),
+      child: Padding(
+        padding: EdgeInsets.only(bottom: keyboardInset),
+        child: Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.9,
+          ),
       decoration: BoxDecoration(
         color: Theme.of(context).scaffoldBackgroundColor,
         borderRadius: BorderRadius.vertical(top: Radius.circular(dpi.radius(28))),
       ),
-      child: Column(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.all(dpi.space(22)),
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1255,7 +1333,10 @@ class _BusinessAccountSelectorSheetState extends State<_BusinessAccountSelectorS
           SizedBox(height: dpi.space(10)),
         ],
       ),
-    ));
+      ),
+        ),
+      ),
+    );
   }
 }
 
@@ -3770,6 +3851,11 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
   }
 
   void _openAccountSelector(BuildContext context) {
+    // Capturamos el notifier ANTES del pop del drawer. Sin esto, los callbacks
+    // del modal tocan `ref` desde un _MainDrawerState ya disposed cuando el
+    // drawer se cierra, y truena con StateError.
+    final notifier = ref.read(authGateViewModelProvider.notifier);
+    final rootMessenger = ScaffoldMessenger.maybeOf(context);
     Navigator.of(context).pop();
     showModalBottomSheet(
       context: context,
@@ -3778,21 +3864,23 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
       builder: (ctx) => _BusinessAccountSelectorSheet(
         profile: widget.profile,
         otherAccounts: _otherAccounts,
-        onBranchSelected: (id) {
-          Navigator.pop(ctx);
-          ref.read(authGateViewModelProvider.notifier).switchBusiness(id);
+        onBranchSelected: (id) async {
+          final err = await notifier.switchBusiness(id);
+          if (!ctx.mounted) return;
+          if (err == null) {
+            Navigator.pop(ctx);
+          } else {
+            _showBiometricFailureWithMessenger(rootMessenger, err);
+          }
         },
         onAccountSwitchByToken: (account) async {
-          final error = await ref
-              .read(authGateViewModelProvider.notifier)
-              .switchAccountByToken(account);
+          final error = await notifier.switchAccountByToken(account);
           if (error == null && ctx.mounted) Navigator.pop(ctx);
           return error;
         },
         onAccountSwitchWithPassword: (email, password) async {
-          final error = await ref
-              .read(authGateViewModelProvider.notifier)
-              .switchAccountWithPassword(email: email, password: password);
+          final error = await notifier.switchAccountWithPassword(
+              email: email, password: password);
           if (error == null && ctx.mounted) Navigator.pop(ctx);
           return error;
         },
@@ -4181,6 +4269,12 @@ class SettingsView extends ConsumerWidget {
 
         _BiometricSection(profile: profile),
 
+        SizedBox(height: dpi.space(32)),
+        _SettingsHeader(title: 'Día operativo'),
+        SizedBox(height: dpi.space(12)),
+
+        _BusinessDayCutoffSection(profile: profile, onChanged: onRefresh),
+
         SizedBox(height: dpi.space(40)),
       ],
       ),
@@ -4358,63 +4452,487 @@ class _BiometricSectionState extends ConsumerState<_BiometricSection> {
                 .firstOrNull;
             final enabled = current?.biometricEnabled ?? false;
             final canToggle = current != null && !_busy;
+            final isFaceId = label.toLowerCase().contains('face');
+            final iconData =
+                isFaceId ? Icons.face_rounded : Icons.fingerprint_rounded;
 
             return Container(
               padding: EdgeInsets.all(dpi.space(16)),
               decoration: BoxDecoration(
                 color: MangoThemeFactory.cardColor(context),
                 borderRadius: BorderRadius.circular(dpi.radius(20)),
-                border: Border.all(color: MangoThemeFactory.borderColor(context)),
+                border: Border.all(
+                  color: enabled
+                      ? MangoThemeFactory.mango.withValues(alpha: 0.4)
+                      : MangoThemeFactory.borderColor(context),
+                ),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: dpi.scale(44),
-                    height: dpi.scale(44),
-                    decoration: BoxDecoration(
-                      color: MangoThemeFactory.mango.withValues(alpha: isDark ? 0.2 : 0.12),
-                      borderRadius: BorderRadius.circular(dpi.radius(12)),
-                    ),
-                    child: Icon(Icons.fingerprint_rounded, color: MangoThemeFactory.mango, size: dpi.icon(24)),
-                  ),
-                  SizedBox(width: dpi.space(12)),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Iniciar sesión con $label',
-                          style: TextStyle(fontSize: dpi.font(14), fontWeight: FontWeight.w700),
+                  Row(
+                    children: [
+                      Container(
+                        width: dpi.scale(44),
+                        height: dpi.scale(44),
+                        decoration: BoxDecoration(
+                          color: MangoThemeFactory.mango
+                              .withValues(alpha: isDark ? 0.2 : 0.12),
+                          borderRadius: BorderRadius.circular(dpi.radius(12)),
                         ),
-                        SizedBox(height: dpi.space(2)),
-                        Text(
-                          enabled
-                              ? 'Activado para esta cuenta. Toca tu cuenta en la pantalla de inicio para entrar con $label.'
-                              : 'Confirma tu identidad rápidamente sin escribir tu contraseña.',
-                          style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
+                        child: Icon(iconData,
+                            color: MangoThemeFactory.mango,
+                            size: dpi.icon(24)),
+                      ),
+                      SizedBox(width: dpi.space(12)),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Acceso con $label',
+                              style: TextStyle(
+                                  fontSize: dpi.font(14),
+                                  fontWeight: FontWeight.w700),
+                            ),
+                            SizedBox(height: dpi.space(2)),
+                            Text(
+                              enabled
+                                  ? 'Activado para ${widget.profile.email ?? "esta cuenta"}.'
+                                  : 'Protege tu cuenta con $label.',
+                              style: TextStyle(
+                                fontSize: dpi.font(11),
+                                color: MangoThemeFactory.mutedText(context),
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
+                      SizedBox(width: dpi.space(8)),
+                      if (_busy)
+                        SizedBox(
+                          width: dpi.scale(20),
+                          height: dpi.scale(20),
+                          child:
+                              const CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      else
+                        Switch(
+                          value: enabled,
+                          onChanged:
+                              canToggle ? (v) => _toggle(v, current) : null,
+                          activeThumbColor: MangoThemeFactory.mango,
+                        ),
+                    ],
+                  ),
+                  SizedBox(height: dpi.space(14)),
+                  Divider(
+                    height: 1,
+                    color: MangoThemeFactory.borderColor(context)
+                        .withValues(alpha: 0.5),
+                  ),
+                  SizedBox(height: dpi.space(12)),
+                  Text(
+                    enabled ? 'Se pedirá $label para:' : 'Al activarlo, se pedirá $label para:',
+                    style: TextStyle(
+                      fontSize: dpi.font(11),
+                      fontWeight: FontWeight.w700,
+                      color: MangoThemeFactory.mutedText(context),
+                      letterSpacing: 0.4,
                     ),
                   ),
-                  SizedBox(width: dpi.space(8)),
-                  if (_busy)
-                    SizedBox(
-                      width: dpi.scale(20),
-                      height: dpi.scale(20),
-                      child: const CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  else
-                    Switch(
-                      value: enabled,
-                      onChanged: canToggle ? (v) => _toggle(v, current) : null,
-                      activeThumbColor: MangoThemeFactory.mango,
+                  SizedBox(height: dpi.space(10)),
+                  _BiometricFeatureRow(
+                    icon: Icons.login_rounded,
+                    text: 'Iniciar sesión sin escribir tu contraseña.',
+                    active: enabled,
+                  ),
+                  SizedBox(height: dpi.space(8)),
+                  _BiometricFeatureRow(
+                    icon: Icons.lock_open_rounded,
+                    text: 'Desbloquear la app al abrir o volver del fondo.',
+                    active: enabled,
+                  ),
+                  SizedBox(height: dpi.space(8)),
+                  _BiometricFeatureRow(
+                    icon: Icons.swap_horiz_rounded,
+                    text: 'Cambiar de negocio o sucursal.',
+                    active: enabled,
+                  ),
+                  if (!enabled && current == null) ...[
+                    SizedBox(height: dpi.space(12)),
+                    Container(
+                      padding: EdgeInsets.all(dpi.space(10)),
+                      decoration: BoxDecoration(
+                        color: MangoThemeFactory.warning.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(dpi.radius(8)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline_rounded,
+                              size: dpi.icon(16),
+                              color: MangoThemeFactory.warning),
+                          SizedBox(width: dpi.space(8)),
+                          Expanded(
+                            child: Text(
+                              'Inicia sesión con tu contraseña al menos una vez antes de activar $label.',
+                              style: TextStyle(
+                                fontSize: dpi.font(11),
+                                color: MangoThemeFactory.textColor(context),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
+                  ],
                 ],
               ),
             );
           },
         );
       },
+    );
+  }
+}
+
+class _BiometricFeatureRow extends StatelessWidget {
+  const _BiometricFeatureRow({
+    required this.icon,
+    required this.text,
+    required this.active,
+  });
+
+  final IconData icon;
+  final String text;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final color = active
+        ? MangoThemeFactory.success
+        : MangoThemeFactory.mutedText(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: dpi.scale(22),
+          height: dpi.scale(22),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.12),
+            shape: BoxShape.circle,
+          ),
+          alignment: Alignment.center,
+          child: Icon(
+            active ? Icons.check_rounded : icon,
+            size: dpi.icon(14),
+            color: color,
+          ),
+        ),
+        SizedBox(width: dpi.space(10)),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: dpi.font(12),
+              color: MangoThemeFactory.textColor(context),
+              height: 1.35,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BusinessDayCutoffSection extends ConsumerStatefulWidget {
+  const _BusinessDayCutoffSection({
+    required this.profile,
+    required this.onChanged,
+  });
+
+  final AdminAccessProfile profile;
+  final Future<void> Function() onChanged;
+
+  @override
+  ConsumerState<_BusinessDayCutoffSection> createState() =>
+      _BusinessDayCutoffSectionState();
+}
+
+class _BusinessDayCutoffSectionState
+    extends ConsumerState<_BusinessDayCutoffSection> {
+  int? _hour;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _BusinessDayCutoffSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.profile.businessId != widget.profile.businessId) {
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    final hour = await ref
+        .read(businessDayServiceProvider)
+        .loadCutoffHour(widget.profile.businessId);
+    if (!mounted) return;
+    setState(() => _hour = hour);
+  }
+
+  Future<void> _save(int newHour) async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _hour = newHour;
+    });
+    await ref
+        .read(businessDayServiceProvider)
+        .saveCutoffHour(widget.profile.businessId, newHour);
+    // Refresca el dashboard para que el cambio se vea inmediatamente.
+    await widget.onChanged();
+    if (!mounted) return;
+    setState(() => _saving = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Hora de corte: ${_formatHour(newHour)}.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _openPicker() async {
+    final current = _hour ?? BusinessDayService.defaultCutoffHour;
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => _CutoffHourPickerSheet(initialHour: current),
+    );
+    if (picked != null && picked != current) {
+      await _save(picked);
+    }
+  }
+
+  static String _formatHour(int hour) {
+    final h = hour % 12 == 0 ? 12 : hour % 12;
+    final suffix = hour < 12 ? 'AM' : 'PM';
+    return '$h:00 $suffix';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hour = _hour;
+
+    return Container(
+      padding: EdgeInsets.all(dpi.space(16)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.cardColor(context),
+        borderRadius: BorderRadius.circular(dpi.radius(20)),
+        border:
+            Border.all(color: MangoThemeFactory.borderColor(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: dpi.scale(44),
+                height: dpi.scale(44),
+                decoration: BoxDecoration(
+                  color: MangoThemeFactory.info
+                      .withValues(alpha: isDark ? 0.2 : 0.12),
+                  borderRadius: BorderRadius.circular(dpi.radius(12)),
+                ),
+                child: Icon(Icons.schedule_rounded,
+                    color: MangoThemeFactory.info, size: dpi.icon(24)),
+              ),
+              SizedBox(width: dpi.space(12)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Hora de inicio del día',
+                      style: TextStyle(
+                        fontSize: dpi.font(14),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: dpi.space(2)),
+                    Text(
+                      '"Hoy" y "Ayer" empiezan a esta hora — los turnos que cruzan medianoche siguen contando como el mismo día.',
+                      style: TextStyle(
+                        fontSize: dpi.font(11),
+                        color: MangoThemeFactory.mutedText(context),
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: dpi.space(14)),
+          InkWell(
+            onTap: hour == null || _saving ? null : _openPicker,
+            borderRadius: BorderRadius.circular(dpi.radius(12)),
+            child: Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: dpi.space(14), vertical: dpi.space(12)),
+              decoration: BoxDecoration(
+                color: MangoThemeFactory.mango.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(dpi.radius(12)),
+                border: Border.all(
+                  color: MangoThemeFactory.mango.withValues(alpha: 0.3),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.access_time_rounded,
+                      color: MangoThemeFactory.mango, size: dpi.icon(20)),
+                  SizedBox(width: dpi.space(10)),
+                  Expanded(
+                    child: Text(
+                      hour == null
+                          ? 'Cargando…'
+                          : _formatHour(hour),
+                      style: TextStyle(
+                        fontSize: dpi.font(15),
+                        fontWeight: FontWeight.w800,
+                        color: MangoThemeFactory.mango,
+                      ),
+                    ),
+                  ),
+                  if (_saving)
+                    SizedBox(
+                      width: dpi.scale(16),
+                      height: dpi.scale(16),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: MangoThemeFactory.mango,
+                      ),
+                    )
+                  else
+                    Icon(Icons.edit_rounded,
+                        color: MangoThemeFactory.mango,
+                        size: dpi.icon(18)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CutoffHourPickerSheet extends StatelessWidget {
+  const _CutoffHourPickerSheet({required this.initialHour});
+
+  final int initialHour;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return SafeArea(
+      top: false,
+      child: Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.7,
+        ),
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius:
+              BorderRadius.vertical(top: Radius.circular(dpi.radius(28))),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: EdgeInsets.all(dpi.space(22)),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Hora de corte',
+                      style: Theme.of(context).textTheme.titleLarge),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: EdgeInsets.symmetric(horizontal: dpi.space(16)),
+                itemCount: 24,
+                itemBuilder: (ctx, i) {
+                  final selected = i == initialHour;
+                  return Padding(
+                    padding: EdgeInsets.only(bottom: dpi.space(6)),
+                    child: InkWell(
+                      onTap: () => Navigator.pop(ctx, i),
+                      borderRadius: BorderRadius.circular(dpi.radius(12)),
+                      child: Container(
+                        padding: EdgeInsets.symmetric(
+                            horizontal: dpi.space(16),
+                            vertical: dpi.space(14)),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? MangoThemeFactory.mango.withValues(alpha: 0.12)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(dpi.radius(12)),
+                          border: Border.all(
+                            color: selected
+                                ? MangoThemeFactory.mango
+                                : MangoThemeFactory.borderColor(context),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _BusinessDayCutoffSectionState._formatHour(i),
+                                style: TextStyle(
+                                  fontSize: dpi.font(14),
+                                  fontWeight: selected
+                                      ? FontWeight.w800
+                                      : FontWeight.w500,
+                                  color: selected
+                                      ? MangoThemeFactory.mango
+                                      : null,
+                                ),
+                              ),
+                            ),
+                            if (selected)
+                              Icon(Icons.check_rounded,
+                                  color: MangoThemeFactory.mango,
+                                  size: dpi.icon(20)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            SizedBox(height: dpi.space(10)),
+          ],
+        ),
+      ),
     );
   }
 }

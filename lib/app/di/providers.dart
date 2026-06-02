@@ -5,6 +5,7 @@ import '../../core/auth/biometric_auth_service.dart';
 import '../../data/auth/admin_access_service.dart';
 import '../../data/auth/saved_accounts_service.dart';
 import '../../data/cash_register/cash_register_data_service.dart';
+import '../../data/dashboard/business_day_service.dart';
 import '../../data/dashboard/dashboard_data_service.dart';
 import '../../data/dashboard/dashboard_summary_cache.dart';
 import '../../data/dashboard/sales_layout_service.dart';
@@ -31,6 +32,12 @@ final dashboardSummaryCacheProvider = Provider<DashboardSummaryCache>((ref) {
 
 final salesLayoutServiceProvider = Provider<SalesLayoutService>((ref) {
   return SalesLayoutService();
+});
+
+/// Servicio que persiste la hora de corte del día operativo por negocio.
+/// Determina dónde empieza "Hoy" y "Ayer" en el dashboard (default: 5 AM).
+final businessDayServiceProvider = Provider<BusinessDayService>((ref) {
+  return BusinessDayService();
 });
 
 final inventoryDataServiceProvider = Provider<InventoryDataService>((ref) {

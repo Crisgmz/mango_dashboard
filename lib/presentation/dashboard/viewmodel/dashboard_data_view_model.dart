@@ -111,11 +111,17 @@ class DashboardDataViewModel extends StateNotifier<DashboardDataState> {
     }
 
     try {
+      // Lee la hora de corte del día operativo para este negocio (usado por
+      // los filtros Hoy/Ayer). Default 5 AM si no hay nada guardado.
+      final cutoffHour = await _ref
+          .read(businessDayServiceProvider)
+          .loadCutoffHour(profile.businessId);
       final summary = await _ref.read(dashboardDataServiceProvider).loadSummary(
         profile,
         filter: filter,
         customRange: customRange,
         liteMode: liteMode,
+        businessDayStartHour: cutoffHour,
       );
       _retryCount = 0;
 

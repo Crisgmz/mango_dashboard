@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/di/providers.dart';
+import '../../../core/auth/biometric_auth_service.dart';
 import '../../../domain/auth/admin_access_profile.dart';
 import '../../../domain/auth/saved_account.dart';
 
@@ -13,24 +14,31 @@ class AuthGateState {
     required this.isAuthenticated,
     required this.profile,
     required this.error,
+    this.isLocked = false,
   });
 
   const AuthGateState.initial()
     : isLoading = true,
       isAuthenticated = false,
       profile = null,
-      error = null;
+      error = null,
+      isLocked = false;
 
   final bool isLoading;
   final bool isAuthenticated;
   final AdminAccessProfile? profile;
   final String? error;
 
+  /// True cuando la sesión está activa pero la app exige una verificación
+  /// biométrica para mostrar contenido (auto-lock al abrir / volver del fondo).
+  final bool isLocked;
+
   AuthGateState copyWith({
     bool? isLoading,
     bool? isAuthenticated,
     AdminAccessProfile? profile,
     String? error,
+    bool? isLocked,
     bool clearError = false,
   }) {
     return AuthGateState(
@@ -38,15 +46,22 @@ class AuthGateState {
       isAuthenticated: isAuthenticated ?? this.isAuthenticated,
       profile: profile ?? this.profile,
       error: clearError ? null : (error ?? this.error),
+      isLocked: isLocked ?? this.isLocked,
     );
   }
 }
 
 class AuthGateViewModel extends StateNotifier<AuthGateState> {
   AuthGateViewModel(this._ref) : super(const AuthGateState.initial()) {
-    _subscription = _ref.read(adminAccessServiceProvider).authStates().listen((_) {
-      bootstrap();
-    });
+    _subscription = _ref.read(adminAccessServiceProvider).authStates().listen(
+      (_) => bootstrap(),
+      // Supabase's auth client also notifies exceptions through this stream
+      // (e.g. recoverSession failures with corrupt cached sessions). Sin un
+      // onError aquí, esos errores se convierten en uncaught exceptions y
+      // tumban runtime. Re-corremos bootstrap para que la UI recupere un
+      // estado coherente (probablemente termine en login).
+      onError: (_) => bootstrap(),
+    );
   }
 
   final Ref _ref;
@@ -91,11 +106,21 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
         }
       }
       _retryCount = 0;
+
+      // Auto-lock: si la cuenta tiene biometría activada y venimos de un
+      // signIn fresco no la bloqueamos (el usuario ya se autenticó con
+      // contraseña/biometría en ese flujo). En cualquier otro caso —arranque
+      // con sesión persistida o resume del fondo— exigimos verificación.
+      final shouldLock = profile != null &&
+          _pendingPasswordForSave == null &&
+          await _isBiometricEnabledFor(profile.email);
+
       state = AuthGateState(
         isLoading: false,
         isAuthenticated: true,
         profile: profile,
         error: profile == null ? 'No se pudo resolver el negocio o rol del usuario.' : null,
+        isLocked: shouldLock,
       );
     } catch (e) {
       final errorStr = e.toString();
@@ -234,6 +259,10 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
         }
         return null;
       }
+      // La sesión serializada falló — probablemente quedó stale o corrupta
+      // tras un upgrade de schema. Limpiamos esos campos del SavedAccount
+      // para no volver a entrar en el mismo camino fallido en el próximo tap.
+      await _clearStaleSerializedSession(account);
     }
 
     // 2. Network refresh via refresh token.
@@ -265,6 +294,12 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
   /// Intenta cambiar a una cuenta con contraseña. Si falla la contraseña,
   /// la sesión actual NO se pierde (Supabase solo reemplaza sesión en éxito).
   Future<String?> switchAccountWithPassword({required String email, required String password}) async {
+    // Igual que en [signIn]: marcamos la contraseña como "recién verificada"
+    // para que el bootstrap subsiguiente (disparado por la suscripción de
+    // Supabase o por nuestro await abajo) NO dispare auto-lock — el usuario
+    // acaba de autenticarse manualmente, pedir biometría inmediatamente
+    // sería redundante.
+    _pendingPasswordForSave = password;
     try {
       await _ref.read(adminAccessServiceProvider).signIn(email: email, password: password);
       final profile = await _ref.read(adminAccessServiceProvider).resolveCurrentAccess();
@@ -277,24 +312,117 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
       return _friendlyAuthError(e);
     } catch (e) {
       return _friendlyNetworkError(e);
+    } finally {
+      _pendingPasswordForSave = null;
     }
   }
 
-  Future<void> switchBusiness(String businessId) async {
+  /// Cambia de negocio. Si la cuenta tiene biometría activada, exige una
+  /// verificación previa antes de cambiar — el dashboard de cada sucursal
+  /// puede mostrar datos de otra (caja, ventas, RNCs), así que reusamos el
+  /// mismo gate biométrico que protege el auto-lock.
+  ///
+  /// Devuelve null en éxito, o un código de error:
+  ///  - 'BIO_FAILED'   → biometría falló / cancelada
+  ///  - 'BIO_LOCKED'   → biometría bloqueada por el sistema
+  ///  - 'NO_CHANGE'    → switch falló (ya estabas ahí o no permitido)
+  Future<String?> switchBusiness(String businessId) async {
     final profile = state.profile;
-    if (profile == null) return;
+    if (profile == null) return 'NO_CHANGE';
+
+    if (await _isBiometricEnabledFor(profile.email)) {
+      final gate = await _runBiometricGate(
+        reason: 'Confirma tu identidad para cambiar de negocio',
+      );
+      if (gate != null) return gate;
+    }
+
     final next = await _ref.read(adminAccessServiceProvider).switchBusiness(
       current: profile,
       businessId: businessId,
     );
-    if (next == null) return;
-    
+    if (next == null) return 'NO_CHANGE';
+
     // Preservar la cuenta guardada con su password si existe
     final oldAccounts = await _ref.read(savedAccountsServiceProvider).loadAccounts();
     final currentSaved = oldAccounts.where((a) => a.email == next.email).firstOrNull;
-    
+
     await _saveCurrentAccount(next, password: currentSaved?.password);
     state = state.copyWith(profile: next);
+    return null;
+  }
+
+  /// Bloquea la app exigiendo biometría para volver a verla. Llamado al
+  /// volver del fondo cuando la cuenta tiene biometría activada.
+  void lock() {
+    if (!state.isAuthenticated || state.isLocked) return;
+    state = state.copyWith(isLocked: true);
+  }
+
+  /// Intenta desbloquear con biometría. Devuelve null en éxito o un código
+  /// para que la UI muestre un mensaje:
+  ///  - 'BIO_FAILED'  → falló o cancelada (botón "Reintentar")
+  ///  - 'BIO_LOCKED'  → biometría bloqueada por el sistema
+  ///  - 'BIO_MISSING' → ya no hay biometría enrolada (caer a logout)
+  Future<String?> unlock() async {
+    final gate = await _runBiometricGate(
+      reason: 'Confirma tu identidad para acceder al dashboard',
+    );
+    if (gate != null) return gate;
+    state = state.copyWith(isLocked: false);
+    return null;
+  }
+
+  Future<String?> _runBiometricGate({required String reason}) async {
+    final biometric = _ref.read(biometricAuthServiceProvider);
+    final available = await biometric.isAvailable();
+    if (!available) return 'BIO_MISSING';
+    final result = await biometric.authenticate(reason: reason);
+    switch (result) {
+      case BiometricResult.success:
+        return null;
+      case BiometricResult.lockedOut:
+        return 'BIO_LOCKED';
+      case BiometricResult.notEnrolled:
+      case BiometricResult.notAvailable:
+        return 'BIO_MISSING';
+      case BiometricResult.cancelled:
+      case BiometricResult.failed:
+      case BiometricResult.error:
+        return 'BIO_FAILED';
+    }
+  }
+
+  /// Borra el `serializedSession` y `accessTokenExpiresAt` de un SavedAccount
+  /// que falló al restaurarse. Best-effort — un fallo aquí no rompe el login.
+  Future<void> _clearStaleSerializedSession(SavedAccount account) async {
+    try {
+      final savedService = _ref.read(savedAccountsServiceProvider);
+      await savedService.updateAccount(SavedAccount(
+        email: account.email,
+        displayName: account.displayName,
+        businessName: account.businessName,
+        refreshToken: account.refreshToken,
+        password: account.password,
+        biometricEnabled: account.biometricEnabled,
+        // serializedSession y accessTokenExpiresAt quedan null a propósito.
+      ));
+    } catch (_) {
+      // Si SharedPreferences falla, ni modo — el siguiente intento volverá a
+      // pasar por aquí y se reintentará. No queremos que esto bloquee el flujo.
+    }
+  }
+
+  Future<bool> _isBiometricEnabledFor(String? email) async {
+    if (email == null || email.isEmpty) return false;
+    try {
+      final accounts =
+          await _ref.read(savedAccountsServiceProvider).loadAccounts();
+      final account = accounts.where((a) => a.email == email).firstOrNull;
+      return account?.biometricEnabled ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> signOut() async {

@@ -159,13 +159,39 @@ class AdminAccessService {
 
   /// Restores a previously serialized session JSON without a network round-trip
   /// when the access token is still valid. Returns true on success.
+  ///
+  /// Pre-valida el JSON antes de llamar a `recoverSession` porque cuando le
+  /// pasamos basura, el SDK emite el error tanto por excepción (que sí
+  /// atrapamos) como por su stream `onAuthStateChange`, donde puede aterrizar
+  /// como uncaught exception. Validar arriba elimina ese segundo camino.
   Future<bool> recoverSerializedSession(String serializedJson) async {
+    if (!_looksLikeValidSession(serializedJson)) return false;
     try {
       final response = await _client.auth.recoverSession(serializedJson);
       final session = response.session;
       if (session == null) return false;
       // If the recovered access token is still valid, no network was needed.
       // The Supabase SDK will lazily refresh on next API call if expired.
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Sanity-check: ¿este string parece un Session JSON serializado válido?
+  /// Lo que necesita Supabase: access_token, refresh_token, expires_in y
+  /// un objeto user con id. Si falta alguno, no llamamos al SDK.
+  bool _looksLikeValidSession(String serializedJson) {
+    try {
+      final data = jsonDecode(serializedJson);
+      if (data is! Map<String, dynamic>) return false;
+      final accessToken = data['access_token'];
+      final refreshToken = data['refresh_token'];
+      final user = data['user'];
+      if (accessToken is! String || accessToken.isEmpty) return false;
+      if (refreshToken is! String || refreshToken.isEmpty) return false;
+      if (user is! Map<String, dynamic>) return false;
+      if (user['id'] is! String) return false;
       return true;
     } catch (_) {
       return false;

@@ -34,28 +34,45 @@ class DashboardDataService {
 
   /// Loads dashboard data. Set [liteMode] to true to skip catalog, active orders,
   /// closed orders, and previous-period comparison — useful for the sales-only view.
+  ///
+  /// [businessDayStartHour] (0–23, default 5) define la hora local en que
+  /// arranca el "día operativo" para los filtros [SalesDateFilter.today] y
+  /// [SalesDateFilter.yesterday]. Permite que un turno que cruza medianoche
+  /// (ej. 4 PM → 2 AM) siga contando como ventas del mismo día.
   Future<DashboardSummary> loadSummary(AdminAccessProfile profile, {
     SalesDateFilter filter = SalesDateFilter.month,
     DateTimeRange? customRange,
     bool liteMode = false,
+    int businessDayStartHour = 5,
   }) async {
     final businessId = profile.businessId;
     final now = DateTime.now();
-    
+
     DateTime start;
     DateTime end;
     DateTime prevStart;
     DateTime prevEnd;
 
+    // Anchor del "día operativo" actual: día calendario con la hora de corte
+    // aplicada. Si `now` está antes del corte (ej. 1 AM con corte 5 AM),
+    // retrocedemos un día porque seguimos dentro del día operativo anterior.
+    DateTime operationalDayAnchor(DateTime reference) {
+      final candidate = DateTime(reference.year, reference.month, reference.day,
+          businessDayStartHour);
+      return reference.isBefore(candidate)
+          ? candidate.subtract(const Duration(days: 1))
+          : candidate;
+    }
+
     switch (filter) {
       case SalesDateFilter.today:
-        start = DateTime(now.year, now.month, now.day);
+        start = operationalDayAnchor(now);
         end = start.add(const Duration(days: 1));
         prevStart = start.subtract(const Duration(days: 1));
         prevEnd = start;
         break;
       case SalesDateFilter.yesterday:
-        start = DateTime(now.year, now.month, now.day).subtract(const Duration(days: 1));
+        start = operationalDayAnchor(now).subtract(const Duration(days: 1));
         end = start.add(const Duration(days: 1));
         prevStart = start.subtract(const Duration(days: 1));
         prevEnd = start;

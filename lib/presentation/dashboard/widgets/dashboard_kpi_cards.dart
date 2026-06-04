@@ -26,14 +26,29 @@ class DashboardKpiCards extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
+        final dpi = DpiScale.of(context);
         final crossAxisCount = constraints.maxWidth > 600 ? 4 : 2;
-        final childAspectRatio = constraints.maxWidth > 600 ? 1.6 : 1.05;
+        const crossAxisSpacing = 12.0;
+
+        // Derive the cell height from the actual scaled content so the cards
+        // never overflow on high-DPI / large screens (e.g. iPad), instead of
+        // relying on a fixed aspect ratio that can be too short for the content.
+        final cellWidth =
+            (constraints.maxWidth - crossAxisSpacing * (crossAxisCount - 1)) /
+                crossAxisCount;
+        final cellHeight = dpi.icon(36) + // icon container
+            dpi.space(14) * 2 + // vertical padding
+            dpi.font(12) * 1.4 + // label line
+            dpi.font(23) * 1.5 + // value line
+            dpi.font(11) * 1.5 + // subtitle line
+            dpi.space(20); // spacing / breathing room
+        final childAspectRatio = cellWidth / cellHeight;
 
         return GridView.count(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           crossAxisCount: crossAxisCount,
-          crossAxisSpacing: 12,
+          crossAxisSpacing: crossAxisSpacing,
           mainAxisSpacing: 12,
           childAspectRatio: childAspectRatio,
           children: [
@@ -149,8 +164,8 @@ class _KpiCard extends StatelessWidget {
                 : MainAxisAlignment.start,
             children: [
               Container(
-                width: dpi.scale(36),
-                height: dpi.scale(36),
+                width: dpi.icon(36),
+                height: dpi.icon(36),
                 decoration: BoxDecoration(
                   color: iconBg,
                   borderRadius: BorderRadius.circular(dpi.radius(10)),

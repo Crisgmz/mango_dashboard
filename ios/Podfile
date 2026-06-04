@@ -50,6 +50,14 @@ post_install do |installer|
 
       # Asegura que todos los pods compartan el deployment target mínimo del proyecto.
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+
+      # Genera dSYM para todos los frameworks en Release. Sin esto, frameworks
+      # FFI como `objective_c` (que Flutter empuja vía supabase_flutter →
+      # gotrue → app_links → algunas deps) suben sin símbolos y App Store
+      # Connect rechaza el upload con "The archive did not include a dSYM".
+      if config.name == 'Release' || config.name == 'Profile'
+        config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf-with-dsym'
+      end
     end
   end
 end

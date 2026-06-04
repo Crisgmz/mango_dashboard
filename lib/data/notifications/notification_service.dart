@@ -19,6 +19,16 @@ class NotificationService {
     _dispose();
     _seenIds.clear();
 
+    // Ensure the realtime socket carries the current access token. Postgres
+    // Changes run RLS as the connected role; without this the socket may still
+    // be treated as `anon` (e.g. after a silent session restore) and every
+    // `TO authenticated` policy denies the subscription with error 42501
+    // ("You do not have required role or permission to perform an operation").
+    final token = _client.auth.currentSession?.accessToken;
+    if (token != null) {
+      _client.realtime.setAuth(token);
+    }
+
     dev.log('[NotificationService] Subscribing for business: $businessId');
 
     // 1. order_items voided

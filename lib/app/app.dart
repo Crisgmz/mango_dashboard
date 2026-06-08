@@ -5,6 +5,7 @@ import '../presentation/theme/theme_controller.dart';
 import '../presentation/theme/theme_data_factory.dart';
 import '../presentation/dashboard/view/dashboard_root_view.dart';
 import '../presentation/splash/view/mango_splash_screen.dart';
+import '../presentation/update/update_banner.dart';
 
 class MangoDashboardApp extends ConsumerStatefulWidget {
   const MangoDashboardApp({super.key});
@@ -26,6 +27,14 @@ class _MangoDashboardAppState extends ConsumerState<MangoDashboardApp> {
       themeMode: themeMode,
       theme: MangoThemeFactory.lightTheme,
       darkTheme: MangoThemeFactory.darkTheme,
+      builder: (context, child) {
+        return Column(
+          children: [
+            const UpdateBanner(),
+            Expanded(child: child ?? const SizedBox.shrink()),
+          ],
+        );
+      },
       home: _showSplash
           ? MangoSplashScreen(onComplete: () => setState(() => _showSplash = false))
           : const DashboardRootView(),

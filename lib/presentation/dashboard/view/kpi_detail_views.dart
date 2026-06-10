@@ -1151,6 +1151,18 @@ class _ClosingCard extends StatelessWidget {
                     Text(closing.registerName, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
                     SizedBox(height: dpi.space(2)),
                     Text('Cerrada por ${closing.closedByName} · ${MangoFormatters.fullDate(closing.closedAt)}', style: Theme.of(context).textTheme.bodySmall),
+                    if (closing.netDifference != 0) ...[
+                      SizedBox(height: dpi.space(4)),
+                      Text(
+                        // Net (all-method) difference — reportedTotal − expectedTotal.
+                        '${closing.netDifference > 0 ? 'Sobrante' : 'Faltante'}: ${_signedCurrency(closing.netDifference)}'
+                        '${closing.hasReportedBreakdown ? '' : ' (efectivo)'}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: _diffColor(context, closing.netDifference),
+                            ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1172,18 +1184,53 @@ class _ClosingCard extends StatelessWidget {
   }
 }
 
-class _ClosingDetailSheet extends StatelessWidget {
+class _ClosingDetailSheet extends ConsumerStatefulWidget {
   const _ClosingDetailSheet({required this.closing});
 
   final RegisterClosing closing;
 
   @override
+  ConsumerState<_ClosingDetailSheet> createState() => _ClosingDetailSheetState();
+}
+
+class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
+  CashCloseDetail? _detail;
+  bool _loading = true;
+  bool _failed = false;
+
+  RegisterClosing get closing => widget.closing;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final detail =
+          await ref.read(cashRegisterDataServiceProvider).loadCloseDetail(closing);
+      if (!mounted) return;
+      setState(() {
+        _detail = detail;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _failed = true;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     return DraggableScrollableSheet(
-      initialChildSize: 0.62,
-      minChildSize: 0.45,
-      maxChildSize: 0.9,
+      initialChildSize: 0.7,
+      minChildSize: 0.5,
+      maxChildSize: 0.95,
       builder: (context, controller) {
         return Container(
           decoration: BoxDecoration(
@@ -1233,72 +1280,23 @@ class _ClosingDetailSheet extends StatelessWidget {
                 ),
               ),
               SizedBox(height: dpi.space(18)),
-              Text('Cómo abrió', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
-              SizedBox(height: dpi.space(10)),
-              _MetricCard(icon: Icons.lock_open_rounded, color: MangoThemeFactory.mango, label: 'Monto apertura', value: MangoFormatters.currency(closing.openingAmount)),
-              SizedBox(height: dpi.space(18)),
-              Text('Qué hubo en la caja', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
-              SizedBox(height: dpi.space(10)),
-              _MetricCard(icon: Icons.payments_rounded, color: MangoThemeFactory.success, label: 'Ventas totales', value: MangoFormatters.currency(closing.totalSales)),
-              SizedBox(height: dpi.space(8)),
-              Padding(
-                padding: EdgeInsets.only(left: dpi.space(4)),
-                child: Wrap(
-                  spacing: dpi.space(10),
-                  runSpacing: dpi.space(6),
-                  children: [
-                    if (closing.cashSales > 0)
-                      _PayMethodChip(icon: Icons.payments_rounded, label: MangoFormatters.currency(closing.cashSales), color: MangoThemeFactory.success),
-                    if (closing.cardSales > 0)
-                      _PayMethodChip(icon: Icons.credit_card_rounded, label: MangoFormatters.currency(closing.cardSales), color: Colors.blueAccent),
-                    if (closing.transferSales > 0)
-                      _PayMethodChip(icon: Icons.swap_horiz_rounded, label: MangoFormatters.currency(closing.transferSales), color: Colors.deepPurpleAccent),
-                    if (closing.otherSales > 0)
-                      _PayMethodChip(icon: Icons.more_horiz_rounded, label: MangoFormatters.currency(closing.otherSales), color: Colors.grey),
-                  ],
-                ),
-              ),
-              SizedBox(height: dpi.space(10)),
-              _MetricCard(icon: Icons.add_circle_outline_rounded, color: MangoThemeFactory.info, label: 'Depósitos', value: MangoFormatters.currency(closing.totalDeposits)),
-              SizedBox(height: dpi.space(10)),
-              _MetricCard(icon: Icons.remove_circle_outline_rounded, color: MangoThemeFactory.warning, label: 'Retiros', value: MangoFormatters.currency(closing.totalWithdrawals)),
-              SizedBox(height: dpi.space(10)),
-              _MetricCard(icon: Icons.receipt_rounded, color: Colors.redAccent, label: 'Gastos', value: MangoFormatters.currency(closing.totalExpenses)),
-              SizedBox(height: dpi.space(18)),
-              Text('Cómo cerró', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
-              SizedBox(height: dpi.space(10)),
-              _MetricCard(
-                icon: Icons.calculate_rounded,
-                color: MangoThemeFactory.info,
-                label: 'Esperado en caja',
-                value: MangoFormatters.currency(_cashExpected(closing)),
-              ),
-              SizedBox(height: dpi.space(10)),
-              _MetricCard(
-                icon: Icons.account_balance_wallet_rounded,
-                color: MangoThemeFactory.warning,
-                label: 'Contado al cierre',
-                value: MangoFormatters.currency(closing.closingAmount),
-              ),
-              SizedBox(height: dpi.space(10)),
-              Builder(
-                builder: (_) {
-                  final diff = closing.closingAmount - _cashExpected(closing);
-                  final isSurplus = diff > 0;
-                  final isShortfall = diff < 0;
-                  final color = isShortfall
-                      ? MangoThemeFactory.danger
-                      : (isSurplus ? MangoThemeFactory.success : MangoThemeFactory.mutedText(context));
-                  final label = isShortfall ? 'Faltante' : (isSurplus ? 'Sobrante' : 'Diferencia');
-                  return _MetricCard(
-                    icon: Icons.compare_arrows_rounded,
-                    color: color,
-                    label: label,
-                    value: MangoFormatters.currency(diff.abs()),
-                  );
-                },
-              ),
-              SizedBox(height: dpi.space(24)),
+              if (_loading)
+                Padding(
+                  padding: EdgeInsets.symmetric(vertical: dpi.space(40)),
+                  child: const Center(child: CircularProgressIndicator()),
+                )
+              else if (_failed || _detail == null)
+                Padding(
+                  padding: EdgeInsets.symmetric(vertical: dpi.space(24)),
+                  child: Center(
+                    child: Text(
+                      'No se pudo cargar el detalle del cierre.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: MangoThemeFactory.danger),
+                    ),
+                  ),
+                )
+              else
+                ..._buildReconciled(context, dpi, _detail!),
             ],
           ),
         );
@@ -1306,29 +1304,527 @@ class _ClosingDetailSheet extends StatelessWidget {
     );
   }
 
-  /// Expected cash in the drawer at closing time:
-  /// `apertura + ventas en efectivo + depósitos − retiros − gastos`.
-  /// Mirrors the formula used in the printed receipt.
-  static double _cashExpected(RegisterClosing c) {
-    return c.openingAmount +
-        c.cashSales +
-        c.totalDeposits -
-        c.totalWithdrawals -
-        c.totalExpenses;
+  List<Widget> _buildReconciled(BuildContext context, DpiScale dpi, CashCloseDetail d) {
+    final muted = MangoThemeFactory.mutedText(context);
+    final reportedTotal = d.reportedTotal;
+    final net = d.netDifference;
+    final netColor = _diffColor(context, net);
+    final netLabel = net == 0 ? 'Cuadrado' : (net > 0 ? 'Sobrante' : 'Faltante');
+
+    return [
+      _sectionTitle(context, 'Cómo abrió'),
+      SizedBox(height: dpi.space(10)),
+      _MetricCard(icon: Icons.lock_open_rounded, color: MangoThemeFactory.mango, label: 'Monto apertura', value: MangoFormatters.currency(d.startAmount)),
+
+      SizedBox(height: dpi.space(18)),
+      _sectionTitle(context, 'Qué hubo en la caja'),
+      SizedBox(height: dpi.space(10)),
+      _MetricCard(
+        icon: Icons.payments_rounded,
+        color: MangoThemeFactory.success,
+        label: 'Ventas totales',
+        value: MangoFormatters.currency(d.totalSales),
+        subtitle: 'Toca para ver por método',
+        onTap: () => _openSalesBreakdown(d),
+      ),
+      SizedBox(height: dpi.space(8)),
+      Padding(
+        padding: EdgeInsets.only(left: dpi.space(4)),
+        child: Wrap(
+          spacing: dpi.space(10),
+          runSpacing: dpi.space(6),
+          children: [
+            if (d.cashSales > 0)
+              _PayMethodChip(icon: Icons.payments_rounded, label: MangoFormatters.currency(d.cashSales), color: MangoThemeFactory.success),
+            if (d.cardSales > 0)
+              _PayMethodChip(icon: Icons.credit_card_rounded, label: MangoFormatters.currency(d.cardSales), color: Colors.blueAccent),
+            if (d.transferSales > 0)
+              _PayMethodChip(icon: Icons.swap_horiz_rounded, label: MangoFormatters.currency(d.transferSales), color: Colors.deepPurpleAccent),
+          ],
+        ),
+      ),
+      SizedBox(height: dpi.space(10)),
+      _MetricCard(
+        icon: Icons.add_circle_outline_rounded,
+        color: MangoThemeFactory.info,
+        label: 'Depósitos',
+        value: MangoFormatters.currency(d.totalDeposits),
+        count: d.transactions.where((t) => t.type == 'deposit').length,
+        onTap: () => _openTransactions(d, 'deposit', 'Depósitos', Icons.add_circle_outline_rounded, MangoThemeFactory.info),
+      ),
+      SizedBox(height: dpi.space(10)),
+      _MetricCard(
+        icon: Icons.remove_circle_outline_rounded,
+        color: MangoThemeFactory.warning,
+        label: 'Retiros',
+        value: MangoFormatters.currency(d.totalWithdrawals),
+        count: d.transactions.where((t) => t.type == 'withdrawal').length,
+        onTap: () => _openTransactions(d, 'withdrawal', 'Retiros', Icons.remove_circle_outline_rounded, MangoThemeFactory.warning),
+      ),
+      SizedBox(height: dpi.space(10)),
+      _MetricCard(
+        icon: Icons.receipt_rounded,
+        color: Colors.redAccent,
+        label: 'Gastos',
+        value: MangoFormatters.currency(d.totalExpenses),
+        count: d.transactions.where((t) => t.type == 'expense').length,
+        onTap: () => _openTransactions(d, 'expense', 'Gastos', Icons.receipt_rounded, Colors.redAccent),
+      ),
+
+      SizedBox(height: dpi.space(18)),
+      _sectionTitle(context, 'Esperado por método'),
+      SizedBox(height: dpi.space(10)),
+      _BreakdownCard(
+        rows: [
+          _BreakdownRow('Esperado efectivo', MangoFormatters.currency(d.expectedCash)),
+          _BreakdownRow('Esperado tarjeta', MangoFormatters.currency(d.expectedCard)),
+          _BreakdownRow('Esperado transferencia', MangoFormatters.currency(d.expectedTransfer)),
+        ],
+      ),
+
+      SizedBox(height: dpi.space(18)),
+      _sectionTitle(context, 'Cómo cerró'),
+      SizedBox(height: dpi.space(10)),
+      _BreakdownCard(
+        rows: [
+          _BreakdownRow('Total esperado', MangoFormatters.currency(d.expectedTotalResolved)),
+          _BreakdownRow(
+            'Total reportado',
+            MangoFormatters.currency(reportedTotal),
+            muted: !d.hasReported,
+          ),
+          _BreakdownRow(
+            'Dif. efectivo (gaveta)',
+            _signedCurrency(d.cashDrawerDifference),
+            valueColor: muted,
+            muted: true,
+          ),
+        ],
+      ),
+      SizedBox(height: dpi.space(10)),
+      _MetricCard(
+        icon: net == 0
+            ? Icons.check_circle_outline_rounded
+            : (net > 0 ? Icons.trending_up_rounded : Icons.trending_down_rounded),
+        color: netColor,
+        label: 'Diferencia',
+        value: _signedCurrency(net),
+        valueColor: netColor,
+        subtitle: d.hasReported
+            ? '$netLabel · reportado − esperado'
+            : '$netLabel · solo efectivo (sin desglose reportado)',
+        onTap: () => _openMethodDifference(d),
+      ),
+
+      SizedBox(height: dpi.space(18)),
+      _sectionTitle(context, 'Diferencia por método'),
+      SizedBox(height: dpi.space(10)),
+      if (!d.hasReported) ...[
+        Padding(
+          padding: EdgeInsets.only(left: dpi.space(4), bottom: dpi.space(8)),
+          child: Text(
+            'Este cierre no registró el desglose reportado por método. La diferencia mostrada es solo de efectivo (gaveta).',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: muted),
+          ),
+        ),
+      ],
+      _BreakdownCard(
+        rows: [
+          _BreakdownRow('Efectivo', _signedCurrency(d.diffCash), valueColor: _diffColor(context, d.diffCash)),
+          _BreakdownRow('Tarjeta', _signedCurrency(d.diffCard), valueColor: _diffColor(context, d.diffCard)),
+          _BreakdownRow('Transferencia', _signedCurrency(d.diffTransfer), valueColor: _diffColor(context, d.diffTransfer)),
+        ],
+      ),
+
+      if (d.forcedCloseNote != null) ...[
+        SizedBox(height: dpi.space(14)),
+        Container(
+          padding: EdgeInsets.all(dpi.space(12)),
+          decoration: BoxDecoration(
+            color: MangoThemeFactory.warning.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(dpi.radius(12)),
+            border: Border.all(color: MangoThemeFactory.warning.withValues(alpha: 0.4)),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: MangoThemeFactory.warning, size: dpi.icon(20)),
+              SizedBox(width: dpi.space(10)),
+              Expanded(
+                child: Text(d.forcedCloseNote!, style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        ),
+      ],
+
+      if (closing.notes != null && closing.notes!.trim().isNotEmpty) ...[
+        SizedBox(height: dpi.space(18)),
+        _sectionTitle(context, 'Notas del cierre'),
+        SizedBox(height: dpi.space(10)),
+        Container(
+          width: double.infinity,
+          padding: EdgeInsets.all(dpi.space(12)),
+          decoration: BoxDecoration(
+            color: MangoThemeFactory.altSurface(context),
+            borderRadius: BorderRadius.circular(dpi.radius(12)),
+            border: Border.all(color: MangoThemeFactory.borderColor(context)),
+          ),
+          child: Text(closing.notes!.trim(), style: Theme.of(context).textTheme.bodySmall),
+        ),
+      ],
+
+      SizedBox(height: dpi.space(24)),
+    ];
+  }
+
+  Widget _sectionTitle(BuildContext context, String text) =>
+      Text(text, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800));
+
+  void _openTransactions(CashCloseDetail d, String type, String title, IconData icon, Color color) {
+    final entries = d.transactions.where((t) => t.type == type).toList(growable: false);
+    final total = entries.fold<double>(0, (sum, t) => sum + t.amount);
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _TransactionListSheet(title: title, icon: icon, color: color, total: total, entries: entries),
+    );
+  }
+
+  void _openSalesBreakdown(CashCloseDetail d) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _InfoSheet(
+        title: 'Ventas por método',
+        icon: Icons.payments_rounded,
+        color: MangoThemeFactory.success,
+        rows: [
+          _BreakdownRow('Efectivo', MangoFormatters.currency(d.cashSales)),
+          _BreakdownRow('Tarjeta', MangoFormatters.currency(d.cardSales)),
+          _BreakdownRow('Transferencia', MangoFormatters.currency(d.transferSales)),
+          _BreakdownRow('Total ventas', MangoFormatters.currency(d.totalSales), bold: true),
+        ],
+        footnote: d.transactionCount > 0 ? '${d.transactionCount} transacciones en el turno.' : null,
+      ),
+    );
+  }
+
+  void _openMethodDifference(CashCloseDetail d) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _InfoSheet(
+        title: 'Cómo se calcula la diferencia',
+        icon: Icons.compare_arrows_rounded,
+        color: _diffColor(ctx, d.netDifference),
+        rows: [
+          _BreakdownRow('Total reportado', MangoFormatters.currency(d.reportedTotal)),
+          _BreakdownRow('Total esperado', MangoFormatters.currency(d.expectedTotalResolved)),
+          _BreakdownRow('Diferencia neta', _signedCurrency(d.netDifference), bold: true, valueColor: _diffColor(ctx, d.netDifference)),
+          _BreakdownRow('· Efectivo', _signedCurrency(d.diffCash), valueColor: _diffColor(ctx, d.diffCash)),
+          _BreakdownRow('· Tarjeta', _signedCurrency(d.diffCard), valueColor: _diffColor(ctx, d.diffCard)),
+          _BreakdownRow('· Transferencia', _signedCurrency(d.diffTransfer), valueColor: _diffColor(ctx, d.diffTransfer)),
+        ],
+        footnote: 'La "Dif. efectivo (gaveta)" solo concilia el efectivo; la diferencia real es la neta entre todos los métodos.',
+      ),
+    );
   }
 }
 
-class _MetricCard extends StatelessWidget {
-  const _MetricCard({required this.icon, required this.color, required this.label, required this.value});
-  final IconData icon;
-  final Color color;
+Color _diffColor(BuildContext context, double v) {
+  if (v == 0) return MangoThemeFactory.mutedText(context);
+  return v > 0 ? MangoThemeFactory.success : MangoThemeFactory.danger;
+}
+
+String _signedCurrency(double v) {
+  if (v == 0) return MangoFormatters.currency(0);
+  final sign = v > 0 ? '+' : '−';
+  return '$sign${MangoFormatters.currency(v.abs())}';
+}
+
+class _BreakdownRow {
+  const _BreakdownRow(this.label, this.value, {this.valueColor, this.bold = false, this.muted = false});
   final String label;
   final String value;
+  final Color? valueColor;
+  final bool bold;
+  final bool muted;
+}
+
+class _BreakdownCard extends StatelessWidget {
+  const _BreakdownCard({required this.rows});
+  final List<_BreakdownRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final muted = MangoThemeFactory.mutedText(context);
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: dpi.space(14), vertical: dpi.space(6)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.cardColor(context),
+        borderRadius: BorderRadius.circular(dpi.radius(16)),
+        border: Border.all(color: MangoThemeFactory.borderColor(context)),
+      ),
+      child: Column(
+        children: [
+          for (final row in rows)
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: dpi.space(8)),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: Text(
+                      row.label,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: row.muted ? muted : null,
+                            fontWeight: row.bold ? FontWeight.w700 : null,
+                          ),
+                    ),
+                  ),
+                  SizedBox(width: dpi.space(10)),
+                  Text(
+                    row.value,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: row.bold ? FontWeight.w800 : FontWeight.w700,
+                          color: row.valueColor ?? (row.muted ? muted : MangoThemeFactory.textColor(context)),
+                        ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Bottom sheet listing the individual cash movements of a given type, including
+/// each movement's note/description — so the user can see what every expense or
+/// withdrawal was for.
+class _TransactionListSheet extends StatelessWidget {
+  const _TransactionListSheet({
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.total,
+    required this.entries,
+  });
+
+  final String title;
+  final IconData icon;
+  final Color color;
+  final double total;
+  final List<CashTransactionEntry> entries;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return DraggableScrollableSheet(
+      initialChildSize: 0.55,
+      minChildSize: 0.35,
+      maxChildSize: 0.9,
+      builder: (context, controller) {
+        return Container(
+          decoration: BoxDecoration(
+            color: MangoThemeFactory.cardColor(context),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(dpi.radius(24))),
+          ),
+          child: ListView(
+            controller: controller,
+            padding: EdgeInsets.fromLTRB(dpi.space(18), dpi.space(18), dpi.space(18), dpi.space(18) + MediaQuery.of(context).padding.bottom),
+            children: [
+              Center(
+                child: Container(
+                  width: dpi.scale(42),
+                  height: dpi.scale(4),
+                  decoration: BoxDecoration(color: MangoThemeFactory.borderColor(context), borderRadius: BorderRadius.circular(999)),
+                ),
+              ),
+              SizedBox(height: dpi.space(18)),
+              Row(
+                children: [
+                  Container(
+                    width: dpi.scale(40),
+                    height: dpi.scale(40),
+                    decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(dpi.radius(12))),
+                    child: Icon(icon, color: color, size: dpi.icon(20)),
+                  ),
+                  SizedBox(width: dpi.space(12)),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title, style: Theme.of(context).textTheme.titleLarge),
+                        Text('${entries.length} movimiento(s)', style: Theme.of(context).textTheme.bodySmall),
+                      ],
+                    ),
+                  ),
+                  Text(MangoFormatters.currency(total), style: TextStyle(fontSize: dpi.font(16), fontWeight: FontWeight.w800, color: color)),
+                ],
+              ),
+              SizedBox(height: dpi.space(16)),
+              if (entries.isEmpty)
+                Padding(
+                  padding: EdgeInsets.symmetric(vertical: dpi.space(24)),
+                  child: Center(
+                    child: Text('Sin movimientos registrados.', style: Theme.of(context).textTheme.bodySmall),
+                  ),
+                )
+              else
+                for (final entry in entries) ...[
+                  Container(
+                    margin: EdgeInsets.only(bottom: dpi.space(8)),
+                    padding: EdgeInsets.all(dpi.space(12)),
+                    decoration: BoxDecoration(
+                      color: MangoThemeFactory.altSurface(context),
+                      borderRadius: BorderRadius.circular(dpi.radius(12)),
+                      border: Border.all(color: MangoThemeFactory.borderColor(context)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                (entry.description != null && entry.description!.trim().isNotEmpty)
+                                    ? entry.description!.trim()
+                                    : 'Sin descripción',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                      fontStyle: (entry.description == null || entry.description!.trim().isEmpty)
+                                          ? FontStyle.italic
+                                          : null,
+                                    ),
+                              ),
+                              if (entry.createdAt != null) ...[
+                                SizedBox(height: dpi.space(2)),
+                                Text(MangoFormatters.dateTime(entry.createdAt!), style: Theme.of(context).textTheme.bodySmall),
+                              ],
+                            ],
+                          ),
+                        ),
+                        SizedBox(width: dpi.space(10)),
+                        Text(
+                          MangoFormatters.currency(entry.amount),
+                          style: TextStyle(fontSize: dpi.font(14), fontWeight: FontWeight.w800, color: color),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              SizedBox(height: dpi.space(8)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Compact info sheet used to explain a number (e.g. the difference) or show a
+/// small per-method breakdown.
+class _InfoSheet extends StatelessWidget {
+  const _InfoSheet({
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.rows,
+    this.footnote,
+  });
+
+  final String title;
+  final IconData icon;
+  final Color color;
+  final List<_BreakdownRow> rows;
+  final String? footnote;
 
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     return Container(
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.cardColor(context),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(dpi.radius(24))),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.all(dpi.space(18)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: dpi.scale(42),
+                  height: dpi.scale(4),
+                  decoration: BoxDecoration(color: MangoThemeFactory.borderColor(context), borderRadius: BorderRadius.circular(999)),
+                ),
+              ),
+              SizedBox(height: dpi.space(18)),
+              Row(
+                children: [
+                  Container(
+                    width: dpi.scale(40),
+                    height: dpi.scale(40),
+                    decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(dpi.radius(12))),
+                    child: Icon(icon, color: color, size: dpi.icon(20)),
+                  ),
+                  SizedBox(width: dpi.space(12)),
+                  Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
+                ],
+              ),
+              SizedBox(height: dpi.space(16)),
+              _BreakdownCard(rows: rows),
+              if (footnote != null) ...[
+                SizedBox(height: dpi.space(12)),
+                Text(footnote!, style: Theme.of(context).textTheme.bodySmall),
+              ],
+              SizedBox(height: dpi.space(8)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.value,
+    this.subtitle,
+    this.valueColor,
+    this.onTap,
+    this.count,
+  });
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String value;
+  final String? subtitle;
+  final Color? valueColor;
+  final VoidCallback? onTap;
+
+  /// When set (and > 0) and [onTap] is provided, shows a small "N detalles" hint.
+  final int? count;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final interactive = onTap != null;
+    final hasCount = (count ?? 0) > 0;
+
+    final card = Container(
       padding: EdgeInsets.all(dpi.space(14)),
       decoration: BoxDecoration(
         color: MangoThemeFactory.cardColor(context),
@@ -1353,11 +1849,48 @@ class _MetricCard extends StatelessWidget {
               children: [
                 Text(label, style: Theme.of(context).textTheme.bodySmall),
                 SizedBox(height: dpi.space(2)),
-                Text(value, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                Text(
+                  value,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: valueColor,
+                      ),
+                ),
+                if (subtitle != null) ...[
+                  SizedBox(height: dpi.space(2)),
+                  Text(subtitle!, style: Theme.of(context).textTheme.bodySmall),
+                ],
               ],
             ),
           ),
+          if (interactive) ...[
+            SizedBox(width: dpi.space(8)),
+            if (hasCount)
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: dpi.space(8), vertical: dpi.space(3)),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '${count!}',
+                  style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w800, color: color),
+                ),
+              ),
+            SizedBox(width: dpi.space(4)),
+            Icon(Icons.chevron_right_rounded, size: dpi.icon(20), color: MangoThemeFactory.mutedText(context)),
+          ],
         ],
+      ),
+    );
+
+    if (!interactive) return card;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(dpi.radius(16)),
+        child: card,
       ),
     );
   }
@@ -2205,7 +2738,7 @@ class _ReporteZReceipt extends StatelessWidget {
           _ReceiptRow(label: 'Contado al cierre', value: MangoFormatters.currency(closing.closingAmount), emphasis: true),
           SizedBox(height: dpi.space(4)),
           _ReceiptRow(
-            label: cashDifference == 0 ? 'Diferencia' : (cashDifference > 0 ? 'Sobrante' : 'Faltante'),
+            label: cashDifference == 0 ? 'Dif. efectivo' : (cashDifference > 0 ? 'Sobrante efectivo' : 'Faltante efectivo'),
             value: MangoFormatters.currency(cashDifference.abs()),
             valueColor: cashDifference == 0
                 ? null
@@ -2214,6 +2747,39 @@ class _ReporteZReceipt extends StatelessWidget {
                     : MangoThemeFactory.danger,
             emphasis: true,
           ),
+          SizedBox(height: dpi.space(12)),
+          const _ReceiptDivider(),
+          const _ReceiptSectionTitle('RESULTADO DEL CIERRE'),
+          _ReceiptRow(label: 'Total esperado', value: MangoFormatters.currency(closing.expectedTotal)),
+          _ReceiptRow(label: 'Total reportado', value: MangoFormatters.currency(closing.reportedTotal)),
+          SizedBox(height: dpi.space(4)),
+          Builder(
+            builder: (_) {
+              final net = closing.netDifference;
+              return _ReceiptRow(
+                label: net == 0 ? 'Diferencia neta' : (net > 0 ? 'Sobrante (neto)' : 'Faltante (neto)'),
+                value: MangoFormatters.currency(net.abs()),
+                valueColor: net == 0
+                    ? null
+                    : net > 0
+                        ? MangoThemeFactory.success
+                        : MangoThemeFactory.danger,
+                emphasis: true,
+              );
+            },
+          ),
+          SizedBox(height: dpi.space(4)),
+          _ReceiptRow(label: 'Dif. efectivo', value: _signedCurrency(closing.cashDifference), valueColor: _diffColor(context, closing.cashDifference)),
+          _ReceiptRow(label: 'Dif. tarjeta', value: _signedCurrency(closing.cardDifference), valueColor: _diffColor(context, closing.cardDifference)),
+          _ReceiptRow(label: 'Dif. transferencia', value: _signedCurrency(closing.transferDifference), valueColor: _diffColor(context, closing.transferDifference)),
+          if (!closing.hasReportedBreakdown)
+            Padding(
+              padding: EdgeInsets.only(top: dpi.space(4)),
+              child: Text(
+                'Sin desglose reportado por método; la diferencia neta refleja solo el efectivo.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: MangoThemeFactory.mutedText(context)),
+              ),
+            ),
           SizedBox(height: dpi.space(12)),
           const _ReceiptDivider(),
           const _ReceiptSectionTitle('COMPROBANTES FISCALES (NCF)'),

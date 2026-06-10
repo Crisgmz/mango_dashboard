@@ -7,6 +7,7 @@ import '../viewmodel/dashboard_data_view_model.dart';
 import '../widgets/growth_chip.dart';
 import 'audit_detail_view.dart';
 import 'customer_analytics_view.dart';
+import 'daily_sales_report_view.dart';
 import 'kpi_detail_views.dart';
 import 'modifiers_breakdown_view.dart';
 
@@ -53,6 +54,27 @@ class ReportsHubView extends ConsumerWidget {
                       builder: (_) => SalesDetailView(summary: summary),
                     ),
                   ),
+                ),
+                SizedBox(height: dpi.space(10)),
+                _ReportTile(
+                  icon: Icons.calendar_month_rounded,
+                  accent: MangoThemeFactory.info,
+                  title: 'Ventas por día',
+                  subtitle: 'Venta diaria, impuestos y total general',
+                  onTap: () {
+                    final start = summary.periodStart ??
+                        DateTime.now().subtract(const Duration(days: 30));
+                    final end = summary.periodEnd ?? DateTime.now();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => DailySalesReportView(
+                          start: start,
+                          end: end,
+                          periodLabel: periodLabelFor(summary.filter),
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 SizedBox(height: dpi.space(10)),
                 _ReportTile(

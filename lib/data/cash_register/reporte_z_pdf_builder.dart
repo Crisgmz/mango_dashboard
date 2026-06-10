@@ -76,11 +76,39 @@ class ReporteZPdfBuilder {
             pw.SizedBox(height: 4),
             _row(
               cashDifference == 0
-                  ? 'Diferencia'
-                  : (cashDifference > 0 ? 'Sobrante' : 'Faltante'),
+                  ? 'Dif. efectivo'
+                  : (cashDifference > 0 ? 'Sobrante efectivo' : 'Faltante efectivo'),
               MangoFormatters.currency(cashDifference.abs()),
               bold: true,
             ),
+            pw.SizedBox(height: 8),
+            _solidDivider(),
+            _sectionTitle('RESULTADO DEL CIERRE'),
+            _row('Total esperado', MangoFormatters.currency(closing.expectedTotal)),
+            _row('Total reportado', MangoFormatters.currency(closing.reportedTotal)),
+            pw.SizedBox(height: 4),
+            _row(
+              closing.netDifference == 0
+                  ? 'Diferencia neta'
+                  : (closing.netDifference > 0 ? 'Sobrante (neto)' : 'Faltante (neto)'),
+              MangoFormatters.currency(closing.netDifference.abs()),
+              bold: true,
+              valueColor: closing.netDifference == 0
+                  ? null
+                  : (closing.netDifference > 0 ? PdfColors.green700 : PdfColors.red700),
+            ),
+            pw.SizedBox(height: 4),
+            _row('Dif. efectivo', _signed(closing.cashDifference)),
+            _row('Dif. tarjeta', _signed(closing.cardDifference)),
+            _row('Dif. transferencia', _signed(closing.transferDifference)),
+            if (!closing.hasReportedBreakdown)
+              pw.Padding(
+                padding: const pw.EdgeInsets.only(top: 3),
+                child: pw.Text(
+                  'Sin desglose reportado por método; la diferencia neta refleja solo el efectivo.',
+                  style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
+                ),
+              ),
             pw.SizedBox(height: 8),
             _solidDivider(),
             _sectionTitle('COMPROBANTES FISCALES (NCF)'),
@@ -158,7 +186,7 @@ class ReporteZPdfBuilder {
     );
   }
 
-  static pw.Widget _row(String label, String value, {bool bold = false}) {
+  static pw.Widget _row(String label, String value, {bool bold = false, PdfColor? valueColor}) {
     final style = pw.TextStyle(
       fontSize: bold ? 10 : 9,
       fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
@@ -168,10 +196,17 @@ class ReporteZPdfBuilder {
       child: pw.Row(
         children: [
           pw.Expanded(child: pw.Text(label, style: style)),
-          pw.Text(value, style: style),
+          pw.Text(value, style: valueColor == null ? style : style.copyWith(color: valueColor)),
         ],
       ),
     );
+  }
+
+  /// Currency with an explicit sign (`+RD$ …` / `−RD$ …`) for difference rows.
+  static String _signed(double v) {
+    if (v == 0) return MangoFormatters.currency(0);
+    final sign = v > 0 ? '+' : '−';
+    return '$sign${MangoFormatters.currency(v.abs())}';
   }
 
   static pw.Widget _sectionTitle(String title) {

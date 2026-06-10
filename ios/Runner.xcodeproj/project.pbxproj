@@ -348,6 +348,22 @@
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-resources.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
+		B1B2C3D4E5F60A0B1C2D3E4F /* Generate Missing dSYMs */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 12;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Generate Missing dSYMs";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Genera dSYMs para frameworks embebidos que no los traen (ej. objective_c.framework\n# que Flutter shippea como binario release sin dSYM). Sin esto, archive + upload\n# a App Store Connect falla con 'The archive did not include a dSYM for X'.\nif [ \"$ACTION\" != \"install\" ] && [ \"$CONFIGURATION\" != \"Release\" ]; then\n  echo \"Skipping dSYM generation in non-archive build.\"\n  exit 0\nfi\n\nAPP_FRAMEWORKS_DIR=\"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Frameworks\"\nif [ ! -d \"$APP_FRAMEWORKS_DIR\" ]; then\n  echo \"No Frameworks dir at $APP_FRAMEWORKS_DIR -- skipping.\"\n  exit 0\nfi\n\nmkdir -p \"$DWARF_DSYM_FOLDER_PATH\"\n\nfor FRAMEWORK in \"$APP_FRAMEWORKS_DIR\"/*.framework; do\n  [ -d \"$FRAMEWORK\" ] || continue\n  FRAMEWORK_NAME=$(basename \"$FRAMEWORK\" .framework)\n  DSYM_PATH=\"${DWARF_DSYM_FOLDER_PATH}/${FRAMEWORK_NAME}.framework.dSYM\"\n  BINARY_PATH=\"${FRAMEWORK}/${FRAMEWORK_NAME}\"\n  if [ -e \"$DSYM_PATH\" ]; then continue; fi\n  if [ ! -e \"$BINARY_PATH\" ]; then continue; fi\n  echo \"dsymutil: generating ${FRAMEWORK_NAME}.framework.dSYM\"\n  xcrun dsymutil \"$BINARY_PATH\" -o \"$DSYM_PATH\" 2>/dev/null || echo \"  (no DWARF info in $FRAMEWORK_NAME -- skipped)\"\ndone\n";
+			showEnvVarsInLog = 0;
+		};
 		B94216227B2B885623870D5B /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -385,22 +401,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-frameworks.sh\"\n";
-			showEnvVarsInLog = 0;
-		};
-		B1B2C3D4E5F60A0B1C2D3E4F /* Generate Missing dSYMs */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 12;
-			files = (
-			);
-			inputPaths = (
-			);
-			name = "Generate Missing dSYMs";
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "# Genera dSYMs para frameworks embebidos que no los traen (ej. objective_c.framework\n# que Flutter shippea como binario release sin dSYM). Sin esto, archive + upload\n# a App Store Connect falla con 'The archive did not include a dSYM for X'.\nif [ \"$ACTION\" != \"install\" ] && [ \"$CONFIGURATION\" != \"Release\" ]; then\n  echo \"Skipping dSYM generation in non-archive build.\"\n  exit 0\nfi\n\nAPP_FRAMEWORKS_DIR=\"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Frameworks\"\nif [ ! -d \"$APP_FRAMEWORKS_DIR\" ]; then\n  echo \"No Frameworks dir at $APP_FRAMEWORKS_DIR -- skipping.\"\n  exit 0\nfi\n\nmkdir -p \"$DWARF_DSYM_FOLDER_PATH\"\n\nfor FRAMEWORK in \"$APP_FRAMEWORKS_DIR\"/*.framework; do\n  [ -d \"$FRAMEWORK\" ] || continue\n  FRAMEWORK_NAME=$(basename \"$FRAMEWORK\" .framework)\n  DSYM_PATH=\"${DWARF_DSYM_FOLDER_PATH}/${FRAMEWORK_NAME}.framework.dSYM\"\n  BINARY_PATH=\"${FRAMEWORK}/${FRAMEWORK_NAME}\"\n  if [ -e \"$DSYM_PATH\" ]; then continue; fi\n  if [ ! -e \"$BINARY_PATH\" ]; then continue; fi\n  echo \"dsymutil: generating ${FRAMEWORK_NAME}.framework.dSYM\"\n  xcrun dsymutil \"$BINARY_PATH\" -o \"$DSYM_PATH\" 2>/dev/null || echo \"  (no DWARF info in $FRAMEWORK_NAME -- skipped)\"\ndone\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
@@ -516,7 +516,7 @@
 				DEVELOPMENT_TEAM = JWTQ5Z4L7H;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Mango Dashboard";
+				INFOPLIST_KEY_CFBundleDisplayName = "MangoPOS Dashboard";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -708,7 +708,7 @@
 				DEVELOPMENT_TEAM = JWTQ5Z4L7H;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Mango Dashboard";
+				INFOPLIST_KEY_CFBundleDisplayName = "MangoPOS Dashboard";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -734,7 +734,7 @@
 				DEVELOPMENT_TEAM = JWTQ5Z4L7H;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Mango Dashboard";
+				INFOPLIST_KEY_CFBundleDisplayName = "MangoPOS Dashboard";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

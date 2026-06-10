@@ -730,6 +730,135 @@ class DashboardDataService {
     return result;
   }
 
+  /// "Ventas por día": for paid orders closed within [start, end), the gross
+  /// sales of each day plus the range's tax breakdown.
+  ///
+  /// Gross per day = the orders' payments (net of change) — `orders.total` is
+  /// not maintained in this backend. Taxes come from `order_item_tax_lines`
+  /// grouped by `tax_name`, so every configured tax/charge appears by its real
+  /// name (nothing hardcoded). `netTotal = grossTotal − Σ taxes`.
+  Future<DailySalesReport> loadDailySales({
+    required String businessId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final startIso = start.toUtc().toIso8601String();
+    final endIso = end.toUtc().toIso8601String();
+
+    // ── Paid orders closed in range → map order_id to its local day + count ──
+    final orderRows = await _paginate((from, to) => _client
+        .from('orders')
+        .select('id, closed_at')
+        .eq('business_id', businessId)
+        .eq('status_ext', 'paid')
+        .gte('closed_at', startIso)
+        .lt('closed_at', endIso)
+        .order('closed_at', ascending: true)
+        .range(from, to));
+
+    final orderDay = <String, DateTime>{};
+    final byDay = <DateTime, _DaySalesAgg>{};
+    var orderCount = 0;
+
+    for (final row in orderRows) {
+      final id = row['id']?.toString();
+      final closedAt = DateTime.tryParse(row['closed_at']?.toString() ?? '');
+      if (id == null || id.isEmpty || closedAt == null) continue;
+      final local = closedAt.toLocal();
+      final day = DateTime(local.year, local.month, local.day);
+      orderDay[id] = day;
+      byDay.putIfAbsent(day, _DaySalesAgg.new).count += 1;
+      orderCount += 1;
+    }
+
+    // ── Gross per day = those orders' payments (net of change) ──
+    final payRows = await _paginate((from, to) => _client
+        .from('payments')
+        .select('amount, change_amount, order_id')
+        .eq('business_id', businessId)
+        .gte('created_at', startIso)
+        .lt('created_at', endIso)
+        .not('status', 'in', '(void,cancelled)')
+        .range(from, to));
+
+    double grossTotal = 0;
+    for (final row in payRows) {
+      final oid = row['order_id']?.toString();
+      if (oid == null) continue;
+      final day = orderDay[oid];
+      if (day == null) continue; // not a paid order closed in this range
+      final net = _netAmount(row['amount'], row['change_amount']);
+      byDay[day]!.total += net;
+      grossTotal += net;
+    }
+
+    final days = byDay.entries
+        .map((e) => DailySalesEntry(
+              date: e.key,
+              total: e.value.total,
+              orderCount: e.value.count,
+            ))
+        .toList()
+      ..sort((a, b) => a.date.compareTo(b.date));
+
+    // ── Tax breakdown for the range, by tax name ──
+    final taxRows = await _paginate((from, to) => _client
+        .from('order_item_tax_lines')
+        .select('tax_name, tax_rate, amount, order_items!inner(orders!inner(closed_at, status_ext))')
+        .eq('business_id', businessId)
+        .eq('order_items.orders.status_ext', 'paid')
+        .gte('order_items.orders.closed_at', startIso)
+        .lt('order_items.orders.closed_at', endIso)
+        .range(from, to));
+
+    final taxAgg = <String, _TaxAgg>{};
+    for (final row in taxRows) {
+      final name = row['tax_name']?.toString().trim();
+      if (name == null || name.isEmpty) continue;
+      final agg = taxAgg.putIfAbsent(name, _TaxAgg.new);
+      agg.amount += _toDouble(row['amount']);
+      final rate = _toDouble(row['tax_rate']);
+      if (rate > 0) {
+        agg.rateSum += rate;
+        agg.rateCount += 1;
+      }
+    }
+
+    final taxes = taxAgg.entries
+        .map((e) => TaxLineTotal(
+              name: e.key,
+              amount: e.value.amount,
+              rate: e.value.rateCount > 0 ? e.value.rateSum / e.value.rateCount : null,
+            ))
+        .toList()
+      ..sort((a, b) => b.amount.compareTo(a.amount));
+
+    return DailySalesReport(
+      days: days,
+      grossTotal: grossTotal,
+      taxes: taxes,
+      orderCount: orderCount,
+    );
+  }
+
+  /// Fetches every page of a PostgREST query (which caps responses at ~1000
+  /// rows) by walking `.range()` until a short page is returned.
+  Future<List<Map<String, dynamic>>> _paginate(
+    Future<dynamic> Function(int from, int to) page,
+  ) async {
+    const pageSize = 1000;
+    final all = <Map<String, dynamic>>[];
+    var from = 0;
+    while (true) {
+      final res = await page(from, from + pageSize - 1);
+      final list = List<Map<String, dynamic>>.from(res as List);
+      all.addAll(list);
+      if (list.length < pageSize) break;
+      from += pageSize;
+    }
+    return all;
+  }
+
   /// Loads tickets (completed payments) for an arbitrary period. Mirrors the
   /// in-line logic used by `loadSummary` so the Sales report can re-fetch
   /// with a different date range without reloading the whole dashboard.
@@ -1222,6 +1351,17 @@ class _CashierAgg {
 class _ModifierAgg {
   double count = 0;
   double revenue = 0;
+}
+
+class _DaySalesAgg {
+  double total = 0;
+  int count = 0;
+}
+
+class _TaxAgg {
+  double amount = 0;
+  double rateSum = 0;
+  int rateCount = 0;
 }
 
 class _CustomerAgg {

@@ -1,7 +1,7 @@
 name: mango_dashboard
 description: "Mango Dashboard admin app"
 publish_to: 'none'
-version: 1.1.0+5
+version: 1.1.1+6
 
 environment:
   sdk: ^3.11.3
@@ -36,8 +36,9 @@ dev_dependencies:
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
-  image_path: "assets/logo/logo.png"
+  image_path: "assets/logo/logo-app.png"
   min_sdk_android: 21
+  remove_alpha_ios: true
   web:
     generate: true
     image_path: "assets/logo/logo.png"

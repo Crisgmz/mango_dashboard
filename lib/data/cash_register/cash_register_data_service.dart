@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../domain/dashboard/dashboard_models.dart';
+import 'cash_close_notes.dart';
 
 class CashRegisterDataService {
   CashRegisterDataService(this._client);
@@ -18,6 +19,7 @@ class CashRegisterDataService {
           start_amount,
           end_amount,
           difference,
+          notes,
           status,
           device_name,
           user_id,
@@ -40,6 +42,7 @@ class CashRegisterDataService {
           start_amount,
           end_amount,
           difference,
+          notes,
           status,
           device_name,
           user_id,
@@ -256,6 +259,7 @@ class CashRegisterDataService {
     final openingAmount = _toDouble(row['start_amount']);
     final closingAmount = _toDouble(row['end_amount']);
     final expectedAmount = openingAmount + tx.sales + tx.deposits - tx.withdrawals - tx.expenses;
+    final reported = parseCashCloseNotes(row['notes']?.toString());
 
     return RegisterClosing(
       id: row['id']?.toString() ?? '',
@@ -275,7 +279,52 @@ class CashRegisterDataService {
       totalDeposits: tx.deposits,
       totalWithdrawals: tx.withdrawals,
       totalExpenses: tx.expenses,
+      difference: _toDouble(row['difference']),
+      notes: row['notes']?.toString(),
+      reportedCash: reported.cash,
+      reportedCard: reported.card,
+      reportedTransfer: reported.transfer,
     );
+  }
+
+  /// Loads the interactive detail for a single closing: the individual cash
+  /// movements (with their descriptions/notes) that power the drill-down on the
+  /// Depósitos / Retiros / Gastos cards, plus the forced-close note.
+  ///
+  /// The reconciliation numbers (expected/reported/net difference per method)
+  /// already live on [closing] — they're derived from structured data and the
+  /// reported breakdown parsed from notes, so no RPC is required here.
+  Future<CashCloseDetail> loadCloseDetail(RegisterClosing closing) async {
+    final reported = parseCashCloseNotes(closing.notes);
+    final transactions = await _loadTransactions(closing.id);
+    final saleCount = transactions.where((t) => t.type == 'sale').length;
+
+    return CashCloseDetail(
+      closing: closing,
+      transactionCount: saleCount,
+      forcedCloseNote: reported.forcedCloseNote,
+      transactions: transactions,
+    );
+  }
+
+  Future<List<CashTransactionEntry>> _loadTransactions(String sessionId) async {
+    if (sessionId.isEmpty) return const [];
+    final rows = await _client
+        .from('cash_transactions')
+        .select('id, type, amount, description, related_order_id, created_at')
+        .eq('session_id', sessionId)
+        .order('created_at', ascending: true);
+
+    return List<Map<String, dynamic>>.from(rows)
+        .map((row) => CashTransactionEntry(
+              id: row['id']?.toString() ?? '',
+              type: row['type']?.toString() ?? '',
+              amount: _toDouble(row['amount']),
+              description: row['description']?.toString(),
+              createdAt: DateTime.tryParse(row['created_at']?.toString() ?? ''),
+              relatedOrderId: row['related_order_id']?.toString(),
+            ))
+        .toList(growable: false);
   }
 
   /// Loads NCFs (fiscal documents) issued during a cash session, grouped by type.

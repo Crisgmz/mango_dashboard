@@ -296,6 +296,65 @@ class ModifierSummary {
   final double revenue;
 }
 
+/// One calendar day inside a "Ventas por día" report. Gross sales = sum of the
+/// day's payments (net of change) for orders closed that day.
+@immutable
+class DailySalesEntry {
+  const DailySalesEntry({
+    required this.date,
+    required this.total,
+    required this.orderCount,
+  });
+
+  /// Local calendar day (time component is midnight).
+  final DateTime date;
+
+  /// Gross sales for the day (taxes included).
+  final double total;
+  final int orderCount;
+}
+
+/// One tax/charge line aggregated over the range, by its name as configured in
+/// the business (`order_item_tax_lines.tax_name`). Whatever taxes exist show up
+/// here — nothing is hardcoded.
+@immutable
+class TaxLineTotal {
+  const TaxLineTotal({required this.name, required this.amount, this.rate});
+  final String name;
+  final double amount;
+
+  /// Representative rate (fraction, e.g. 0.18) when consistent across lines.
+  final double? rate;
+}
+
+/// "Ventas por día" report over a date range: per-day gross sales plus the tax
+/// breakdown of the whole range. Gross comes from payments; taxes from
+/// `order_item_tax_lines`, so `netTotal = grossTotal − Σ taxes`.
+@immutable
+class DailySalesReport {
+  const DailySalesReport({
+    this.days = const [],
+    this.grossTotal = 0,
+    this.taxes = const [],
+    this.orderCount = 0,
+  });
+
+  final List<DailySalesEntry> days;
+
+  /// Gross sales across the range (taxes/charges included).
+  final double grossTotal;
+
+  /// Each tax/charge applied in the range, by name. Empty when none recorded.
+  final List<TaxLineTotal> taxes;
+
+  final int orderCount;
+
+  double get taxTotal => taxes.fold<double>(0, (s, t) => s + t.amount);
+
+  /// Sales without any taxes/charges.
+  double get netTotal => grossTotal - taxTotal;
+}
+
 /// Aggregated sales attributed to a single waiter for the current period.
 /// Sourced from `payments` joined with `orders → table_sessions.waiter_user_id`.
 @immutable
@@ -647,6 +706,11 @@ class RegisterClosing {
     this.totalDeposits = 0,
     this.totalWithdrawals = 0,
     this.totalExpenses = 0,
+    this.difference = 0,
+    this.notes,
+    this.reportedCash,
+    this.reportedCard,
+    this.reportedTransfer,
   });
 
   final String id;
@@ -667,7 +731,140 @@ class RegisterClosing {
   final double totalWithdrawals;
   final double totalExpenses;
 
-  double get difference => closingAmount - expectedAmount;
+  /// Cash-only difference persisted by `fn_close_cash_session`
+  /// (`end_amount − expected_cash`). This is a cash-drawer reconciliation value,
+  /// NOT the net difference across all payment methods. Label it "Dif. efectivo".
+  final double difference;
+
+  /// Raw `cash_register_sessions.notes` string. Holds the cashier-reported
+  /// breakdown per method. May be null on old sessions.
+  final String? notes;
+
+  /// Cashier-reported amounts parsed from [notes]. Null when not present.
+  /// Reported cash also lives structurally in [closingAmount] (`end_amount`).
+  final double? reportedCash;
+  final double? reportedCard;
+  final double? reportedTransfer;
+
+  // ---------------------------------------------------------------------------
+  // Cash-close reconciliation — derived purely from structured data + the
+  // reported values parsed from notes. No RPC needed:
+  //   expectedCash = end_amount − difference   (inverse of fn_close_cash_session)
+  //   expectedCard = card sales, expectedTransfer = transfer sales
+  //   reportedCash = end_amount (or notes), reportedCard/transfer = notes
+  //   NET difference = reportedTotal − expectedTotal = Σ per-method differences.
+  // ---------------------------------------------------------------------------
+
+  /// Cash-only difference recomputed locally from the drawer flow. Kept for the
+  /// Reporte Z receipt (`CAJA EN EFECTIVO`).
+  double get cashDrawerDifference => closingAmount - expectedAmount;
+
+  /// Expected cash in the drawer: `apertura + ventas efectivo + depósitos −
+  /// retiros − gastos`. Mirrors `fn_get_cash_session_summary.expected_cash` and
+  /// the Reporte Z "Esperado" line — independent of the persisted `difference`.
+  double get expectedCash =>
+      openingAmount + cashSales + totalDeposits - totalWithdrawals - totalExpenses;
+  double get expectedCard => cardSales;
+  double get expectedTransfer => transferSales;
+  double get expectedTotal => expectedCash + expectedCard + expectedTransfer;
+
+  /// Reported (counted) cash: from notes when present, else `end_amount`.
+  double get reportedCashResolved => reportedCash ?? closingAmount;
+
+  /// Reported card/transfer: from notes when present; otherwise assume the
+  /// cashier reported the expected (electronic) amount, i.e. zero discrepancy.
+  double get reportedCardResolved => reportedCard ?? cardSales;
+  double get reportedTransferResolved => reportedTransfer ?? transferSales;
+
+  double get reportedTotal =>
+      reportedCashResolved + reportedCardResolved + reportedTransferResolved;
+
+  double get cashDifference => reportedCashResolved - expectedCash;
+  double get cardDifference => reportedCardResolved - expectedCard;
+  double get transferDifference => reportedTransferResolved - expectedTransfer;
+
+  /// NET difference across all methods (the headline). Positive = surplus.
+  double get netDifference => reportedTotal - expectedTotal;
+
+  /// Whether the cashier reported a per-method breakdown (card/transfer) — i.e.
+  /// the difference can be more than just the cash drawer.
+  bool get hasReportedBreakdown => reportedCard != null || reportedTransfer != null;
+}
+
+/// A single cash-drawer movement (deposit / withdrawal / expense / sale).
+/// Used to drill into a closing's breakdown cards and read each note.
+@immutable
+class CashTransactionEntry {
+  const CashTransactionEntry({
+    required this.id,
+    required this.type,
+    required this.amount,
+    this.description,
+    this.createdAt,
+    this.relatedOrderId,
+  });
+
+  /// `sale | deposit | withdrawal | expense`.
+  final String type;
+  final String id;
+  final double amount;
+  final String? description;
+  final DateTime? createdAt;
+  final String? relatedOrderId;
+}
+
+/// Fully reconciled view of a cash closing — the dashboard equivalent of the
+/// POS "cierre de caja" summary. The reconciliation numbers live on [closing]
+/// (derived from structured data + notes); this adds the individual cash
+/// movements (for the interactive drill-down) and the forced-close note.
+///
+/// The headline difference is the NET difference across all methods
+/// ([RegisterClosing.netDifference]), not the cash-only drawer difference.
+@immutable
+class CashCloseDetail {
+  const CashCloseDetail({
+    required this.closing,
+    this.transactionCount = 0,
+    this.forcedCloseNote,
+    this.transactions = const [],
+  });
+
+  final RegisterClosing closing;
+  final int transactionCount;
+  final String? forcedCloseNote;
+  final List<CashTransactionEntry> transactions;
+
+  // Flow / sales — read straight off the closing aggregates.
+  double get startAmount => closing.openingAmount;
+  double get cashSales => closing.cashSales;
+  double get cardSales => closing.cardSales;
+  double get transferSales => closing.transferSales;
+  double get totalSales => closing.totalSales;
+  double get totalDeposits => closing.totalDeposits;
+  double get totalWithdrawals => closing.totalWithdrawals;
+  double get totalExpenses => closing.totalExpenses;
+
+  // Reconciliation — delegated to the closing (single source of truth).
+  double get expectedCash => closing.expectedCash;
+  double get expectedCard => closing.expectedCard;
+  double get expectedTransfer => closing.expectedTransfer;
+  double get expectedTotalResolved => closing.expectedTotal;
+
+  double get reportedCash => closing.reportedCashResolved;
+  double get reportedCard => closing.reportedCardResolved;
+  double get reportedTransfer => closing.reportedTransferResolved;
+  double get reportedTotal => closing.reportedTotal;
+
+  double get netDifference => closing.netDifference;
+  double get diffCash => closing.cashDifference;
+  double get diffCard => closing.cardDifference;
+  double get diffTransfer => closing.transferDifference;
+
+  /// Persisted cash-only drawer difference (gaveta). Label "Dif. efectivo".
+  double get cashDrawerDifference =>
+      closing.difference != 0 ? closing.difference : closing.cashDrawerDifference;
+
+  bool get hasReported => closing.hasReportedBreakdown;
 }
 
 @immutable

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "265353782267",
+    "project_id": "mangopos-dashboard-do",
+    "storage_bucket": "mangopos-dashboard-do.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:265353782267:android:7487f7d5070e3d45a5a15e",
+        "android_client_info": {
+          "package_name": "do.mangopos.dashboard"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCvHiH1DzflrLIp8s22iu69-NXj-AyfmzE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

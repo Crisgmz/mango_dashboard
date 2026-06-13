@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
+import '../../../core/date/date_range_utils.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
@@ -85,12 +86,21 @@ class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
 
   Future<void> _pickCustomRange() async {
     final now = DateTime.now();
+    final firstDate = DateTime(now.year - 3);
+    final lastDate = DateTime(now.year, now.month, now.day);
+    // Preset periods can end in the future (e.g. "este mes"); clamp the seed
+    // into the picker bounds so its assertions hold.
+    final seed = clampInitialDateRange(
+      start: _customRange?.start ?? _start,
+      end: _customRange?.end ?? _end.subtract(const Duration(days: 1)),
+      firstDate: firstDate,
+      lastDate: lastDate,
+    );
     final picked = await showDateRangePicker(
       context: context,
-      firstDate: DateTime(now.year - 3),
-      lastDate: now,
-      initialDateRange: _customRange ??
-          DateTimeRange(start: _start, end: _end.subtract(const Duration(days: 1))),
+      firstDate: firstDate,
+      lastDate: lastDate,
+      initialDateRange: seed,
     );
     if (picked == null || !mounted) return;
     final start = DateTime(picked.start.year, picked.start.month, picked.start.day);
@@ -110,17 +120,25 @@ class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
     final rows = _loaded.days
         .map((d) => [
               _dayLabel(d.date),
-              d.orderCount.toString(),
-              d.total.toStringAsFixed(2),
+              MangoFormatters.number(d.orderCount),
+              MangoFormatters.amount(d.total),
             ])
         .toList();
     rows.add(['', '', '']);
-    rows.add(['Venta sin impuestos', '', _loaded.netTotal.toStringAsFixed(2)]);
+    rows.add(['Venta sin impuestos', '', MangoFormatters.amount(_loaded.netTotal)]);
     for (final t in _loaded.taxes) {
-      rows.add([t.name, '', t.amount.toStringAsFixed(2)]);
+      rows.add([_exportTaxLabel(t), '', MangoFormatters.amount(t.amount)]);
     }
-    rows.add(['TOTAL GENERAL', _loaded.orderCount.toString(), _loaded.grossTotal.toStringAsFixed(2)]);
+    rows.add(['TOTAL GENERAL', MangoFormatters.number(_loaded.orderCount), MangoFormatters.amount(_loaded.grossTotal)]);
     return rows;
+  }
+
+  String _exportTaxLabel(TaxLineTotal t) {
+    final r = t.rate;
+    if (r == null || r <= 0) return t.name;
+    final pct = r < 1 ? r * 100 : r;
+    final pctStr = pct == pct.roundToDouble() ? pct.toStringAsFixed(0) : pct.toStringAsFixed(2);
+    return '${t.name} ($pctStr%)';
   }
 
   Future<void> _exportCsv() async {

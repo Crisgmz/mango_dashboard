@@ -3,6 +3,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../domain/auth/admin_access_profile.dart';
 import '../../domain/dashboard/dashboard_models.dart';
+import 'daily_sales_aggregator.dart';
+import 'fiscal_aggregator.dart';
+import 'menu_engineering_aggregator.dart';
+import 'operations_aggregator.dart';
+import 'sales_trend_aggregator.dart';
 
 class DashboardDataService {
   DashboardDataService(this._client);
@@ -102,8 +107,17 @@ class DashboardDataService {
         prevEnd = start;
         break;
       case SalesDateFilter.custom:
-        start = customRange?.start ?? now;
-        end = customRange?.end ?? now.add(const Duration(days: 1));
+        // El picker entrega ambas fechas a medianoche local. Con el filtro
+        // [periodStart, periodEnd) un solo día (start == end) daría un rango
+        // vacío y todo saldría en 0; aun en rangos de varios días el último
+        // día quedaría excluido. Normalizamos al día completo y hacemos el fin
+        // exclusivo al inicio del día siguiente al último día seleccionado,
+        // para incluir ese día entero.
+        final rawStart = customRange?.start ?? now;
+        final rawEnd = customRange?.end ?? now;
+        start = DateTime(rawStart.year, rawStart.month, rawStart.day);
+        end = DateTime(rawEnd.year, rawEnd.month, rawEnd.day)
+            .add(const Duration(days: 1));
         // Para comparación previa en custom, usamos el mismo periodo de tiempo hacia atrás
         final diff = end.difference(start);
         prevStart = start.subtract(diff);
@@ -115,29 +129,42 @@ class DashboardDataService {
     final periodEnd = end.toUtc().toIso8601String();
 
     // ── Phase 1: Fire independent queries in parallel ──
-    // Period payments are filtered directly by business_id, so derived order_ids
-    // are inherently business-scoped — no extra scoping round-trip needed.
     final pStart = prevStart.toUtc().toIso8601String();
     final pEnd = prevEnd.toUtc().toIso8601String();
 
-    final periodPaymentsFuture = _client.from('payments')
+    // The canonical "ventas" scope: ids of paid orders closed in each window.
+    // Every sales figure below counts only payments belonging to these orders,
+    // so the dashboard agrees with Ventas / Ventas por día / tendencia / etc.
+    final paidOrderIdsFuture = _paidOrderIdsClosedInRange(
+        businessId: businessId, startIso: periodStart, endIso: periodEnd);
+    final prevPaidOrderIdsFuture = _paidOrderIdsClosedInRange(
+        businessId: businessId, startIso: pStart, endIso: pEnd);
+
+    // Period payments (net of change), paginated and excluding void/cancelled —
+    // the same filter the other reports use. Scoped to paid orders in Phase 3.
+    final periodPaymentsFuture = _paginate((from, to) => _client.from('payments')
         .select('amount, change_amount, status, order_id, created_at, processed_by, payment_methods(code)')
         .eq('business_id', businessId)
-        .gte('created_at', periodStart).lt('created_at', periodEnd);
+        .gte('created_at', periodStart).lt('created_at', periodEnd)
+        .not('status', 'in', '(void,cancelled)')
+        .range(from, to));
 
-    // Previous period payments — small payload, kept even in liteMode for growth chip.
-    final prevPaymentsFuture = _client.from('payments')
-        .select('amount, change_amount, status, created_at')
+    // Previous period payments — for the growth chip.
+    final prevPaymentsFuture = _paginate((from, to) => _client.from('payments')
+        .select('amount, change_amount, status, created_at, order_id')
         .eq('business_id', businessId)
-        .gte('created_at', pStart).lt('created_at', pEnd);
+        .gte('created_at', pStart).lt('created_at', pEnd)
+        .not('status', 'in', '(void,cancelled)')
+        .range(from, to));
 
     final futures = <Future<List<dynamic>>>[periodPaymentsFuture, prevPaymentsFuture];
     if (!liteMode) {
       futures.addAll([
         // Active Orders (all of them, regardless of date)
         _client.from('orders')
-            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, quantity, total, order_item_modifiers(name, qty))')
+            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, quantity, total, order_item_modifiers(name, qty)), payments(amount, change_amount, status)')
             .eq('table_sessions.business_id', businessId)
+            .neq('status_ext', 'void')
             .isFilter('closed_at', null)
             .order('created_at', ascending: false).limit(1000),
         // Catalog
@@ -146,8 +173,9 @@ class DashboardDataService {
             .eq('business_id', businessId).order('name', ascending: true),
         // Closed Orders for the period
         _client.from('orders')
-            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, quantity, total, order_item_modifiers(name, qty))')
+            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, quantity, total, order_item_modifiers(name, qty)), payments(amount, change_amount, status)')
             .eq('table_sessions.business_id', businessId)
+            .neq('status_ext', 'void')
             .gte('closed_at', periodStart)
             .lt('closed_at', periodEnd)
             .order('closed_at', ascending: false).limit(500),
@@ -162,10 +190,11 @@ class DashboardDataService {
     final productsRaw = liteMode ? const <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(results[3]);
     final closedOrdersRaw = liteMode ? const <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(results[4]);
 
-    // Order IDs from period payments are inherently business-scoped (payments filtered by business_id)
-    final scopedOrderIds = paymentRows
-        .map((row) => row['order_id']?.toString())
-        .whereType<String>().where((id) => id.isNotEmpty).toSet();
+    // Canonical scope: paid orders closed in the period (and the prev window).
+    // Payments on orders not yet marked paid are excluded, so totalSales here
+    // matches Ventas / Ventas por día for the same range.
+    final scopedOrderIds = await paidOrderIdsFuture;
+    final prevPaidOrderIds = await prevPaidOrderIdsFuture;
 
     // ── Phase 3: Process results (CPU-only, no awaits) ──
 
@@ -316,11 +345,12 @@ class DashboardDataService {
         .map((e) => SalesByMethod(code: e.key, amount: e.value)).toList()
       ..sort((a, b) => b.amount.compareTo(a.amount));
 
-    // Previous period comparison (already business-scoped via business_id filter)
+    // Previous period comparison — same canonical scope (paid orders only) so
+    // the growth chip compares like with like.
     double previousDaySales = 0;
     for (final row in prevPaymentRows) {
-      final status = row['status']?.toString();
-      if (status == 'void' || status == 'cancelled') continue;
+      final oid = row['order_id']?.toString();
+      if (oid == null || !prevPaidOrderIds.contains(oid)) continue;
       previousDaySales += _netAmount(row['amount'], row['change_amount']);
     }
 
@@ -341,21 +371,19 @@ class DashboardDataService {
     // Top seller (disabled — order_items lacks created_by column)
     TopSeller? topSeller;
 
-    // ── Waiter performance: map orderId → waiter via table_sessions, then
-    // aggregate the period's payments per waiter and resolve profile names.
-    final paymentOrderIds = paymentRows
-        .map((p) => p['order_id']?.toString())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
+    // ── Waiter/cashier performance: aggregate per person, restricted to the
+    // canonical scope (paid orders) so their totals reconcile with totalSales.
+    final paymentOrderIds = scopedOrderIds.toList(growable: false);
 
     final performanceResults = await Future.wait([
       _loadWaiterPerformance(
         paymentRows: paymentRows,
         paymentOrderIds: paymentOrderIds,
       ),
-      _loadCashierPerformance(paymentRows: paymentRows),
+      _loadCashierPerformance(
+        paymentRows: paymentRows,
+        scopedOrderIds: scopedOrderIds,
+      ),
     ]);
     final waiterPerformance = performanceResults[0] as List<WaiterPerformance>;
     final cashierPerformance = performanceResults[1] as List<CashierPerformance>;
@@ -394,23 +422,23 @@ class DashboardDataService {
   }
 
   /// Aggregates the period's payments per cashier (`payments.processed_by`)
-  /// and resolves their display names. Excludes void/cancelled payments and
-  /// payments without an assigned cashier.
+  /// and resolves their display names. Restricted to the canonical scope (paid
+  /// orders) and to payments with an assigned cashier.
   Future<List<CashierPerformance>> _loadCashierPerformance({
     required List<Map<String, dynamic>> paymentRows,
+    required Set<String> scopedOrderIds,
   }) async {
     final agg = <String, _CashierAgg>{};
     for (final row in paymentRows) {
+      final orderId = row['order_id']?.toString();
+      if (orderId == null || !scopedOrderIds.contains(orderId)) continue;
       final processedBy = row['processed_by']?.toString();
       if (processedBy == null || processedBy.isEmpty) continue;
-      final status = row['status']?.toString();
-      if (status == 'void' || status == 'cancelled') continue;
       final net = _netAmount(row['amount'], row['change_amount']);
-      final orderId = row['order_id']?.toString();
       final entry = agg.putIfAbsent(processedBy, _CashierAgg.new);
       entry.total += net;
       entry.ticketCount += 1;
-      if (orderId != null && orderId.isNotEmpty) entry.orderIds.add(orderId);
+      entry.orderIds.add(orderId);
     }
     if (agg.isEmpty) return const [];
 
@@ -556,11 +584,31 @@ class DashboardDataService {
             tableData['area']?.toString())
         : null;
 
+    // `orders.total` is 0 in this backend — the money is in `payments`. Use the
+    // paid amount (net of change), falling back to the running items total for
+    // orders not yet paid, then to row['total'].
+    var total = _toDouble(row['total']);
+    final payments = row['payments'];
+    if (payments is List && payments.isNotEmpty) {
+      var paid = 0.0;
+      for (final p in payments) {
+        if (p is! Map) continue;
+        final status = p['status']?.toString();
+        if (status == 'void' || status == 'cancelled') continue;
+        paid += _toDouble(p['amount']) - _toDouble(p['change_amount']);
+      }
+      if (paid > 0) total = paid;
+    }
+    if (total == 0 && childItems.isNotEmpty) {
+      final itemsSum = childItems.fold<double>(0, (s, it) => s + it.total);
+      if (itemsSum > 0) total = itemsSum;
+    }
+
     return LiveOrderItem(
       id: row['id']?.toString() ?? '',
       title: tableLabel,
       subtitle: customerName ?? row['status_ext']?.toString() ?? 'open',
-      total: _toDouble(row['total']),
+      total: total,
       status: row['status_ext']?.toString() ?? 'open',
       items: childItems,
       zone: zone,
@@ -745,100 +793,181 @@ class DashboardDataService {
     final startIso = start.toUtc().toIso8601String();
     final endIso = end.toUtc().toIso8601String();
 
-    // ── Paid orders closed in range → map order_id to its local day + count ──
-    final orderRows = await _paginate((from, to) => _client
-        .from('orders')
-        .select('id, closed_at')
-        .eq('business_id', businessId)
-        .eq('status_ext', 'paid')
-        .gte('closed_at', startIso)
-        .lt('closed_at', endIso)
-        .order('closed_at', ascending: true)
-        .range(from, to));
+    // Three independent streams, each internally paginated, fetched
+    // concurrently so a wide range (e.g. a full month) stays responsive.
+    //  - orders: id + closed_at (to map each order to its day and count it)
+    //  - payments: the actual money (orders.total is 0 in this backend)
+    //  - tax lines: per-named-tax amounts, filtered on their own
+    //    business_id + created_at (no join) so the query stays light.
+    final results = await Future.wait([
+      _paginate((from, to) => _client
+          .from('orders')
+          .select('id, closed_at')
+          .eq('business_id', businessId)
+          .eq('status_ext', 'paid')
+          .gte('closed_at', startIso)
+          .lt('closed_at', endIso)
+          .order('closed_at', ascending: true)
+          .range(from, to)),
+      _paginate((from, to) => _client
+          .from('payments')
+          .select('amount, change_amount, order_id')
+          .eq('business_id', businessId)
+          .gte('created_at', startIso)
+          .lt('created_at', endIso)
+          .not('status', 'in', '(void,cancelled)')
+          .range(from, to)),
+      _paginate((from, to) => _client
+          .from('order_item_tax_lines')
+          .select('tax_name, tax_rate, amount')
+          .eq('business_id', businessId)
+          .gte('created_at', startIso)
+          .lt('created_at', endIso)
+          .range(from, to)),
+    ]);
 
-    final orderDay = <String, DateTime>{};
-    final byDay = <DateTime, _DaySalesAgg>{};
-    var orderCount = 0;
-
-    for (final row in orderRows) {
-      final id = row['id']?.toString();
-      final closedAt = DateTime.tryParse(row['closed_at']?.toString() ?? '');
-      if (id == null || id.isEmpty || closedAt == null) continue;
-      final local = closedAt.toLocal();
-      final day = DateTime(local.year, local.month, local.day);
-      orderDay[id] = day;
-      byDay.putIfAbsent(day, _DaySalesAgg.new).count += 1;
-      orderCount += 1;
-    }
-
-    // ── Gross per day = those orders' payments (net of change) ──
-    final payRows = await _paginate((from, to) => _client
-        .from('payments')
-        .select('amount, change_amount, order_id')
-        .eq('business_id', businessId)
-        .gte('created_at', startIso)
-        .lt('created_at', endIso)
-        .not('status', 'in', '(void,cancelled)')
-        .range(from, to));
-
-    double grossTotal = 0;
-    for (final row in payRows) {
-      final oid = row['order_id']?.toString();
-      if (oid == null) continue;
-      final day = orderDay[oid];
-      if (day == null) continue; // not a paid order closed in this range
-      final net = _netAmount(row['amount'], row['change_amount']);
-      byDay[day]!.total += net;
-      grossTotal += net;
-    }
-
-    final days = byDay.entries
-        .map((e) => DailySalesEntry(
-              date: e.key,
-              total: e.value.total,
-              orderCount: e.value.count,
-            ))
-        .toList()
-      ..sort((a, b) => a.date.compareTo(b.date));
-
-    // ── Tax breakdown for the range, by tax name ──
-    final taxRows = await _paginate((from, to) => _client
-        .from('order_item_tax_lines')
-        .select('tax_name, tax_rate, amount, order_items!inner(orders!inner(closed_at, status_ext))')
-        .eq('business_id', businessId)
-        .eq('order_items.orders.status_ext', 'paid')
-        .gte('order_items.orders.closed_at', startIso)
-        .lt('order_items.orders.closed_at', endIso)
-        .range(from, to));
-
-    final taxAgg = <String, _TaxAgg>{};
-    for (final row in taxRows) {
-      final name = row['tax_name']?.toString().trim();
-      if (name == null || name.isEmpty) continue;
-      final agg = taxAgg.putIfAbsent(name, _TaxAgg.new);
-      agg.amount += _toDouble(row['amount']);
-      final rate = _toDouble(row['tax_rate']);
-      if (rate > 0) {
-        agg.rateSum += rate;
-        agg.rateCount += 1;
-      }
-    }
-
-    final taxes = taxAgg.entries
-        .map((e) => TaxLineTotal(
-              name: e.key,
-              amount: e.value.amount,
-              rate: e.value.rateCount > 0 ? e.value.rateSum / e.value.rateCount : null,
-            ))
-        .toList()
-      ..sort((a, b) => b.amount.compareTo(a.amount));
-
-    return DailySalesReport(
-      days: days,
-      grossTotal: grossTotal,
-      taxes: taxes,
-      orderCount: orderCount,
+    // Money math lives in a pure, unit-tested aggregator.
+    return aggregateDailySales(
+      orderRows: results[0],
+      payRows: results[1],
+      taxRows: results[2],
     );
+  }
+
+  /// Sales trend over [start, end): gross per week/month bucket plus a
+  /// weekday×hour heatmap. Same money source as [loadDailySales] (payments net
+  /// of change), bucketed by the pure [aggregateSalesTrend].
+  Future<SalesTrendReport> loadSalesTrend({
+    required String businessId,
+    required DateTime start,
+    required DateTime end,
+    required TrendGranularity granularity,
+  }) async {
+    final startIso = start.toUtc().toIso8601String();
+    final endIso = end.toUtc().toIso8601String();
+
+    final results = await Future.wait([
+      _paginate((from, to) => _client
+          .from('orders')
+          .select('id, closed_at')
+          .eq('business_id', businessId)
+          .eq('status_ext', 'paid')
+          .gte('closed_at', startIso)
+          .lt('closed_at', endIso)
+          .order('closed_at', ascending: true)
+          .range(from, to)),
+      _paginate((from, to) => _client
+          .from('payments')
+          .select('amount, change_amount, order_id')
+          .eq('business_id', businessId)
+          .gte('created_at', startIso)
+          .lt('created_at', endIso)
+          .not('status', 'in', '(void,cancelled)')
+          .range(from, to)),
+    ]);
+
+    return aggregateSalesTrend(
+      orderRows: results[0],
+      payRows: results[1],
+      rangeStart: start,
+      rangeEnd: end,
+      granularity: granularity,
+    );
+  }
+
+  /// Operations report for [start, end): gross by zone/origin/table plus table
+  /// turnover, covers and ticket-per-person. Revenue from payments net of
+  /// change, attributed through each paid order's dining session.
+  Future<OperationsReport> loadOperations({
+    required String businessId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final startIso = start.toUtc().toIso8601String();
+    final endIso = end.toUtc().toIso8601String();
+
+    final results = await Future.wait([
+      _paginate((from, to) => _client
+          .from('orders')
+          .select(
+              'id, table_sessions!inner(id, opened_at, closed_at, people_count, origin, dining_tables(name, zones(name)))')
+          .eq('business_id', businessId)
+          .eq('status_ext', 'paid')
+          .gte('closed_at', startIso)
+          .lt('closed_at', endIso)
+          .range(from, to)),
+      _paginate((from, to) => _client
+          .from('payments')
+          .select('amount, change_amount, order_id')
+          .eq('business_id', businessId)
+          .gte('created_at', startIso)
+          .lt('created_at', endIso)
+          .not('status', 'in', '(void,cancelled)')
+          .range(from, to)),
+    ]);
+
+    return aggregateOperations(orderRows: results[0], payRows: results[1]);
+  }
+
+  /// Menu-engineering report for [start, end): classifies what sells and lists
+  /// the active menu items that did not sell. Reuses [loadTopProductsForPeriod]
+  /// for the sold side and diffs it against the active menu catalog.
+  Future<MenuEngineeringReport> loadMenuEngineering({
+    required String businessId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    // Kick off both concurrently, await separately (heterogeneous result types).
+    final menuFuture = _client
+        .from('menu_items')
+        .select('name, is_active')
+        .eq('business_id', businessId)
+        .eq('is_active', true);
+    final soldFuture =
+        loadTopProductsForPeriod(businessId: businessId, start: start, end: end);
+
+    final menuRows = List<Map<String, dynamic>>.from(await menuFuture);
+    final menuNames = menuRows
+        .map((r) => r['name']?.toString() ?? '')
+        .where((n) => n.trim().isNotEmpty)
+        .toList();
+
+    final sold = (await soldFuture)
+        .map((p) => (name: p.label, units: p.quantity, revenue: p.amount))
+        .toList();
+
+    return aggregateMenuEngineering(menuNames: menuNames, sold: sold);
+  }
+
+  /// Fiscal report for [start, end): NCF by type, e-CF DGII status and the
+  /// consolidated ITBIS/total. Sourced from `fiscal_documents` by issue date.
+  Future<FiscalReport> loadFiscal({
+    required String businessId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final startIso = start.toUtc().toIso8601String();
+    final endIso = end.toUtc().toIso8601String();
+
+    final results = await Future.wait([
+      _paginate((from, to) => _client
+          .from('fiscal_documents')
+          .select('ncf_type, ncf_number, subtotal, itbis_amount, total, status')
+          .eq('business_id', businessId)
+          .gte('issued_at', startIso)
+          .lt('issued_at', endIso)
+          .order('issued_at', ascending: true)
+          .range(from, to)),
+      _paginate((from, to) => _client
+          .from('order_item_tax_lines')
+          .select('tax_name, tax_rate, amount')
+          .eq('business_id', businessId)
+          .gte('created_at', startIso)
+          .lt('created_at', endIso)
+          .range(from, to)),
+    ]);
+
+    return aggregateFiscal(fiscalRows: results[0], taxRows: results[1]);
   }
 
   /// Fetches every page of a PostgREST query (which caps responses at ~1000
@@ -859,32 +988,67 @@ class DashboardDataService {
     return all;
   }
 
-  /// Loads tickets (completed payments) for an arbitrary period. Mirrors the
-  /// in-line logic used by `loadSummary` so the Sales report can re-fetch
-  /// with a different date range without reloading the whole dashboard.
+  /// Order ids of orders marked **paid** and closed within [startIso, endIso).
+  /// This is the single canonical scope of "ventas": every sales figure in the
+  /// app (dashboard KPI, Ventas, Ventas por día, tendencia, operaciones) counts
+  /// only the payments belonging to these orders, so no two reports disagree.
+  Future<Set<String>> _paidOrderIdsClosedInRange({
+    required String businessId,
+    required String startIso,
+    required String endIso,
+  }) async {
+    final rows = await _paginate((from, to) => _client
+        .from('orders')
+        .select('id')
+        .eq('business_id', businessId)
+        .eq('status_ext', 'paid')
+        .gte('closed_at', startIso)
+        .lt('closed_at', endIso)
+        .range(from, to));
+    return rows
+        .map((r) => r['id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet();
+  }
+
+  /// Loads tickets (completed payments) for an arbitrary period, using the same
+  /// canonical scope as the rest of the app: non-void/cancelled payments (net of
+  /// change) belonging to paid orders closed in the range. So the "Ventas"
+  /// screen totals match "Ventas por día" and the dashboard for the same range.
   Future<({double totalSales, List<TicketItem> tickets})> loadTicketsForPeriod({
     required String businessId,
     required DateTime start,
     required DateTime end,
   }) async {
-    final rows = await _client
+    final startIso = start.toUtc().toIso8601String();
+    final endIso = end.toUtc().toIso8601String();
+
+    final paidOrderIdsFuture = _paidOrderIdsClosedInRange(
+        businessId: businessId, startIso: startIso, endIso: endIso);
+    final payRowsFuture = _paginate((from, to) => _client
         .from('payments')
         .select('amount, change_amount, status, order_id, created_at, payment_methods(code)')
         .eq('business_id', businessId)
-        .gte('created_at', start.toUtc().toIso8601String())
-        .lt('created_at', end.toUtc().toIso8601String());
+        .gte('created_at', startIso)
+        .lt('created_at', endIso)
+        .not('status', 'in', '(void,cancelled)')
+        .range(from, to));
+
+    final paidOrderIds = await paidOrderIdsFuture;
+    final payRows = await payRowsFuture;
 
     double totalSales = 0;
     final tickets = <TicketItem>[];
-    for (final row in List<Map<String, dynamic>>.from(rows)) {
-      final status = row['status']?.toString();
-      if (status == 'void' || status == 'cancelled') continue;
+    for (final row in payRows) {
+      final oid = row['order_id']?.toString();
+      if (oid == null || !paidOrderIds.contains(oid)) continue;
       final net = _netAmount(row['amount'], row['change_amount']);
       totalSales += net;
       final pm = row['payment_methods'];
       final pmCode = pm is Map<String, dynamic> ? pm['code']?.toString() : null;
       tickets.add(TicketItem(
-        orderId: row['order_id']?.toString() ?? '',
+        orderId: oid,
         amount: net,
         createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
         paymentMethodCode: pmCode,
@@ -895,28 +1059,18 @@ class DashboardDataService {
   }
 
   /// Top products for an arbitrary period. Aggregates `order_items` for the
-  /// orders linked to non-cancelled payments within the range.
+  /// canonical scope (paid orders closed in the range), so the product totals
+  /// reconcile with every other sales figure.
   Future<List<TopProduct>> loadTopProductsForPeriod({
     required String businessId,
     required DateTime start,
     required DateTime end,
   }) async {
-    final paymentRows = await _client
-        .from('payments')
-        .select('order_id, status')
-        .eq('business_id', businessId)
-        .gte('created_at', start.toUtc().toIso8601String())
-        .lt('created_at', end.toUtc().toIso8601String());
-
-    final orderIds = List<Map<String, dynamic>>.from(paymentRows)
-        .where((r) {
-          final s = r['status']?.toString();
-          return s != 'void' && s != 'cancelled';
-        })
-        .map((r) => r['order_id']?.toString())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet();
+    final orderIds = await _paidOrderIdsClosedInRange(
+      businessId: businessId,
+      startIso: start.toUtc().toIso8601String(),
+      endIso: end.toUtc().toIso8601String(),
+    );
 
     if (orderIds.isEmpty) return const [];
 
@@ -1351,17 +1505,6 @@ class _CashierAgg {
 class _ModifierAgg {
   double count = 0;
   double revenue = 0;
-}
-
-class _DaySalesAgg {
-  double total = 0;
-  int count = 0;
-}
-
-class _TaxAgg {
-  double amount = 0;
-  double rateSum = 0;
-  int rateCount = 0;
 }
 
 class _CustomerAgg {

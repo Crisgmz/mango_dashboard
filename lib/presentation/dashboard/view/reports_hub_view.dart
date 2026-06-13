@@ -9,7 +9,12 @@ import 'audit_detail_view.dart';
 import 'customer_analytics_view.dart';
 import 'daily_sales_report_view.dart';
 import 'kpi_detail_views.dart';
+import 'fiscal_view.dart';
+import 'menu_engineering_view.dart';
 import 'modifiers_breakdown_view.dart';
+import 'operations_view.dart';
+import 'sales_goal_view.dart';
+import 'sales_trend_view.dart';
 
 /// Hub that gathers the period-bound analytical reports under one entry,
 /// reachable from the side drawer. Inherits the current sales period from
@@ -32,7 +37,10 @@ class ReportsHubView extends ConsumerWidget {
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               padding: EdgeInsets.fromLTRB(
-                  dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(24)),
+                  dpi.space(16),
+                  dpi.space(16),
+                  dpi.space(16),
+                  dpi.space(24) + MediaQuery.of(context).padding.bottom),
               children: [
                 Text(
                   'Periodo actual: ${periodLabelFor(summary.filter)}',
@@ -44,6 +52,16 @@ class ReportsHubView extends ConsumerWidget {
                   ),
                 ),
                 SizedBox(height: dpi.space(14)),
+                _ReportTile(
+                  icon: Icons.emoji_events_rounded,
+                  accent: MangoThemeFactory.mango,
+                  title: 'Meta de venta',
+                  subtitle: 'Objetivo del mes, progreso y proyección',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SalesGoalView()),
+                  ),
+                ),
+                SizedBox(height: dpi.space(10)),
                 _ReportTile(
                   icon: Icons.insights_rounded,
                   accent: MangoThemeFactory.info,
@@ -78,6 +96,37 @@ class ReportsHubView extends ConsumerWidget {
                 ),
                 SizedBox(height: dpi.space(10)),
                 _ReportTile(
+                  icon: Icons.show_chart_rounded,
+                  accent: MangoThemeFactory.success,
+                  title: 'Tendencia',
+                  subtitle: 'Crecimiento por semana/mes y horas pico',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SalesTrendView()),
+                  ),
+                ),
+                SizedBox(height: dpi.space(10)),
+                _ReportTile(
+                  icon: Icons.storefront_rounded,
+                  accent: MangoThemeFactory.info,
+                  title: 'Operación (mesas y zonas)',
+                  subtitle: 'Ventas por zona · rotación · ticket por persona',
+                  onTap: () {
+                    final start = summary.periodStart ??
+                        DateTime.now().subtract(const Duration(days: 30));
+                    final end = summary.periodEnd ?? DateTime.now();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => OperationsView(
+                          start: start,
+                          end: end,
+                          periodLabel: periodLabelFor(summary.filter),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                SizedBox(height: dpi.space(10)),
+                _ReportTile(
                   icon: Icons.local_fire_department_rounded,
                   accent: MangoThemeFactory.mango,
                   title: 'Productos más vendidos',
@@ -87,6 +136,27 @@ class ReportsHubView extends ConsumerWidget {
                       builder: (_) => TopProductsDetailView(summary: summary),
                     ),
                   ),
+                ),
+                SizedBox(height: dpi.space(10)),
+                _ReportTile(
+                  icon: Icons.restaurant_menu_rounded,
+                  accent: MangoThemeFactory.mango,
+                  title: 'Menú',
+                  subtitle: 'Platos sin venta y ranking de productos',
+                  onTap: () {
+                    final start = summary.periodStart ??
+                        DateTime.now().subtract(const Duration(days: 30));
+                    final end = summary.periodEnd ?? DateTime.now();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => MenuEngineeringView(
+                          start: start,
+                          end: end,
+                          periodLabel: periodLabelFor(summary.filter),
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 SizedBox(height: dpi.space(10)),
                 _ReportTile(
@@ -143,6 +213,27 @@ class ReportsHubView extends ConsumerWidget {
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (_) => AuditDetailView(
+                          start: start,
+                          end: end,
+                          periodLabel: periodLabelFor(summary.filter),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                SizedBox(height: dpi.space(10)),
+                _ReportTile(
+                  icon: Icons.receipt_long_rounded,
+                  accent: MangoThemeFactory.info,
+                  title: 'Fiscal (NCF / e-CF)',
+                  subtitle: 'ITBIS, NCF por tipo y estado e-CF de la DGII',
+                  onTap: () {
+                    final start = summary.periodStart ??
+                        DateTime.now().subtract(const Duration(days: 30));
+                    final end = summary.periodEnd ?? DateTime.now();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => FiscalView(
                           start: start,
                           end: end,
                           periodLabel: periodLabelFor(summary.filter),

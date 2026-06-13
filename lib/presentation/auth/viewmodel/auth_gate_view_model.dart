@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/di/providers.dart';
 import '../../../core/auth/biometric_auth_service.dart';
+import '../../../core/notifications/fcm_service.dart';
 import '../../../domain/auth/admin_access_profile.dart';
 import '../../../domain/auth/saved_account.dart';
 
@@ -15,6 +16,7 @@ class AuthGateState {
     required this.profile,
     required this.error,
     this.isLocked = false,
+    this.biometricEnabled = false,
   });
 
   const AuthGateState.initial()
@@ -22,7 +24,8 @@ class AuthGateState {
       isAuthenticated = false,
       profile = null,
       error = null,
-      isLocked = false;
+      isLocked = false,
+      biometricEnabled = false;
 
   final bool isLoading;
   final bool isAuthenticated;
@@ -33,12 +36,18 @@ class AuthGateState {
   /// biométrica para mostrar contenido (auto-lock al abrir / volver del fondo).
   final bool isLocked;
 
+  /// Cached: whether the current account has biometric unlock enabled. Resolved
+  /// once at bootstrap so the lifecycle auto-lock check is synchronous (no
+  /// SharedPreferences read on every app pause/resume).
+  final bool biometricEnabled;
+
   AuthGateState copyWith({
     bool? isLoading,
     bool? isAuthenticated,
     AdminAccessProfile? profile,
     String? error,
     bool? isLocked,
+    bool? biometricEnabled,
     bool clearError = false,
   }) {
     return AuthGateState(
@@ -47,6 +56,7 @@ class AuthGateState {
       profile: profile ?? this.profile,
       error: clearError ? null : (error ?? this.error),
       isLocked: isLocked ?? this.isLocked,
+      biometricEnabled: biometricEnabled ?? this.biometricEnabled,
     );
   }
 }
@@ -111,9 +121,9 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
       // signIn fresco no la bloqueamos (el usuario ya se autenticó con
       // contraseña/biometría en ese flujo). En cualquier otro caso —arranque
       // con sesión persistida o resume del fondo— exigimos verificación.
-      final shouldLock = profile != null &&
-          _pendingPasswordForSave == null &&
-          await _isBiometricEnabledFor(profile.email);
+      final biometricEnabled =
+          profile != null && await _isBiometricEnabledFor(profile.email);
+      final shouldLock = biometricEnabled && _pendingPasswordForSave == null;
 
       state = AuthGateState(
         isLoading: false,
@@ -121,7 +131,14 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
         profile: profile,
         error: profile == null ? 'No se pudo resolver el negocio o rol del usuario.' : null,
         isLocked: shouldLock,
+        biometricEnabled: biometricEnabled,
       );
+
+      // Register this device for push so cash-close / void / cash-mismatch
+      // alerts arrive even with the app closed. Fire-and-forget.
+      if (profile != null) {
+        unawaited(FcmService.registerToken(businessId: profile.businessId));
+      }
     } catch (e) {
       final errorStr = e.toString();
       final errorLower = errorStr.toLowerCase();
@@ -349,6 +366,8 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
 
     await _saveCurrentAccount(next, password: currentSaved?.password);
     state = state.copyWith(profile: next);
+    // Re-point this device's push token at the newly selected business.
+    unawaited(FcmService.registerToken(businessId: next.businessId));
     return null;
   }
 
@@ -426,6 +445,9 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
   }
 
   Future<void> signOut() async {
+    // Drop this device's push token first so a logged-out phone stops getting
+    // the business's alerts (best-effort, before the session is gone).
+    await FcmService.unregisterToken();
     await _ref.read(adminAccessServiceProvider).signOut();
     state = const AuthGateState.initial().copyWith(isLoading: false);
   }

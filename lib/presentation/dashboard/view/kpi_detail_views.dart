@@ -4,6 +4,7 @@ import 'package:printing/printing.dart';
 
 import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
+import '../../../core/date/date_range_utils.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/cash_register/reporte_z_pdf_builder.dart';
 import '../../../data/export/report_export_service.dart';
@@ -101,12 +102,21 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
 
   Future<void> _pickCustomRange() async {
     final now = DateTime.now();
+    final firstDate = DateTime(now.year - 3);
+    final lastDate = DateTime(now.year, now.month, now.day);
+    // Preset periods can end in the future (e.g. "este mes"); clamp the seed
+    // into the picker bounds so its assertions hold.
+    final seed = clampInitialDateRange(
+      start: _customRange?.start ?? _start,
+      end: _customRange?.end ?? _end.subtract(const Duration(days: 1)),
+      firstDate: firstDate,
+      lastDate: lastDate,
+    );
     final picked = await showDateRangePicker(
       context: context,
-      firstDate: DateTime(now.year - 3),
-      lastDate: now,
-      initialDateRange: _customRange ??
-          DateTimeRange(start: _start, end: _end.subtract(const Duration(days: 1))),
+      firstDate: firstDate,
+      lastDate: lastDate,
+      initialDateRange: seed,
     );
     if (picked == null || !mounted) return;
     final start = DateTime(picked.start.year, picked.start.month, picked.start.day);
@@ -2059,12 +2069,21 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
 
   Future<void> _pickCustomRange() async {
     final now = DateTime.now();
+    final firstDate = DateTime(now.year - 3);
+    final lastDate = DateTime(now.year, now.month, now.day);
+    // Preset periods can end in the future (e.g. "este mes"); clamp the seed
+    // into the picker bounds so its assertions hold.
+    final seed = clampInitialDateRange(
+      start: _customRange?.start ?? _start,
+      end: _customRange?.end ?? _end.subtract(const Duration(days: 1)),
+      firstDate: firstDate,
+      lastDate: lastDate,
+    );
     final picked = await showDateRangePicker(
       context: context,
-      firstDate: DateTime(now.year - 3),
-      lastDate: now,
-      initialDateRange: _customRange ??
-          DateTimeRange(start: _start, end: _end.subtract(const Duration(days: 1))),
+      firstDate: firstDate,
+      lastDate: lastDate,
+      initialDateRange: seed,
     );
     if (picked == null || !mounted) return;
     final start = DateTime(picked.start.year, picked.start.month, picked.start.day);

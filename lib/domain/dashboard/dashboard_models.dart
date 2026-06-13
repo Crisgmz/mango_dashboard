@@ -883,3 +883,204 @@ class NcfTypeSummary {
   final String? firstNumber;
   final String? lastNumber;
 }
+
+/// One NCF type aggregated for the fiscal report: count, amounts and the
+/// issued-number range.
+@immutable
+class FiscalTypeSummary {
+  const FiscalTypeSummary({
+    required this.type,
+    required this.count,
+    required this.subtotal,
+    required this.itbis,
+    required this.total,
+    this.firstNumber,
+    this.lastNumber,
+  });
+  final String type;
+  final int count;
+  final double subtotal;
+  final double itbis;
+  final double total;
+  final String? firstNumber;
+  final String? lastNumber;
+}
+
+/// Fiscal report for a period: NCF by type, the real tax breakdown (ITBIS,
+/// propina, …) and the consolidated subtotal/total. NCF/totals come from
+/// `fiscal_documents`; the tax breakdown from `order_item_tax_lines`.
+@immutable
+class FiscalReport {
+  const FiscalReport({
+    this.byType = const [],
+    this.taxes = const [],
+    this.subtotal = 0,
+    this.itbis = 0,
+    this.total = 0,
+    this.documentCount = 0,
+    this.cancelledCount = 0,
+  });
+
+  /// Active NCF grouped by type, sorted by total desc.
+  final List<FiscalTypeSummary> byType;
+
+  /// Real taxes/charges applied in the period, by name (sorted by amount).
+  final List<TaxLineTotal> taxes;
+
+  final double subtotal;
+  final double itbis;
+  final double total;
+
+  /// Active fiscal documents in the period.
+  final int documentCount;
+
+  /// Documents cancelled (anulados) in the period.
+  final int cancelledCount;
+
+  /// All taxes/charges actually collected in the period (ITBIS, propina, …),
+  /// summed from the real `order_item_tax_lines`. This — not a fixed rate or the
+  /// stored `itbis_amount` — is what the report shows as "impuestos recaudados".
+  double get taxTotal => taxes.fold<double>(0, (s, t) => s + t.amount);
+}
+
+/// Granularity for the sales-trend report.
+enum TrendGranularity { week, month }
+
+/// One time bucket of the sales-trend report: an ISO week (starting Monday) or
+/// a calendar month.
+@immutable
+class TrendBucket {
+  const TrendBucket({
+    required this.start,
+    required this.total,
+    required this.orderCount,
+  });
+
+  /// Local date-only start of the bucket (Monday for weeks, the 1st for months).
+  final DateTime start;
+  final double total;
+  final int orderCount;
+}
+
+/// One weekday×hour cell of the sales heatmap.
+@immutable
+class HeatCell {
+  const HeatCell({
+    required this.weekday,
+    required this.hour,
+    required this.total,
+  });
+
+  /// 1 = Monday … 7 = Sunday (matches [DateTime.weekday]).
+  final int weekday;
+
+  /// Local hour, 0 … 23.
+  final int hour;
+  final double total;
+}
+
+/// Sales-trend report: gross sales bucketed over time (for the trend chart)
+/// plus a weekday×hour heatmap of the same range. Gross comes from payments net
+/// of change, consistent with the other reports.
+@immutable
+class SalesTrendReport {
+  const SalesTrendReport({
+    this.buckets = const [],
+    this.heat = const [],
+    this.granularity = TrendGranularity.week,
+  });
+
+  final List<TrendBucket> buckets;
+  final List<HeatCell> heat;
+  final TrendGranularity granularity;
+
+  double get total => buckets.fold<double>(0, (s, b) => s + b.total);
+
+  /// Total of the most recent bucket (the one currently in progress).
+  double get currentTotal => buckets.isEmpty ? 0 : buckets.last.total;
+
+  /// Total of the bucket before the current one — the comparison baseline.
+  double get previousTotal =>
+      buckets.length < 2 ? 0 : buckets[buckets.length - 2].total;
+}
+
+/// A named sales bucket used by the operations report for zones, origins and
+/// tables: a label plus its gross sales and order count.
+@immutable
+class NamedSales {
+  const NamedSales({required this.name, required this.total, required this.orderCount});
+  final String name;
+  final double total;
+  final int orderCount;
+}
+
+/// Operations report for a period: where and how sales happen (by zone, by
+/// origin, by table) plus service metrics (table turnover, covers, ticket per
+/// person). Gross comes from payments net of change, like the other reports.
+@immutable
+class OperationsReport {
+  const OperationsReport({
+    this.zones = const [],
+    this.origins = const [],
+    this.tables = const [],
+    this.totalSales = 0,
+    this.orderCount = 0,
+    this.sessionCount = 0,
+    this.avgTurnoverMinutes = 0,
+    this.totalCovers = 0,
+  });
+
+  final List<NamedSales> zones;
+  final List<NamedSales> origins;
+  final List<NamedSales> tables;
+  final double totalSales;
+  final int orderCount;
+
+  /// Distinct dining sessions (table occupancies) in the period.
+  final int sessionCount;
+
+  /// Average occupancy time per closed session, in minutes (0 if none).
+  final double avgTurnoverMinutes;
+
+  /// Sum of `people_count` across distinct sessions that reported it.
+  final int totalCovers;
+
+  /// Average spend per guest (gross ÷ covers); 0 when covers are unknown.
+  double get ticketPerPerson => totalCovers > 0 ? totalSales / totalCovers : 0;
+}
+
+/// One sold product with its period units and revenue.
+@immutable
+class MenuItemStat {
+  const MenuItemStat({
+    required this.name,
+    required this.units,
+    required this.revenue,
+  });
+  final String name;
+  final double units;
+  final double revenue;
+}
+
+/// Menu report for a period: the sold products (ranked by revenue) plus the
+/// active menu items that did NOT sell (dead items), so the owner can prune the
+/// menu.
+@immutable
+class MenuEngineeringReport {
+  const MenuEngineeringReport({
+    this.selling = const [],
+    this.deadItems = const [],
+    this.menuSize = 0,
+  });
+
+  /// Sold products, sorted by revenue desc.
+  final List<MenuItemStat> selling;
+
+  /// Active menu items with zero sales in the period (sorted by name).
+  final List<String> deadItems;
+
+  /// Number of active menu items considered.
+  final int menuSize;
+
+  double get totalRevenue => selling.fold<double>(0, (s, p) => s + p.revenue);
+}

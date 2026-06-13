@@ -74,13 +74,15 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final notifier = ref.read(authGateViewModelProvider.notifier);
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden) {
-      // Cuando la app va al fondo, marca el lock para que al volver
-      // exija biometría (solo aplica si la cuenta la tiene activada).
-      _maybeLock(notifier);
+    // Lock ONLY on `paused` (the app actually went to the background). We must
+    // NOT lock on `inactive`/`hidden`: those fire transiently while a system
+    // dialog is up — including the Face ID/biometric prompt itself — which
+    // would re-lock mid-unlock and loop the prompt forever.
+    if (state == AppLifecycleState.paused) {
+      final authState = ref.read(authGateViewModelProvider);
+      if (authState.isAuthenticated && authState.biometricEnabled) {
+        ref.read(authGateViewModelProvider.notifier).lock();
+      }
       return;
     }
     if (state == AppLifecycleState.resumed) {
@@ -92,18 +94,6 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
           profile.allowed) {
         unawaited(_refreshAll(profile));
       }
-    }
-  }
-
-  Future<void> _maybeLock(AuthGateViewModel notifier) async {
-    final authState = ref.read(authGateViewModelProvider);
-    final email = authState.profile?.email;
-    if (!authState.isAuthenticated || email == null || email.isEmpty) return;
-    final accounts =
-        await ref.read(savedAccountsServiceProvider).loadAccounts();
-    final account = accounts.where((a) => a.email == email).firstOrNull;
-    if (account?.biometricEnabled == true) {
-      notifier.lock();
     }
   }
 
@@ -5085,7 +5075,8 @@ class _SalesLayoutSheet extends ConsumerWidget {
                 ),
               ),
               Padding(
-                padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16), dpi.space(12)),
+                padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16),
+                    dpi.space(12) + MediaQuery.of(context).padding.bottom),
                 child: SizedBox(
                   width: double.infinity,
                   child: FilledButton(

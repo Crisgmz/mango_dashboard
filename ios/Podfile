@@ -1,4 +1,4 @@
-platform :ios, '13.0'
+platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -49,7 +49,8 @@ post_install do |installer|
       ]
 
       # Asegura que todos los pods compartan el deployment target mínimo del proyecto.
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      # Firebase (firebase_core 4.x / Firebase iOS SDK) exige iOS 15.0 mínimo.
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
 
       # Genera dSYM para todos los frameworks en Release. Sin esto, frameworks
       # FFI como `objective_c` (que Flutter empuja vía supabase_flutter →

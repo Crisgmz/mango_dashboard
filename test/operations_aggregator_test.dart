@@ -23,7 +23,7 @@ Map<String, dynamic> _order(
         'dining_tables': table == null
             ? null
             : {
-                'name': table,
+                'label': table,
                 'zones': zone == null ? null : {'name': zone},
               },
       },

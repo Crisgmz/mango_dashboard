@@ -12,6 +12,8 @@ class NotificationService {
   final _channels = <RealtimeChannel>[];
   final _controller = StreamController<DashboardNotification>.broadcast();
   final _seenIds = <String>{};
+  // Caché user_id -> nombre para no resolver el mismo mesero en cada apertura.
+  final _nameCache = <String, String>{};
 
   Stream<DashboardNotification> get stream => _controller.stream;
 
@@ -94,19 +96,28 @@ class NotificationService {
         column: 'business_id',
         value: businessId,
       ),
-      callback: (payload) {
+      callback: (payload) async {
         dev.log('[NotificationService] table_sessions INSERT received');
         final rec = payload.newRecord;
         final customer = rec['customer_name']?.toString();
         final origin = rec['origin']?.toString() ?? 'dine_in';
-        final label = (customer != null && customer.trim().isNotEmpty)
-            ? customer.trim()
-            : _originLabel(origin);
+        // Quién abrió la mesa: preferimos el mesero asignado y, si no hay,
+        // quién la abrió (opened_by, siempre presente).
+        final waiterId =
+            (rec['waiter_user_id'] ?? rec['opened_by'])?.toString();
+        final waiterName = await _resolveUserName(waiterId);
+
+        final parts = <String>[
+          (customer != null && customer.trim().isNotEmpty)
+              ? customer.trim()
+              : _originLabel(origin),
+          if (waiterName != null && waiterName.isNotEmpty) 'Mesero: $waiterName',
+        ];
         _emit(DashboardNotification(
           id: '${rec['id']}_open_${DateTime.now().millisecondsSinceEpoch}',
           type: NotificationType.tableOpened,
           title: 'Nueva cuenta abierta',
-          message: '$label — ${_originLabel(origin)}.',
+          message: '${parts.join(' · ')}.',
           createdAt: DateTime.now(),
         ));
       },
@@ -121,6 +132,33 @@ class NotificationService {
     if (!_controller.isClosed) {
       _controller.add(n);
     }
+  }
+
+  /// Resuelve `user_id -> nombre` del mesero vía el RPC `fn_resolve_user_names`
+  /// (SECURITY DEFINER, evita la RLS de `profiles`). Cachea el resultado para no
+  /// repetir la consulta. Degrada a `null` si el RPC no está disponible (p. ej.
+  /// migración aún sin aplicar), en cuyo caso la notificación omite el mesero.
+  Future<String?> _resolveUserName(String? userId) async {
+    if (userId == null || userId.isEmpty) return null;
+    final cached = _nameCache[userId];
+    if (cached != null) return cached;
+    try {
+      final rows = await _client.rpc(
+        'fn_resolve_user_names',
+        params: {'p_user_ids': [userId]},
+      );
+      for (final row in List<Map<String, dynamic>>.from(rows as List)) {
+        final id = row['user_id']?.toString();
+        final name = row['display_name']?.toString().trim();
+        if (id != null && name != null && name.isNotEmpty) {
+          _nameCache[id] = name;
+          if (id == userId) return name;
+        }
+      }
+    } catch (e) {
+      dev.log('[NotificationService] resolve waiter name skipped: $e');
+    }
+    return null;
   }
 
   static String _originLabel(String origin) {

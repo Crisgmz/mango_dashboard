@@ -913,7 +913,7 @@ class DashboardDataService {
       _paginate((from, to) => _client
           .from('orders')
           .select(
-              'id, table_sessions!inner(id, opened_at, closed_at, people_count, origin, dining_tables(name, zones(name)))')
+              'id, table_sessions!inner(id, opened_at, closed_at, people_count, origin, dining_tables(label, code, zones(name)))')
           .eq('business_id', businessId)
           .neq('status_ext', 'void')
           .gte('closed_at', startIso)

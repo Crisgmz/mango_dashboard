@@ -46,7 +46,9 @@ OperationsReport aggregateOperations({
         : null;
 
     final zone = _nonEmpty(zones?['name']) ?? noZone;
-    final tableName = _nonEmpty(table?['name']) ?? noTable;
+    // dining_tables no tiene columna `name`: usa `label` y cae a `code`.
+    final tableName =
+        _nonEmpty(table?['label']) ?? _nonEmpty(table?['code']) ?? noTable;
     final origin = _nonEmpty(session?['origin']) ?? noOrigin;
 
     orderZone[oid] = zone;

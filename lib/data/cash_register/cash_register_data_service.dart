@@ -123,22 +123,48 @@ class CashRegisterDataService {
     );
   }
 
+  /// Resuelve `user_id -> nombre legible` para los cajeros que abrieron/cerraron
+  /// cada sesión. Usa el RPC `fn_resolve_user_names` (SECURITY DEFINER), que
+  /// toma el mejor dato disponible (empleados → profiles.full_name → email) sin
+  /// chocar con la RLS de `profiles`. Si el RPC no está disponible (migración
+  /// aún no aplicada), degrada a un mapa vacío y el llamador usa su fallback.
   Future<Map<String, String>> _profilesByUserId(List<String> userIds) async {
     if (userIds.isEmpty) return const {};
+    final unique = userIds.toSet().toList(growable: false);
 
-    final rows = await _client
-        .from('profiles')
-        .select('id, full_name')
-        .inFilter('id', userIds.toSet().toList(growable: false));
-
-    final result = <String, String>{};
-    for (final row in List<Map<String, dynamic>>.from(rows)) {
-      final id = row['id']?.toString();
-      if (id == null || id.isEmpty) continue;
-      final fullName = row['full_name']?.toString().trim();
-      result[id] = (fullName == null || fullName.isEmpty) ? 'Desconocido' : fullName;
+    try {
+      final rows = await _client.rpc(
+        'fn_resolve_user_names',
+        params: {'p_user_ids': unique},
+      );
+      final result = <String, String>{};
+      for (final row in List<Map<String, dynamic>>.from(rows as List)) {
+        final id = row['user_id']?.toString();
+        if (id == null || id.isEmpty) continue;
+        final name = row['display_name']?.toString().trim();
+        if (name != null && name.isNotEmpty) result[id] = name;
+      }
+      return result;
+    } catch (_) {
+      // Fallback: intenta leer profiles directamente (solo funciona para el
+      // propio usuario bajo la RLS por defecto, pero evita romper la vista).
+      try {
+        final rows = await _client
+            .from('profiles')
+            .select('id, full_name')
+            .inFilter('id', unique);
+        final result = <String, String>{};
+        for (final row in List<Map<String, dynamic>>.from(rows)) {
+          final id = row['id']?.toString();
+          if (id == null || id.isEmpty) continue;
+          final fullName = row['full_name']?.toString().trim();
+          if (fullName != null && fullName.isNotEmpty) result[id] = fullName;
+        }
+        return result;
+      } catch (_) {
+        return const {};
+      }
     }
-    return result;
   }
 
   Future<Map<String, _SessionTx>> _transactionsBySession(List<String> sessionIds) async {

@@ -37,6 +37,51 @@ class DashboardDataService {
     return results;
   }
 
+  /// Resuelve `user_id -> nombre legible` (cajeros / meseros) vía el RPC
+  /// `fn_resolve_user_names` (SECURITY DEFINER). El RPC evita la RLS de
+  /// `profiles` —que solo deja leer el perfil propio— y toma el mejor dato
+  /// disponible: empleados (nombre+apellido) → profiles.full_name → email.
+  ///
+  /// Si el RPC no está disponible (migración aún sin aplicar) degrada a una
+  /// lectura directa de `profiles` y, en última instancia, a un mapa vacío,
+  /// dejando que el llamador use su etiqueta genérica de respaldo.
+  Future<Map<String, String>> _resolveUserNames(List<String> userIds) async {
+    if (userIds.isEmpty) return const {};
+    final unique = userIds.toSet().toList(growable: false);
+    try {
+      final rows = await _client.rpc(
+        'fn_resolve_user_names',
+        params: {'p_user_ids': unique},
+      );
+      final result = <String, String>{};
+      for (final row in List<Map<String, dynamic>>.from(rows as List)) {
+        final id = row['user_id']?.toString();
+        if (id == null || id.isEmpty) continue;
+        final name = row['display_name']?.toString().trim();
+        if (name != null && name.isNotEmpty) result[id] = name;
+      }
+      return result;
+    } catch (_) {
+      try {
+        final profileRows = await _batchedInFilter(
+          table: 'profiles',
+          select: 'id, full_name',
+          filterColumn: 'id',
+          values: unique,
+        );
+        final result = <String, String>{};
+        for (final row in profileRows) {
+          final id = row['id']?.toString();
+          final name = row['full_name']?.toString().trim();
+          if (id != null && name != null && name.isNotEmpty) result[id] = name;
+        }
+        return result;
+      } catch (_) {
+        return const {};
+      }
+    }
+  }
+
   /// Loads dashboard data. Set [liteMode] to true to skip catalog, active orders,
   /// closed orders, and previous-period comparison — useful for the sales-only view.
   ///
@@ -443,18 +488,7 @@ class DashboardDataService {
     if (agg.isEmpty) return const [];
 
     final cashierIds = agg.keys.toList(growable: false);
-    final profileRows = await _batchedInFilter(
-      table: 'profiles',
-      select: 'id, full_name',
-      filterColumn: 'id',
-      values: cashierIds,
-    );
-    final namesById = <String, String>{};
-    for (final row in profileRows) {
-      final id = row['id']?.toString();
-      final name = row['full_name']?.toString().trim();
-      if (id != null && name != null && name.isNotEmpty) namesById[id] = name;
-    }
+    final namesById = await _resolveUserNames(cashierIds);
 
     final result = agg.entries
         .map((e) => CashierPerformance(
@@ -520,18 +554,7 @@ class DashboardDataService {
 
     // 3. Resolve waiter names.
     final waiterIds = agg.keys.toList(growable: false);
-    final profileRows = await _batchedInFilter(
-      table: 'profiles',
-      select: 'id, full_name',
-      filterColumn: 'id',
-      values: waiterIds,
-    );
-    final namesById = <String, String>{};
-    for (final row in profileRows) {
-      final id = row['id']?.toString();
-      final name = row['full_name']?.toString().trim();
-      if (id != null && name != null && name.isNotEmpty) namesById[id] = name;
-    }
+    final namesById = await _resolveUserNames(waiterIds);
 
     final result = agg.entries
         .map((e) => WaiterPerformance(
@@ -804,7 +827,7 @@ class DashboardDataService {
           .from('orders')
           .select('id, closed_at')
           .eq('business_id', businessId)
-          .eq('status_ext', 'paid')
+          .neq('status_ext', 'void')
           .gte('closed_at', startIso)
           .lt('closed_at', endIso)
           .order('closed_at', ascending: true)
@@ -851,7 +874,7 @@ class DashboardDataService {
           .from('orders')
           .select('id, closed_at')
           .eq('business_id', businessId)
-          .eq('status_ext', 'paid')
+          .neq('status_ext', 'void')
           .gte('closed_at', startIso)
           .lt('closed_at', endIso)
           .order('closed_at', ascending: true)
@@ -892,7 +915,7 @@ class DashboardDataService {
           .select(
               'id, table_sessions!inner(id, opened_at, closed_at, people_count, origin, dining_tables(name, zones(name)))')
           .eq('business_id', businessId)
-          .eq('status_ext', 'paid')
+          .neq('status_ext', 'void')
           .gte('closed_at', startIso)
           .lt('closed_at', endIso)
           .range(from, to)),
@@ -988,10 +1011,18 @@ class DashboardDataService {
     return all;
   }
 
-  /// Order ids of orders marked **paid** and closed within [startIso, endIso).
+  /// Order ids of **closed, non-void** orders within [startIso, endIso).
   /// This is the single canonical scope of "ventas": every sales figure in the
   /// app (dashboard KPI, Ventas, Ventas por día, tendencia, operaciones) counts
   /// only the payments belonging to these orders, so no two reports disagree.
+  ///
+  /// We filter on `closed_at` in range + `status_ext != 'void'` instead of
+  /// `status_ext = 'paid'`: some orders are fully paid, closed and fiscalized
+  /// (NCF emitido) but the POS leaves `status_ext` stuck at an earlier state
+  /// (e.g. `sent_to_kitchen`). Those are real sales — requiring `paid` would
+  /// silently drop them and make Ventas disagree with the fiscal "Facturado".
+  /// The money still comes from `payments` (completed, net of change), so a
+  /// closed order without payments simply contributes 0.
   Future<Set<String>> _paidOrderIdsClosedInRange({
     required String businessId,
     required String startIso,
@@ -1001,7 +1032,7 @@ class DashboardDataService {
         .from('orders')
         .select('id')
         .eq('business_id', businessId)
-        .eq('status_ext', 'paid')
+        .neq('status_ext', 'void')
         .gte('closed_at', startIso)
         .lt('closed_at', endIso)
         .range(from, to));
@@ -1200,20 +1231,7 @@ class DashboardDataService {
       }
     }
 
-    final namesById = <String, String>{};
-    if (userIds.isNotEmpty) {
-      final profileRows = await _batchedInFilter(
-        table: 'profiles',
-        select: 'id, full_name',
-        filterColumn: 'id',
-        values: userIds.toList(growable: false),
-      );
-      for (final row in profileRows) {
-        final id = row['id']?.toString();
-        final name = row['full_name']?.toString().trim();
-        if (id != null && name != null && name.isNotEmpty) namesById[id] = name;
-      }
-    }
+    final namesById = await _resolveUserNames(userIds.toList(growable: false));
 
     // Build VoidedItem list + accumulate KPIs.
     double voidedAmount = 0;

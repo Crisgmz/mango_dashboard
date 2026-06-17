@@ -144,7 +144,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
     final rows = <List<String>>[];
     for (final v in _filteredVoids) {
       rows.add([
-        'Void',
+        'Devolución',
         _formatDateTime(v.createdAt),
         '${v.productName} (${v.quantity.toStringAsFixed(0)})',
         v.amount.toStringAsFixed(2),
@@ -224,7 +224,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
             indicatorColor: MangoThemeFactory.mango,
             labelColor: MangoThemeFactory.mango,
             tabs: [
-              Tab(icon: Icon(Icons.block_rounded), text: 'Voids'),
+              Tab(icon: Icon(Icons.block_rounded), text: 'Devoluciones'),
               Tab(icon: Icon(Icons.cancel_rounded), text: 'Cancelaciones'),
               Tab(icon: Icon(Icons.discount_rounded), text: 'Descuentos'),
             ],
@@ -367,7 +367,7 @@ class _AuditHeader extends StatelessWidget {
             children: [
               Expanded(
                 child: _MiniStat(
-                  label: 'Voids',
+                  label: 'Devoluciones',
                   value: '${summary.voidedItemsCount}',
                   amount: MangoFormatters.currency(summary.voidedAmount),
                 ),
@@ -447,7 +447,7 @@ class _VoidedItemsTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     if (items.isEmpty) {
-      return _EmptyTab(message: 'Sin items anulados en este periodo.');
+      return _EmptyTab(message: 'Sin productos devueltos en este periodo.');
     }
     return ListView.separated(
       padding: EdgeInsets.fromLTRB(

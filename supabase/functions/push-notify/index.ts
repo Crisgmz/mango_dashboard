@@ -86,12 +86,17 @@ async function buildEvent(payload: any): Promise<Notif | null> {
 
   if (table === "order_items") {
     if (record.status !== "void" || old_record?.status === "void") return null;
+    // orders has no business_id; it lives on table_sessions (orders.session_id → table_sessions).
     const { data } = await admin
-      .from("orders").select("business_id").eq("id", record.order_id).maybeSingle();
-    if (!data?.business_id) return null;
+      .from("orders")
+      .select("table_sessions!inner(business_id)")
+      .eq("id", record.order_id)
+      .maybeSingle();
+    const businessId = (data as any)?.table_sessions?.business_id;
+    if (!businessId) return null;
     const qty = record.qty ?? record.quantity ?? 1;
     return {
-      businessId: data.business_id,
+      businessId,
       title: "Producto anulado",
       body: `${qty} x ${record.product_name ?? "Producto"} fue anulado.`,
     };

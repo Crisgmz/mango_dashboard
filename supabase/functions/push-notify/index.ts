@@ -1,8 +1,12 @@
 // Supabase Edge Function: push-notify
 //
-// Triggered by Database Webhooks on `order_items` (UPDATE) and
-// `cash_register_sessions` (UPDATE). Resolves the event → business, looks up
-// that business's device tokens, and sends an FCM HTTP v1 push to each.
+// Two entry paths (same fan-out to a business's device tokens via FCM HTTP v1):
+//   1. Database Webhooks on `order_items` (UPDATE) and `cash_register_sessions`
+//      (UPDATE) → resolves the event → business → push (producto anulado,
+//      cierre de caja, caja descuadrada).
+//   2. Daily billing-reminder sweep, invoked by pg_cron with the service-role
+//      bearer and body {"kind":"billing_reminder_sweep"}. Calls the SQL RPC
+//      `fn_billing_reminders_due` (who + message) and pushes each reminder.
 //
 // Required secrets (supabase secrets set ...):
 //   SUPABASE_URL                 (provided automatically)
@@ -162,9 +166,43 @@ async function sendToBusiness(n: Notif): Promise<{ sent: number; pruned: number 
   return { sent, pruned: stale.length };
 }
 
+// ── Billing reminder sweep (invoked daily by pg_cron) ──
+// SQL decides who to notify today + the message (fn_billing_reminders_due);
+// we just fan out to each business's device tokens. Service-role only.
+async function runBillingReminderSweep(): Promise<unknown> {
+  const { data, error } = await admin.rpc("fn_billing_reminders_due");
+  if (error) throw error;
+  const rows = (data ?? []) as Array<{ business_id: string; title: string; body: string }>;
+  let businesses = 0;
+  let sent = 0;
+  for (const row of rows) {
+    if (!row.business_id) continue;
+    const r = await sendToBusiness({
+      businessId: row.business_id,
+      title: row.title,
+      body: row.body,
+    });
+    businesses++;
+    sent += r.sent;
+  }
+  return { kind: "billing_reminder_sweep", businesses, sent };
+}
+
 Deno.serve(async (req) => {
   try {
     const payload = await req.json();
+
+    // Cron-driven billing reminders: gated to the service role (the cron sends
+    // the service_role key as the bearer). Checked before any DB read.
+    if (payload?.kind === "billing_reminder_sweep") {
+      const auth = req.headers.get("Authorization") ?? "";
+      if (auth !== `Bearer ${SERVICE_ROLE}`) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      return Response.json(await runBillingReminderSweep());
+    }
+
+    // Default path: Database Webhook events (order_items / cash_register_sessions).
     const event = await buildEvent(payload);
     if (!event) return Response.json({ skipped: true });
     return Response.json(await sendToBusiness(event));

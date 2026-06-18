@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/auth/biometric_auth_service.dart';
 import '../../data/auth/admin_access_service.dart';
 import '../../data/auth/saved_accounts_service.dart';
+import '../../data/billing/billing_data_service.dart';
 import '../../data/cash_register/cash_register_data_service.dart';
 import '../../data/dashboard/business_day_service.dart';
 import '../../data/dashboard/dashboard_data_service.dart';
@@ -46,6 +47,10 @@ final inventoryDataServiceProvider = Provider<InventoryDataService>((ref) {
 
 final cashRegisterDataServiceProvider = Provider<CashRegisterDataService>((ref) {
   return CashRegisterDataService(ref.read(supabaseClientProvider));
+});
+
+final billingDataServiceProvider = Provider<BillingDataService>((ref) {
+  return BillingDataService(ref.read(supabaseClientProvider));
 });
 
 final savedAccountsServiceProvider = Provider<SavedAccountsService>((ref) {

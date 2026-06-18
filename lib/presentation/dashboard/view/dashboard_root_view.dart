@@ -38,6 +38,10 @@ import '../widgets/customers_card.dart';
 import '../widgets/modifiers_card.dart';
 import '../widgets/waiter_performance_card.dart';
 import '../../inventory/view/inventory_view.dart';
+import '../../billing/view/billing_view.dart';
+import '../../billing/viewmodel/billing_reminder.dart';
+import '../../billing/widgets/billing_reminder_banner.dart';
+import '../../../data/billing/billing_reminder_prefs.dart';
 import 'audit_detail_view.dart';
 import 'commands_timeline_view.dart';
 import 'customer_analytics_view.dart';
@@ -182,6 +186,54 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
     _isRefreshing = false;
     _startTimer();
     Future.microtask(() => _refreshAll(profile));
+    Future.microtask(() => _maybeShowBillingReminderPopup(profile.businessId));
+  }
+
+  /// Muestra un popup de recordatorio de cobro **una vez al día** por negocio,
+  /// si hay un aviso pendiente (cobro próximo, fin de prueba, pago vencido).
+  Future<void> _maybeShowBillingReminderPopup(String businessId) async {
+    try {
+      final reminder = await ref.read(billingReminderProvider(businessId).future);
+      if (reminder == null || !mounted) return;
+
+      // No interrumpir si la app está bloqueada (auto-lock biométrico).
+      if (ref.read(authGateViewModelProvider).isLocked) return;
+
+      final prefs = BillingReminderPrefs();
+      if (await prefs.wasShownToday(businessId)) return;
+      await prefs.markShownToday(businessId);
+      if (!mounted) return;
+
+      await showDialog<void>(
+        context: context,
+        builder: (dialogCtx) => AlertDialog(
+          icon: Icon(reminder.icon, color: reminder.color, size: 32),
+          title: Text(reminder.title),
+          content: Text(reminder.message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogCtx).pop(),
+              child: const Text('Más tarde'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogCtx).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const BillingView()),
+                );
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: MangoThemeFactory.mango,
+                foregroundColor: Colors.white,
+              ),
+              child: Text(reminder.needsCard ? 'Registrar tarjeta' : 'Ver suscripción'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      // Silencioso: un recordatorio nunca debe romper el arranque del dashboard.
+    }
   }
 
   @override
@@ -423,6 +475,7 @@ class HomeView extends StatelessWidget {
         padding: EdgeInsets.all(dpi.space(18)),
         children: [
           _HomeHeader(profile: profile),
+          const BillingReminderBanner(),
           gap,
           DashboardKpiCards(
             summary: summary,
@@ -4005,6 +4058,18 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                       Navigator.of(context).pop();
                       Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const ReportsHubView()),
+                      );
+                    },
+                  ),
+                  _DrawerTile(
+                    icon: Icons.credit_card_rounded,
+                    accent: MangoThemeFactory.mango,
+                    label: 'Suscripción',
+                    subtitle: 'Plan, tarjeta e historial de cobros',
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const BillingView()),
                       );
                     },
                   ),

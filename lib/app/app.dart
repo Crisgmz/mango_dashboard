@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../presentation/theme/theme_controller.dart';
 import '../presentation/theme/theme_data_factory.dart';
+import '../presentation/billing/widgets/billing_guard.dart';
 import '../presentation/dashboard/view/dashboard_root_view.dart';
 import '../presentation/splash/view/mango_splash_screen.dart';
 import '../presentation/update/update_banner.dart';
@@ -37,7 +38,7 @@ class _MangoDashboardAppState extends ConsumerState<MangoDashboardApp> {
       },
       home: _showSplash
           ? MangoSplashScreen(onComplete: () => setState(() => _showSplash = false))
-          : const DashboardRootView(),
+          : const BillingGuard(child: DashboardRootView()),
     );
   }
 }

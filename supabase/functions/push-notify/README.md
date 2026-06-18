@@ -43,3 +43,33 @@ cierre de caja, caja descuadrada.
 ## 5. Test
 With the app fully closed, void an item or close a cash session → the push
 should arrive on the phone.
+
+## 6. Billing reminders (push de cobro próximo)
+
+Además de los eventos por webhook, un job diario empuja recordatorios de cobro
+(cobro próximo, fin de prueba, pago vencido, suspensión). Lógica: migración
+`supabase/migrations/20260617_billing_reminders_push.sql`.
+
+- Flujo: `pg_cron` (13:00 UTC) → `private.fn_run_billing_reminders()` →
+  `net.http_post` a esta función con `{"kind":"billing_reminder_sweep"}` y el
+  bearer service_role → la función llama a `fn_billing_reminders_due()` (quién +
+  mensaje) y hace fan-out a `device_tokens`.
+- Requiere extensiones `pg_net` y `pg_cron` (ya usadas por el cron de Azul).
+- **Configurar una vez** la URL base + service_role key (el mismo que ve la
+  función en `SUPABASE_SERVICE_ROLE_KEY`):
+
+  ```sql
+  insert into private.dashboard_cron_config (functions_base_url, service_role_key)
+  values ('https://supabase.mangopos.do/functions/v1', '<SERVICE_ROLE_KEY>')
+  on conflict (id) do update
+    set functions_base_url = excluded.functions_base_url,
+        service_role_key   = excluded.service_role_key,
+        updated_at = now();
+  ```
+
+- Redeploy de la función tras este cambio: `supabase functions deploy push-notify`.
+- Probar manualmente sin esperar al cron:
+  `select private.fn_run_billing_reminders();`
+  (o ver a quién avisaría hoy: `select * from public.fn_billing_reminders_due();`).
+- Offsets: cobro/fin de prueba avisan 5 y 1 días antes; `past_due`/`suspended`
+  avisan cada día. Cambiar el umbral con el parámetro `p_days`.

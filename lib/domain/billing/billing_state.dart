@@ -57,6 +57,25 @@ class BillingState {
   /// Días restantes de prueba. Null si no hay fecha de fin de trial.
   int? get daysUntilTrialEnds => _daysFromToday(trialEndsAt);
 
+  /// Estado en el que un cobro manual ("Pagar ahora") tiene sentido — hay un
+  /// período por cobrar y no está suspendida ni cancelada.
+  bool get canAttemptCharge => isTrial || isActive || isPastDue;
+
+  /// Horas hasta el próximo cobro (negativo si ya está vencido). Null sin fecha.
+  int? get hoursUntilNextBilling {
+    final d = nextBillingDate;
+    if (d == null) return null;
+    return d.difference(DateTime.now()).inHours;
+  }
+
+  /// El botón "Pagar ahora" se habilita SOLO dentro de las 48 h previas a la
+  /// fecha de cobro (o si ya está vencida). El cobro automático (cron) no pasa
+  /// por este gate. Igual criterio que el POS.
+  bool get isWithinPayWindow {
+    final h = hoursUntilNextBilling;
+    return h != null && h <= 48;
+  }
+
   static int? _daysFromToday(DateTime? date) {
     if (date == null) return null;
     final now = DateTime.now();

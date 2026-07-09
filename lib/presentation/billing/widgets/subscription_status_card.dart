@@ -117,16 +117,9 @@ class SubscriptionStatusCard extends StatelessWidget {
         ));
         break;
       case BillingStatus.active:
-        final days = s.daysUntilNextBilling;
-        widgets.add(_row(
-          context,
-          dpi,
-          'Próximo cobro',
-          s.nextBillingDate != null
-              ? MangoFormatters.dateTime(s.nextBillingDate!) +
-                  (days != null && days >= 0 ? ' · ${_daysLabel(days)}' : '')
-              : '—',
-        ));
+        if (s.nextBillingDate != null) {
+          widgets.add(_billingDayHighlight(context, dpi, s.nextBillingDate!, s.daysUntilNextBilling));
+        }
         break;
       case BillingStatus.pastDue:
         widgets.add(_row(
@@ -168,6 +161,59 @@ class SubscriptionStatusCard extends StatelessWidget {
         break;
     }
     return widgets;
+  }
+
+  /// Bloque destacado con el día de cobro recurrente + la próxima fecha.
+  Widget _billingDayHighlight(
+    BuildContext context,
+    DpiScale dpi,
+    DateTime nextDate,
+    int? days,
+  ) {
+    final local = nextDate.toLocal();
+    final countdown = days != null && days >= 0 ? ' · ${_daysLabel(days)}' : '';
+    return Container(
+      margin: EdgeInsets.only(top: dpi.space(14)),
+      padding: EdgeInsets.all(dpi.space(12)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(dpi.radius(12)),
+        border: Border.all(color: MangoThemeFactory.mango.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          BillingIconBadge(
+            icon: Icons.event_repeat_rounded,
+            color: MangoThemeFactory.mango,
+          ),
+          SizedBox(width: dpi.space(12)),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Día de cobro', style: _labelStyle(context, dpi)),
+                SizedBox(height: dpi.space(2)),
+                Text(
+                  'Día ${local.day} de cada mes',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                SizedBox(height: dpi.space(2)),
+                Text(
+                  'Próximo: ${MangoFormatters.date(nextDate)}$countdown',
+                  style: TextStyle(
+                    fontSize: dpi.font(12),
+                    color: MangoThemeFactory.mutedText(context),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   String _daysLabel(int days) {

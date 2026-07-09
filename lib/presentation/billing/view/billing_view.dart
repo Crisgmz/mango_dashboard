@@ -7,6 +7,7 @@ import '../../theme/theme_data_factory.dart';
 import '../viewmodel/billing_view_model.dart';
 import '../widgets/billing_ui.dart';
 import '../widgets/charge_history_list.dart';
+import '../widgets/pay_now_button.dart';
 import '../widgets/payment_method_card.dart';
 import '../widgets/subscription_status_card.dart';
 
@@ -19,8 +20,10 @@ class BillingView extends ConsumerStatefulWidget {
   ConsumerState<BillingView> createState() => _BillingViewState();
 }
 
-class _BillingViewState extends ConsumerState<BillingView> with WidgetsBindingObserver {
-  String? get _businessId => ref.read(authGateViewModelProvider).profile?.businessId;
+class _BillingViewState extends ConsumerState<BillingView>
+    with WidgetsBindingObserver {
+  String? get _businessId =>
+      ref.read(authGateViewModelProvider).profile?.businessId;
 
   @override
   void initState() {
@@ -50,7 +53,9 @@ class _BillingViewState extends ConsumerState<BillingView> with WidgetsBindingOb
 
   Future<void> _refresh() async {
     final id = _businessId;
-    if (id != null) await ref.read(billingViewModelProvider.notifier).refresh(id);
+    if (id != null) {
+      await ref.read(billingViewModelProvider.notifier).refresh(id);
+    }
   }
 
   @override
@@ -71,7 +76,10 @@ class _BillingViewState extends ConsumerState<BillingView> with WidgetsBindingOb
     return Scaffold(
       appBar: AppBar(title: const Text('Suscripción')),
       body: id == null
-          ? _centered(context, 'No hay un negocio activo. Inicia sesión de nuevo.')
+          ? _centered(
+              context,
+              'No hay un negocio activo. Inicia sesión de nuevo.',
+            )
           : RefreshIndicator(
               onRefresh: _refresh,
               child: _buildBody(context, vm, id),
@@ -79,7 +87,11 @@ class _BillingViewState extends ConsumerState<BillingView> with WidgetsBindingOb
     );
   }
 
-  Widget _buildBody(BuildContext context, BillingScreenState vm, String businessId) {
+  Widget _buildBody(
+    BuildContext context,
+    BillingScreenState vm,
+    String businessId,
+  ) {
     if (vm.isLoading && !vm.hasData) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -90,10 +102,19 @@ class _BillingViewState extends ConsumerState<BillingView> with WidgetsBindingOb
     final dpi = DpiScale.of(context);
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(32)),
+      padding: EdgeInsets.fromLTRB(
+        dpi.space(16),
+        dpi.space(16),
+        dpi.space(16),
+        dpi.space(32),
+      ),
       children: [
         _cardFlowBanner(context, vm, businessId),
         SubscriptionStatusCard(state: vm.state),
+        if (vm.hasVerifiedCard && vm.state?.canAttemptCharge == true) ...[
+          SizedBox(height: dpi.space(14)),
+          PayNowButton(businessId: businessId, state: vm.state!),
+        ],
         SizedBox(height: dpi.space(14)),
         PaymentMethodCard(businessId: businessId, method: vm.paymentMethod),
         SizedBox(height: dpi.space(14)),
@@ -102,78 +123,91 @@ class _BillingViewState extends ConsumerState<BillingView> with WidgetsBindingOb
     );
   }
 
-  Widget _cardFlowBanner(BuildContext context, BillingScreenState vm, String businessId) {
+  Widget _cardFlowBanner(
+    BuildContext context,
+    BillingScreenState vm,
+    String businessId,
+  ) {
     final dpi = DpiScale.of(context);
     final notifier = ref.read(billingViewModelProvider.notifier);
 
     Widget wrap(Widget child) => Padding(
-          padding: EdgeInsets.only(bottom: dpi.space(14)),
-          child: child,
-        );
+      padding: EdgeInsets.only(bottom: dpi.space(14)),
+      child: child,
+    );
 
     if (vm.cardFlowError != null) {
-      return wrap(BillingNotice(
-        color: MangoThemeFactory.danger,
-        icon: Icons.error_outline_rounded,
-        message: vm.cardFlowError!,
-      ));
+      return wrap(
+        BillingNotice(
+          color: MangoThemeFactory.danger,
+          icon: Icons.error_outline_rounded,
+          message: vm.cardFlowError!,
+        ),
+      );
     }
 
     switch (vm.cardFlow) {
       case BillingCardFlow.awaiting:
-        return wrap(Column(
-          children: [
-            BillingNotice(
-              color: MangoThemeFactory.info,
-              icon: Icons.open_in_browser_rounded,
-              message: 'Completa el registro de tu tarjeta en la página de Azul. '
-                  'Cuando termines, vuelve aquí y toca "Ya registré mi tarjeta".',
-            ),
-            SizedBox(height: dpi.space(10)),
-            Row(
-              children: [
-                Expanded(
-                  child: FilledButton(
-                    onPressed: () => notifier.checkForNewCard(businessId),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: MangoThemeFactory.mango,
-                      foregroundColor: Colors.white,
-                    ),
-                    child: const Text('Ya registré mi tarjeta'),
-                  ),
-                ),
-                SizedBox(width: dpi.space(10)),
-                TextButton(
-                  onPressed: notifier.dismissCardFlow,
-                  child: const Text('Cancelar'),
-                ),
-              ],
-            ),
-          ],
-        ));
-      case BillingCardFlow.verifying:
-        return wrap(BillingNotice(
-          color: MangoThemeFactory.info,
-          icon: Icons.hourglass_top_rounded,
-          message: 'Verificando el registro de tu tarjeta…',
-        ));
-      case BillingCardFlow.success:
-        return wrap(Row(
-          children: [
-            Expanded(
-              child: BillingNotice(
-                color: MangoThemeFactory.success,
-                icon: Icons.check_circle_outline_rounded,
-                message: 'Tu tarjeta quedó registrada y verificada.',
+        return wrap(
+          Column(
+            children: [
+              BillingNotice(
+                color: MangoThemeFactory.info,
+                icon: Icons.open_in_browser_rounded,
+                message:
+                    'Completa el registro de tu tarjeta en la página de Azul. '
+                    'Cuando termines, vuelve aquí y toca "Ya registré mi tarjeta".',
               ),
-            ),
-            SizedBox(width: dpi.space(8)),
-            TextButton(
-              onPressed: notifier.dismissCardFlow,
-              child: const Text('Listo'),
-            ),
-          ],
-        ));
+              SizedBox(height: dpi.space(10)),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () => notifier.checkForNewCard(businessId),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: MangoThemeFactory.mango,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Ya registré mi tarjeta'),
+                    ),
+                  ),
+                  SizedBox(width: dpi.space(10)),
+                  TextButton(
+                    onPressed: notifier.dismissCardFlow,
+                    child: const Text('Cancelar'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      case BillingCardFlow.verifying:
+        return wrap(
+          BillingNotice(
+            color: MangoThemeFactory.info,
+            icon: Icons.hourglass_top_rounded,
+            message: 'Verificando el registro de tu tarjeta…',
+          ),
+        );
+      case BillingCardFlow.success:
+        return wrap(
+          Row(
+            children: [
+              Expanded(
+                child: BillingNotice(
+                  color: MangoThemeFactory.success,
+                  icon: Icons.check_circle_outline_rounded,
+                  message: 'Tu tarjeta quedó registrada y verificada.',
+                ),
+              ),
+              SizedBox(width: dpi.space(8)),
+              TextButton(
+                onPressed: notifier.dismissCardFlow,
+                child: const Text('Listo'),
+              ),
+            ],
+          ),
+        );
       case BillingCardFlow.idle:
       case BillingCardFlow.launching:
         return const SizedBox.shrink();
@@ -204,7 +238,8 @@ class _BillingViewState extends ConsumerState<BillingView> with WidgetsBindingOb
         SizedBox(height: dpi.space(20)),
         Center(
           child: FilledButton(
-            onPressed: () => ref.read(billingViewModelProvider.notifier).load(businessId),
+            onPressed: () =>
+                ref.read(billingViewModelProvider.notifier).load(businessId),
             style: FilledButton.styleFrom(
               backgroundColor: MangoThemeFactory.mango,
               foregroundColor: Colors.white,

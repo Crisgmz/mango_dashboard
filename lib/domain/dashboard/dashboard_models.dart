@@ -185,6 +185,7 @@ class TicketItem {
     this.tableName,
     this.customerName,
     this.paymentMethodCode,
+    this.checkId,
   });
 
   final String orderId;
@@ -193,6 +194,10 @@ class TicketItem {
   final String? tableName;
   final String? customerName;
   final String? paymentMethodCode;
+
+  /// The specific check this payment settled (null = order-level payment). Lets
+  /// the comanda expansion show only this check's items instead of the whole order.
+  final String? checkId;
 }
 
 @immutable
@@ -560,6 +565,7 @@ class LiveOrderItem {
     required this.total,
     required this.status,
     this.items = const [],
+    this.checks = const [],
     this.zone,
     this.tableId,
     this.openedAt,
@@ -572,10 +578,38 @@ class LiveOrderItem {
   final double total;
   final String status;
   final List<LiveChildItem> items;
+
+  /// Per-check breakdown for a divided account (C1, C2…). Empty when the order
+  /// is not split. `total` above is the whole-table remaining balance.
+  final List<OrderCheckSummary> checks;
   final String? zone;
   final String? tableId;
   final DateTime? openedAt;
   final int? peopleCount;
+
+  /// True when the account was divided into 2+ checks.
+  bool get isSplit => checks.length >= 2;
+}
+
+/// One division (check) of a split account.
+@immutable
+class OrderCheckSummary {
+  const OrderCheckSummary({
+    required this.label,
+    required this.total,
+    required this.isPaid,
+    this.itemCount = 0,
+  });
+
+  /// "C1", "C2"… (or the check's custom label).
+  final String label;
+
+  /// The check's amount (tax-inclusive), from `order_checks.total`.
+  final double total;
+
+  /// Paid ⇔ `order_checks.is_closed`.
+  final bool isPaid;
+  final int itemCount;
 }
 
 @immutable
@@ -666,6 +700,9 @@ class RegisterSession {
     this.cardSales = 0,
     this.transferSales = 0,
     this.otherSales = 0,
+    this.totalDeposits = 0,
+    this.totalWithdrawals = 0,
+    this.totalExpenses = 0,
     this.status = 'open',
   });
 
@@ -681,9 +718,21 @@ class RegisterSession {
   final double cardSales;
   final double transferSales;
   final double otherSales;
+  final double totalDeposits;
+  final double totalWithdrawals;
+  final double totalExpenses;
   final String status;
 
   bool get isOpen => closedAt == null;
+
+  /// Expected drawer contents for a still-open session — same reconciliation the
+  /// closed sessions show, computed live so the owner sees what SHOULD be in the
+  /// register right now. Mirrors `fn_get_cash_session_summary.expected_*`.
+  double get expectedCash =>
+      openingAmount + cashSales + totalDeposits - totalWithdrawals - totalExpenses;
+  double get expectedCard => cardSales;
+  double get expectedTransfer => transferSales;
+  double get expectedTotal => expectedCash + expectedCard + expectedTransfer;
 }
 
 @immutable

@@ -21,6 +21,9 @@ class MangoFormatters {
 
   static String dateTime(DateTime value) => DateFormat('dd/MM/yyyy HH:mm').format(value.toLocal());
 
+  /// Solo fecha, sin hora (e.g. `15/07/2026`). Para fechas de cobro/vencimiento.
+  static String date(DateTime value) => DateFormat('dd/MM/yyyy').format(value.toLocal());
+
   static String fullDate(DateTime value) {
     final now = DateTime.now();
     final local = value.toLocal();

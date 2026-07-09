@@ -81,8 +81,9 @@ async function importKey(pem: string): Promise<CryptoKey> {
   );
 }
 
-// ── Event resolution: webhook payload → { businessId, title, body } | null ──
-type Notif = { businessId: string; title: string; body: string };
+// ── Event resolution: webhook payload → Notif | null ──
+// eventType keys match the notification_preferences table + Dart NotificationEventType.
+type Notif = { businessId: string; eventType: string; title: string; body: string };
 
 async function buildEvent(payload: any): Promise<Notif | null> {
   const { table, type, record, old_record } = payload ?? {};
@@ -97,10 +98,12 @@ async function buildEvent(payload: any): Promise<Notif | null> {
       .eq("id", record.order_id)
       .maybeSingle();
     const businessId = (data as any)?.table_sessions?.business_id;
+    console.log(`[push-notify] order_items void order_id=${record.order_id} -> business=${businessId ?? "NULL"}`);
     if (!businessId) return null;
     const qty = record.qty ?? record.quantity ?? 1;
     return {
       businessId,
+      eventType: "item_voided",
       title: "Producto anulado",
       body: `${qty} x ${record.product_name ?? "Producto"} fue anulado.`,
     };
@@ -112,18 +115,21 @@ async function buildEvent(payload: any): Promise<Notif | null> {
     if (!justClosed && !becameClosed) return null;
     const { data } = await admin
       .from("cash_registers").select("business_id").eq("id", record.cash_register_id).maybeSingle();
+    console.log(`[push-notify] cash close register=${record.cash_register_id} -> business=${data?.business_id ?? "NULL"}`);
     if (!data?.business_id) return null;
 
     const diff = Number(record.difference ?? 0);
     if (Math.abs(diff) > 0.009) {
       return {
         businessId: data.business_id,
+        eventType: "cash_mismatch",
         title: "⚠️ Caja descuadrada",
         body: `Cierre con ${diff < 0 ? "faltante" : "sobrante"} de RD$ ${Math.abs(diff).toFixed(2)}.`,
       };
     }
     return {
       businessId: data.business_id,
+      eventType: "cash_closed",
       title: "Cierre de caja",
       body: "Se realizó un cierre de caja.",
     };
@@ -133,16 +139,64 @@ async function buildEvent(payload: any): Promise<Notif | null> {
 }
 
 // ── Fan-out to the business's device tokens, pruning stale ones ──
-async function sendToBusiness(n: Notif): Promise<{ sent: number; pruned: number }> {
+// Returns per-token FCM verdicts so callers (and the logs) can see exactly what
+// FCM/APNs said — `sent` only counts HTTP 200 from FCM, which is NOT proof the
+// push reached the device. The `results` array surfaces the real error codes
+// (UNREGISTERED, THIRD_PARTY_AUTH_ERROR, SENDER_ID_MISMATCH, etc.).
+type SendResult = {
+  token: string;
+  platform: string | null;
+  status: number;
+  ok: boolean;
+  fcm: unknown;
+};
+
+async function sendToBusiness(
+  n: Notif,
+): Promise<{ sent: number; pruned: number; results: SendResult[] }> {
+  // Recipients = every owner/admin who belongs to this business — so a user who
+  // manages several businesses gets each one's alerts on their device, no matter
+  // which business the app currently has selected. We fan out by MEMBERSHIP, not
+  // by the token's stored business_id.
+  const { data: members } = await admin
+    .from("user_businesses")
+    .select("user_id")
+    .eq("business_id", n.businessId)
+    .in("role", ["owner", "admin"]);
+  let userIds = [...new Set((members ?? []).map((m: any) => m.user_id).filter(Boolean))];
+  console.log(
+    `[push-notify] business=${n.businessId} event=${n.eventType} members=${userIds.length} title="${n.title}"`,
+  );
+  if (!userIds.length) return { sent: 0, pruned: 0, results: [] };
+
+  // Opt-out preferences: drop users who turned THIS event off for THIS business.
+  const { data: off } = await admin
+    .from("notification_preferences")
+    .select("user_id")
+    .eq("business_id", n.businessId)
+    .eq("event_type", n.eventType)
+    .eq("enabled", false)
+    .in("user_id", userIds);
+  const disabled = new Set((off ?? []).map((p: any) => p.user_id));
+  if (disabled.size) userIds = userIds.filter((u) => !disabled.has(u));
+  if (!userIds.length) {
+    console.log(`[push-notify] all ${disabled.size} member(s) disabled event=${n.eventType}`);
+    return { sent: 0, pruned: 0, results: [] };
+  }
+
   const { data: rows } = await admin
-    .from("device_tokens").select("token").eq("business_id", n.businessId);
-  if (!rows?.length) return { sent: 0, pruned: 0 };
+    .from("device_tokens").select("token, platform").in("user_id", userIds);
+  console.log(
+    `[push-notify] tokens=${rows?.length ?? 0} (recipients=${userIds.length}, disabled=${disabled.size})`,
+  );
+  if (!rows?.length) return { sent: 0, pruned: 0, results: [] };
 
   const accessToken = await getAccessToken();
   const stale: string[] = [];
+  const results: SendResult[] = [];
   let sent = 0;
 
-  for (const { token } of rows) {
+  for (const { token, platform } of rows) {
     const res = await fetch(
       `https://fcm.googleapis.com/v1/projects/${FCM_PROJECT_ID}/messages:send`,
       {
@@ -153,17 +207,36 @@ async function sendToBusiness(n: Notif): Promise<{ sent: number; pruned: number 
             token,
             notification: { title: n.title, body: n.body },
             android: { priority: "high" },
-            apns: { payload: { aps: { sound: "default" } } },
+            // Be explicit for iOS so a terminated app still shows the banner +
+            // sound (don't rely on FCM auto-filling aps.alert).
+            apns: {
+              headers: { "apns-priority": "10" },
+              payload: {
+                aps: {
+                  alert: { title: n.title, body: n.body },
+                  sound: "default",
+                },
+              },
+            },
           },
         }),
       },
     );
+    const bodyText = await res.text();
+    let fcm: unknown = bodyText;
+    try { fcm = JSON.parse(bodyText); } catch { /* keep raw text */ }
+    const tail = `…${token.slice(-12)}`;
+    console.log(
+      `[push-notify] fcm token=${tail} platform=${platform ?? "?"} status=${res.status} body=${bodyText.slice(0, 500)}`,
+    );
+    results.push({ token: tail, platform: platform ?? null, status: res.status, ok: res.ok, fcm });
     if (res.ok) sent++;
     else if (res.status === 404 || res.status === 400) stale.push(token); // unregistered / invalid
   }
 
   if (stale.length) await admin.from("device_tokens").delete().in("token", stale);
-  return { sent, pruned: stale.length };
+  console.log(`[push-notify] done business=${n.businessId} sent=${sent} pruned=${stale.length}`);
+  return { sent, pruned: stale.length, results };
 }
 
 // ── Billing reminder sweep (invoked daily by pg_cron) ──
@@ -179,6 +252,7 @@ async function runBillingReminderSweep(): Promise<unknown> {
     if (!row.business_id) continue;
     const r = await sendToBusiness({
       businessId: row.business_id,
+      eventType: "billing_reminder",
       title: row.title,
       body: row.body,
     });
@@ -191,6 +265,9 @@ async function runBillingReminderSweep(): Promise<unknown> {
 Deno.serve(async (req) => {
   try {
     const payload = await req.json();
+    console.log(
+      `[push-notify] req table=${payload?.table ?? "-"} type=${payload?.type ?? "-"} kind=${payload?.kind ?? "-"}`,
+    );
 
     // Cron-driven billing reminders: gated to the service role (the cron sends
     // the service_role key as the bearer). Checked before any DB read.
@@ -202,11 +279,28 @@ Deno.serve(async (req) => {
       return Response.json(await runBillingReminderSweep());
     }
 
+    // Debug helper: send a test push straight to a business's devices without
+    // needing a real DB event. Body: {"kind":"test_push","businessId":"<uuid>"}.
+    // Returns the per-token FCM verdicts. Remove once push is confirmed working.
+    if (payload?.kind === "test_push" && payload?.businessId) {
+      return Response.json(
+        await sendToBusiness({
+          businessId: String(payload.businessId),
+          // Defaults to "test" (no toggle → always sends). Pass a real eventType
+          // (e.g. "cash_closed") to verify per-business preference gating.
+          eventType: String(payload.eventType ?? "test"),
+          title: payload.title ?? "Prueba de notificación",
+          body: payload.body ?? "Si ves esto, el push llega al teléfono. ✅",
+        }),
+      );
+    }
+
     // Default path: Database Webhook events (order_items / cash_register_sessions).
     const event = await buildEvent(payload);
     if (!event) return Response.json({ skipped: true });
     return Response.json(await sendToBusiness(event));
   } catch (e) {
+    console.log(`[push-notify] ERROR ${String(e)}`);
     return Response.json({ error: String(e) }, { status: 500 });
   }
 });

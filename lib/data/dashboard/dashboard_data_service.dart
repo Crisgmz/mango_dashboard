@@ -188,7 +188,7 @@ class DashboardDataService {
     // Period payments (net of change), paginated and excluding void/cancelled —
     // the same filter the other reports use. Scoped to paid orders in Phase 3.
     final periodPaymentsFuture = _paginate((from, to) => _client.from('payments')
-        .select('amount, change_amount, status, order_id, created_at, processed_by, payment_methods(code)')
+        .select('amount, change_amount, status, order_id, check_id, created_at, processed_by, payment_methods(code)')
         .eq('business_id', businessId)
         .gte('created_at', periodStart).lt('created_at', periodEnd)
         .not('status', 'in', '(void,cancelled)')
@@ -207,7 +207,7 @@ class DashboardDataService {
       futures.addAll([
         // Active Orders (all of them, regardless of date)
         _client.from('orders')
-            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, quantity, total, order_item_modifiers(name, qty)), payments(amount, change_amount, status)')
+            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, subtotal, tax, discounts, status, check_id, order_item_modifiers(name, qty)), payments(amount, change_amount, status), order_checks(id, position, label, is_closed, total)')
             .eq('table_sessions.business_id', businessId)
             .neq('status_ext', 'void')
             .isFilter('closed_at', null)
@@ -218,7 +218,7 @@ class DashboardDataService {
             .eq('business_id', businessId).order('name', ascending: true),
         // Closed Orders for the period
         _client.from('orders')
-            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, quantity, total, order_item_modifiers(name, qty)), payments(amount, change_amount, status)')
+            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, subtotal, tax, discounts, status, check_id, order_item_modifiers(name, qty)), payments(amount, change_amount, status), order_checks(id, position, label, is_closed, total)')
             .eq('table_sessions.business_id', businessId)
             .neq('status_ext', 'void')
             .gte('closed_at', periodStart)
@@ -260,6 +260,7 @@ class DashboardDataService {
         amount: net,
         createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
         paymentMethodCode: pmCode,
+        checkId: row['check_id']?.toString(),
       ));
     }
     tickets.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -434,10 +435,14 @@ class DashboardDataService {
     final cashierPerformance = performanceResults[1] as List<CashierPerformance>;
 
     final activeOrdersCount = liveOrders.length;
-    // Tickets are payment-driven, not order-driven: this keeps the count
-    // consistent with `totalSales` (also derived from `paymentRows`) and
-    // works in liteMode (which skips the closed-orders query).
-    final totalTickets = tickets.length;
+    // Órdenes = distinct paid orders, NOT payments. A table split into N checks
+    // settles with N payments but is ONE order, so counting payments inflated
+    // "Órdenes" and deflated "Ticket Promedio". Count distinct order_ids instead.
+    final totalTickets = tickets
+        .map((t) => t.orderId)
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .length;
 
     return DashboardSummary(
       profile: profile,
@@ -588,17 +593,57 @@ class DashboardDataService {
             : int.tryParse(session['people_count']?.toString() ?? ''))
         : null;
 
+    // Checks already settled (is_closed) — their items are out of the open bill.
+    final closedCheckIds = <String>{};
+    final rawChecks = row['order_checks'];
+    if (rawChecks is List) {
+      for (final c in rawChecks) {
+        if (c is Map && c['is_closed'] == true) {
+          final id = c['id']?.toString();
+          if (id != null && id.isNotEmpty) closedCheckIds.add(id);
+        }
+      }
+    }
+
+    // Per the POS (order_pricing_utils.summarizeOrderPricing): recompute each
+    // line from subtotal + tax − discounts. NEVER use order_items.total — it's a
+    // pre-tax generated column (quantity*unit_price, no tax/mods/discounts).
+    // Void items are excluded from everything. An ACTIVE order lists only its
+    // OPEN items (unpaid and not in a closed check) → the remaining balance,
+    // exactly like the POS table screen; a CLOSED order lists everything it sold.
+    // The header total is ALWAYS the sum of the displayed items, so the list and
+    // the total can never disagree.
+    final isClosed = row['closed_at'] != null;
     final rawItems = row['order_items'] as List? ?? [];
-    final childItems = rawItems.map((ri) {
+    final childItems = <LiveChildItem>[];
+    final checkItemCounts = <String, int>{};
+    var itemsTotal = 0.0;
+    for (final ri in rawItems) {
+      if (ri is! Map) continue;
+      final status = ri['status']?.toString();
+      if (status == 'void') continue;
+      final checkId = ri['check_id']?.toString();
+      if (checkId != null && checkId.isNotEmpty) {
+        checkItemCounts[checkId] = (checkItemCounts[checkId] ?? 0) + 1;
+      }
+      final settled = status == 'paid' ||
+          (ri['check_id'] != null &&
+              closedCheckIds.contains(ri['check_id'].toString()));
+      if (!isClosed && settled) continue; // active → only the open remainder
+      final amount = _toDouble(ri['subtotal']) +
+          _toDouble(ri['tax']) -
+          _toDouble(ri['discounts']);
+      itemsTotal += amount;
       final modifiers = ri['order_item_modifiers'] as List? ?? [];
-      final extras = modifiers.map((m) => m['name']?.toString()).whereType<String>().toList();
-      return LiveChildItem(
+      final extras =
+          modifiers.map((m) => m['name']?.toString()).whereType<String>().toList();
+      childItems.add(LiveChildItem(
         name: ri['product_name']?.toString() ?? 'Producto',
         quantity: _toDouble(ri['qty'] ?? ri['quantity']),
-        total: _toDouble(ri['total']),
+        total: amount,
         extras: extras,
-      );
-    }).toList();
+      ));
+    }
 
     final zone = tableData is Map<String, dynamic>
         ? (tableData['zone_name']?.toString() ??
@@ -607,24 +652,45 @@ class DashboardDataService {
             tableData['area']?.toString())
         : null;
 
-    // `orders.total` is 0 in this backend — the money is in `payments`. Use the
-    // paid amount (net of change), falling back to the running items total for
-    // orders not yet paid, then to row['total'].
-    var total = _toDouble(row['total']);
+    // Net of completed payments — fallback for closed orders with no live items.
+    var paid = 0.0;
     final payments = row['payments'];
-    if (payments is List && payments.isNotEmpty) {
-      var paid = 0.0;
+    if (payments is List) {
       for (final p in payments) {
         if (p is! Map) continue;
         final status = p['status']?.toString();
         if (status == 'void' || status == 'cancelled') continue;
         paid += _toDouble(p['amount']) - _toDouble(p['change_amount']);
       }
-      if (paid > 0) total = paid;
     }
-    if (total == 0 && childItems.isNotEmpty) {
-      final itemsSum = childItems.fold<double>(0, (s, it) => s + it.total);
-      if (itemsSum > 0) total = itemsSum;
+
+    final total =
+        itemsTotal > 0 ? itemsTotal : (paid > 0 ? paid : _toDouble(row['total']));
+
+    // Per-check breakdown, only for genuinely divided accounts (2+ checks).
+    // Each check shows its amount (order_checks.total) + paid state (is_closed),
+    // just like the POS split view (C1/C2… with pagada/pendiente).
+    final checks = <OrderCheckSummary>[];
+    if (rawChecks is List && rawChecks.length >= 2) {
+      final sorted = rawChecks.whereType<Map>().toList()
+        ..sort((a, b) =>
+            _toDouble(a['position']).compareTo(_toDouble(b['position'])));
+      for (final c in sorted) {
+        final checkTotal = _toDouble(c['total']);
+        final id = c['id']?.toString();
+        final count = id != null ? (checkItemCounts[id] ?? 0) : 0;
+        if (checkTotal <= 0.009 && count == 0) continue; // empty pool → skip
+        final pos = _toDouble(c['position']).toInt();
+        final label = (c['label']?.toString().trim().isNotEmpty ?? false)
+            ? c['label'].toString().trim()
+            : 'C$pos';
+        checks.add(OrderCheckSummary(
+          label: label,
+          total: checkTotal,
+          isPaid: c['is_closed'] == true,
+          itemCount: count,
+        ));
+      }
     }
 
     return LiveOrderItem(
@@ -634,6 +700,7 @@ class DashboardDataService {
       total: total,
       status: row['status_ext']?.toString() ?? 'open',
       items: childItems,
+      checks: checks,
       zone: zone,
       tableId: tableId,
       openedAt: openedAt,
@@ -820,8 +887,8 @@ class DashboardDataService {
     // concurrently so a wide range (e.g. a full month) stays responsive.
     //  - orders: id + closed_at (to map each order to its day and count it)
     //  - payments: the actual money (orders.total is 0 in this backend)
-    //  - tax lines: per-named-tax amounts, filtered on their own
-    //    business_id + created_at (no join) so the query stays light.
+    //  - tax lines: per-named-tax amounts, scoped through order_items → orders
+    //    to the same closed/non-void orders as ventas (so taxes never disagree).
     final results = await Future.wait([
       _paginate((from, to) => _client
           .from('orders')
@@ -842,10 +909,17 @@ class DashboardDataService {
           .range(from, to)),
       _paginate((from, to) => _client
           .from('order_item_tax_lines')
-          .select('tax_name, tax_rate, amount')
+          // Scope to the canonical sales set: taxes on non-void items of
+          // non-void orders CLOSED in the range (same as ventas). Filtering on
+          // the line's own created_at counted taxes of open/void orders and
+          // voided items, which inflated LEY/ITBIS vs the real collected tax.
+          .select(
+              'tax_name, tax_rate, amount, order_items!inner(status, orders!inner(status_ext, closed_at))')
           .eq('business_id', businessId)
-          .gte('created_at', startIso)
-          .lt('created_at', endIso)
+          .neq('order_items.status', 'void')
+          .neq('order_items.orders.status_ext', 'void')
+          .gte('order_items.orders.closed_at', startIso)
+          .lt('order_items.orders.closed_at', endIso)
           .range(from, to)),
     ]);
 
@@ -983,10 +1057,17 @@ class DashboardDataService {
           .range(from, to)),
       _paginate((from, to) => _client
           .from('order_item_tax_lines')
-          .select('tax_name, tax_rate, amount')
+          // Scope to the canonical sales set: taxes on non-void items of
+          // non-void orders CLOSED in the range (same as ventas). Filtering on
+          // the line's own created_at counted taxes of open/void orders and
+          // voided items, which inflated LEY/ITBIS vs the real collected tax.
+          .select(
+              'tax_name, tax_rate, amount, order_items!inner(status, orders!inner(status_ext, closed_at))')
           .eq('business_id', businessId)
-          .gte('created_at', startIso)
-          .lt('created_at', endIso)
+          .neq('order_items.status', 'void')
+          .neq('order_items.orders.status_ext', 'void')
+          .gte('order_items.orders.closed_at', startIso)
+          .lt('order_items.orders.closed_at', endIso)
           .range(from, to)),
     ]);
 
@@ -1059,7 +1140,7 @@ class DashboardDataService {
         businessId: businessId, startIso: startIso, endIso: endIso);
     final payRowsFuture = _paginate((from, to) => _client
         .from('payments')
-        .select('amount, change_amount, status, order_id, created_at, payment_methods(code)')
+        .select('amount, change_amount, status, order_id, check_id, created_at, payment_methods(code)')
         .eq('business_id', businessId)
         .gte('created_at', startIso)
         .lt('created_at', endIso)
@@ -1083,6 +1164,7 @@ class DashboardDataService {
         amount: net,
         createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
         paymentMethodCode: pmCode,
+        checkId: row['check_id']?.toString(),
       ));
     }
     tickets.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -1136,12 +1218,22 @@ class DashboardDataService {
   /// Loads the items (productos) of a single order. Used by the comandas
   /// timeline view to lazy-expand each ticket without bloating the period
   /// query.
-  Future<List<LiveChildItem>> loadItemsForOrder(String orderId) async {
+  /// Items of an order for the comanda expansion. When [checkId] is given (a
+  /// check-level payment), only that check's items are returned — so a split-paid
+  /// order doesn't repeat the whole item list under every payment tile. Line
+  /// amount is subtotal+tax−discounts (never order_items.total, a pre-tax column).
+  Future<List<LiveChildItem>> loadItemsForOrder(String orderId,
+      {String? checkId}) async {
     if (orderId.isEmpty) return const [];
-    final rows = await _client
+    var query = _client
         .from('order_items')
-        .select('product_name, qty, quantity, total, status, order_item_modifiers(name, qty)')
+        .select(
+            'product_name, qty, quantity, subtotal, tax, discounts, status, order_item_modifiers(name, qty)')
         .eq('order_id', orderId);
+    if (checkId != null && checkId.isNotEmpty) {
+      query = query.eq('check_id', checkId);
+    }
+    final rows = await query;
     return List<Map<String, dynamic>>.from(rows)
         .where((row) => row['status']?.toString() != 'void')
         .map((row) {
@@ -1153,7 +1245,9 @@ class DashboardDataService {
           return LiveChildItem(
             name: row['product_name']?.toString() ?? 'Producto',
             quantity: _toDouble(row['qty'] ?? row['quantity']),
-            total: _toDouble(row['total']),
+            total: _toDouble(row['subtotal']) +
+                _toDouble(row['tax']) -
+                _toDouble(row['discounts']),
             extras: extras,
           );
         })
@@ -1348,7 +1442,7 @@ class DashboardDataService {
         .select('''
           id, opened_at, closed_at, customer_name, people_count, origin,
           dining_tables(id, label, code, zones(name)),
-          orders(total)
+          orders(id, payments(amount, change_amount, status))
         ''')
         .eq('business_id', businessId)
         .eq('waiter_user_id', waiterUserId)
@@ -1359,11 +1453,22 @@ class DashboardDataService {
     return List<Map<String, dynamic>>.from(rows).map((row) {
       final table = row['dining_tables'];
       final zones = table is Map<String, dynamic> ? table['zones'] : null;
+      // Total = net of completed payments for this session's orders. Matches the
+      // waiter-performance card and the canonical sales scope. `orders.total` is
+      // unreliable (often 0) across POS flows, so we never use it here.
       double total = 0;
       final orders = row['orders'];
       if (orders is List) {
         for (final o in orders) {
-          if (o is Map<String, dynamic>) total += _toDouble(o['total']);
+          if (o is! Map<String, dynamic>) continue;
+          final payments = o['payments'];
+          if (payments is! List) continue;
+          for (final p in payments) {
+            if (p is! Map<String, dynamic>) continue;
+            final status = p['status']?.toString();
+            if (status == 'void' || status == 'cancelled') continue;
+            total += _netAmount(p['amount'], p['change_amount']);
+          }
         }
       }
       return PersonSession(
@@ -1412,21 +1517,42 @@ class DashboardDataService {
         .not('status', 'in', '(void,cancelled)')
         .order('created_at', ascending: false);
 
-    return List<Map<String, dynamic>>.from(rows).map((row) {
+    // Group payments by session → ONE row per table. A divided account paid with
+    // several check payments becomes a single row with the summed amount, instead
+    // of one partial row per payment.
+    final bySession = <String, _CashierSessionAgg>{};
+    for (final row in List<Map<String, dynamic>>.from(rows)) {
+      final order = row['orders'];
+      final session = order is Map<String, dynamic> ? order['table_sessions'] : null;
+      final sid =
+          session is Map<String, dynamic> ? session['id']?.toString() ?? '' : '';
+      final key = sid.isNotEmpty ? sid : 'pay_${row['id']}';
+      final agg = bySession.putIfAbsent(key, () => _CashierSessionAgg(row));
+      agg.total += _netAmount(row['amount'], row['change_amount']);
+      final pm = row['payment_methods'];
+      final code = pm is Map<String, dynamic> ? pm['code']?.toString() : null;
+      if (code != null && code.isNotEmpty) agg.codes.add(code);
+      final created = DateTime.tryParse(row['created_at']?.toString() ?? '');
+      if (created != null &&
+          (agg.lastPaidAt == null || created.isAfter(agg.lastPaidAt!))) {
+        agg.lastPaidAt = created;
+      }
+    }
+
+    final result = bySession.values.map((agg) {
+      final row = agg.row;
       final order = row['orders'];
       final session = order is Map<String, dynamic> ? order['table_sessions'] : null;
       final table = session is Map<String, dynamic> ? session['dining_tables'] : null;
       final zones = table is Map<String, dynamic> ? table['zones'] : null;
-      final pm = row['payment_methods'];
-      final code = pm is Map<String, dynamic> ? pm['code']?.toString() : null;
-      final net = _netAmount(row['amount'], row['change_amount']);
       return PersonSession(
-        sessionId: session is Map<String, dynamic> ? session['id']?.toString() ?? '' : '',
+        sessionId:
+            session is Map<String, dynamic> ? session['id']?.toString() ?? '' : '',
         tableLabel: table is Map<String, dynamic>
             ? (table['label']?.toString() ?? table['code']?.toString() ?? 'Mesa')
             : 'Pago',
         zoneName: zones is Map<String, dynamic> ? zones['name']?.toString() : null,
-        openedAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ?? DateTime.now(),
+        openedAt: agg.lastPaidAt ?? DateTime.now(),
         closedAt: session is Map<String, dynamic>
             ? DateTime.tryParse(session['closed_at']?.toString() ?? '')
             : null,
@@ -1440,11 +1566,13 @@ class DashboardDataService {
                 ? session['people_count'] as int
                 : int.tryParse(session['people_count']?.toString() ?? ''))
             : null,
-        total: net,
-        paymentMethodCode: code,
+        total: agg.total,
+        paymentMethodCode: agg.codes.length == 1 ? agg.codes.first : null,
         origin: session is Map<String, dynamic> ? session['origin']?.toString() : null,
       );
-    }).toList(growable: false);
+    }).toList();
+    result.sort((a, b) => b.openedAt.compareTo(a.openedAt));
+    return result;
   }
 
   /// Loads zones + their dining tables for the visual table map.
@@ -1512,6 +1640,16 @@ class _WaiterAgg {
   double total = 0;
   int ticketCount = 0;
   final Set<String> sessions = <String>{};
+}
+
+/// Accumulates a cashier's payments for one dining session (table) so a split
+/// account paid across several checks becomes a single row.
+class _CashierSessionAgg {
+  _CashierSessionAgg(this.row);
+  final Map<String, dynamic> row; // representative payment row (carries metadata)
+  double total = 0;
+  final Set<String> codes = <String>{};
+  DateTime? lastPaidAt;
 }
 
 class _CashierAgg {

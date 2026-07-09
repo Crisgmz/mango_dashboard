@@ -36,10 +36,14 @@ class BillingScreenState {
     this.error,
     this.cardFlow = BillingCardFlow.idle,
     this.cardFlowError,
+    this.isCharging = false,
   });
 
   /// Carga inicial en curso (no hay datos aún).
   final bool isLoading;
+
+  /// Cobro manual ("Pagar ahora") en curso (para el spinner del botón).
+  final bool isCharging;
 
   /// Estado de suscripción (fila ancla). Null si el comercio no tiene billing.
   final BillingState? state;
@@ -59,7 +63,8 @@ class BillingScreenState {
   /// Error específico del flujo de tarjeta.
   final String? cardFlowError;
 
-  bool get hasData => state != null || paymentMethod != null || (charges?.isNotEmpty ?? false);
+  bool get hasData =>
+      state != null || paymentMethod != null || (charges?.isNotEmpty ?? false);
   bool get hasVerifiedCard => paymentMethod?.isVerified ?? false;
 
   BillingScreenState copyWith({
@@ -70,6 +75,7 @@ class BillingScreenState {
     String? error,
     BillingCardFlow? cardFlow,
     String? cardFlowError,
+    bool? isCharging,
     bool clearError = false,
     bool clearPaymentMethod = false,
     bool clearCardFlowError = false,
@@ -77,11 +83,16 @@ class BillingScreenState {
     return BillingScreenState(
       isLoading: isLoading ?? this.isLoading,
       state: state ?? this.state,
-      paymentMethod: clearPaymentMethod ? null : (paymentMethod ?? this.paymentMethod),
+      paymentMethod: clearPaymentMethod
+          ? null
+          : (paymentMethod ?? this.paymentMethod),
       charges: charges ?? this.charges,
       error: clearError ? null : (error ?? this.error),
       cardFlow: cardFlow ?? this.cardFlow,
-      cardFlowError: clearCardFlowError ? null : (cardFlowError ?? this.cardFlowError),
+      cardFlowError: clearCardFlowError
+          ? null
+          : (cardFlowError ?? this.cardFlowError),
+      isCharging: isCharging ?? this.isCharging,
     );
   }
 }
@@ -152,7 +163,10 @@ class BillingViewModel extends StateNotifier<BillingScreenState> {
     CardIntent intent = CardIntent.tokenizeAndVerify,
   }) async {
     _cardIdBeforeFlow = state.paymentMethod?.id;
-    state = state.copyWith(cardFlow: BillingCardFlow.launching, clearCardFlowError: true);
+    state = state.copyWith(
+      cardFlow: BillingCardFlow.launching,
+      clearCardFlowError: true,
+    );
     try {
       final session = await _service.createTokenizationSession(
         businessId: businessId,
@@ -185,7 +199,8 @@ class BillingViewModel extends StateNotifier<BillingScreenState> {
     for (var i = 0; i < attempts; i++) {
       try {
         final pm = await _service.getDefaultPaymentMethod(businessId);
-        final isNew = pm != null &&
+        final isNew =
+            pm != null &&
             pm.isVerified &&
             (pm.id != _cardIdBeforeFlow || _cardIdBeforeFlow == null);
         if (isNew) {
@@ -210,7 +225,43 @@ class BillingViewModel extends StateNotifier<BillingScreenState> {
   /// Cierra el estado del flujo de tarjeta (banners de éxito/espera).
   void dismissCardFlow() {
     _cardIdBeforeFlow = null;
-    state = state.copyWith(cardFlow: BillingCardFlow.idle, clearCardFlowError: true);
+    state = state.copyWith(
+      cardFlow: BillingCardFlow.idle,
+      clearCardFlowError: true,
+    );
+  }
+
+  /// Cobra la suscripción AHORA con la tarjeta default. Devuelve (éxito, mensaje)
+  /// para que la vista muestre el snackbar; refresca el estado al terminar.
+  Future<({bool success, String message})> chargeNow(String businessId) async {
+    if (state.isCharging) {
+      return (success: false, message: 'Hay un cobro en curso…');
+    }
+    state = state.copyWith(isCharging: true);
+    try {
+      final result = await _service.chargeNow(businessId: businessId);
+      await refresh(businessId);
+      if (result.approved) {
+        return (
+          success: true,
+          message: result.idempotent
+              ? 'Tu suscripción ya estaba al día.'
+              : '¡Pago aprobado! Gracias.',
+        );
+      }
+      final msg = result.responseMessage;
+      return (
+        success: false,
+        message:
+            'Tarjeta declinada${msg != null && msg.isNotEmpty ? ': $msg' : ''}.',
+      );
+    } on BillingException catch (e) {
+      return (success: false, message: e.message);
+    } catch (e) {
+      return (success: false, message: _friendlyError(e));
+    } finally {
+      state = state.copyWith(isCharging: false);
+    }
   }
 
   /// `inAppBrowserView` en móvil (Custom Tabs / SafariVC, comparte sesión);
@@ -243,5 +294,5 @@ class BillingViewModel extends StateNotifier<BillingScreenState> {
 
 final billingViewModelProvider =
     StateNotifierProvider<BillingViewModel, BillingScreenState>(
-  (ref) => BillingViewModel(ref),
-);
+      (ref) => BillingViewModel(ref),
+    );

@@ -266,8 +266,28 @@ class CashRegisterDataService {
       cardSales: pay.card,
       transferSales: pay.transfer,
       otherSales: pay.other,
+      totalDeposits: tx.deposits,
+      totalWithdrawals: tx.withdrawals,
+      totalExpenses: tx.expenses,
       status: row['status']?.toString() ?? 'open',
     );
+  }
+
+  /// Force-closes an OPEN session as the owner (POS `fn_force_close_cash_session`).
+  /// Self-enforces owner/admin/manager role server-side. [endAmount] is the
+  /// physically counted cash (optional — null closes without a variance figure).
+  /// [reason] is a required audit note. Has NO open-tables guard on the backend.
+  Future<void> forceCloseSession({
+    required String sessionId,
+    required String reason,
+    double? endAmount,
+  }) async {
+    await _client.rpc('fn_force_close_cash_session', params: {
+      'p_session_id': sessionId,
+      'p_end_amount': endAmount,
+      'p_reason': reason,
+      'p_forced_by': _client.auth.currentUser?.id,
+    });
   }
 
   RegisterClosing _toClosing(

@@ -4,6 +4,7 @@ import 'dart:developer' as dev;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../domain/notifications/dashboard_notification.dart';
+import '../../domain/notifications/notification_event_type.dart';
 
 class NotificationService {
   NotificationService(this._client);
@@ -14,12 +15,18 @@ class NotificationService {
   final _seenIds = <String>{};
   // Caché user_id -> nombre para no resolver el mismo mesero en cada apertura.
   final _nameCache = <String, String>{};
+  // Claves de evento que el usuario apagó para el negocio activo. Los emits con
+  // un tipo deshabilitado se descartan. Se carga async en subscribe (modelo
+  // opt-out: vacío = todo encendido).
+  final _disabledTypes = <String>{};
 
   Stream<DashboardNotification> get stream => _controller.stream;
 
   void subscribe(String businessId) {
     _dispose();
     _seenIds.clear();
+    _disabledTypes.clear();
+    unawaited(_loadDisabledPrefs(businessId));
 
     // Ensure the realtime socket carries the current access token. Postgres
     // Changes run RLS as the connected role; without this the socket may still
@@ -129,8 +136,34 @@ class NotificationService {
   }
 
   void _emit(DashboardNotification n) {
+    final key = NotificationEventType.keyForInApp(n.type);
+    if (key != null && _disabledTypes.contains(key)) return;
     if (!_controller.isClosed) {
       _controller.add(n);
+    }
+  }
+
+  /// Carga las preferencias deshabilitadas del usuario para el negocio activo.
+  /// Modelo opt-out: solo se guardan los eventos apagados. Degrada a "todo
+  /// encendido" si falla (p. ej. migración aún sin aplicar).
+  Future<void> _loadDisabledPrefs(String businessId) async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) return;
+    try {
+      final rows = await _client
+          .from('notification_preferences')
+          .select('event_type')
+          .eq('user_id', userId)
+          .eq('business_id', businessId)
+          .eq('enabled', false);
+      _disabledTypes
+        ..clear()
+        ..addAll({
+          for (final row in List<Map<String, dynamic>>.from(rows as List))
+            if (row['event_type'] != null) row['event_type'].toString(),
+        });
+    } catch (e) {
+      dev.log('[NotificationService] prefs load skipped: $e');
     }
   }
 

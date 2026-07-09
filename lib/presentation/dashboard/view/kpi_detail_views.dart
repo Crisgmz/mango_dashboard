@@ -10,6 +10,7 @@ import '../../../data/cash_register/reporte_z_pdf_builder.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
+import '../viewmodel/cash_register_view_model.dart';
 import '../../theme/theme_data_factory.dart';
 import '../widgets/growth_chip.dart';
 import '../widgets/period_filter_bar.dart';
@@ -937,24 +938,28 @@ class AverageTicketDetailView extends StatelessWidget {
   }
 }
 
-class CashRegisterDetailView extends StatelessWidget {
+class CashRegisterDetailView extends ConsumerWidget {
   const CashRegisterDetailView({super.key, this.summary, this.error});
 
   final CashRegisterSummary? summary;
   final String? error;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final dpi = DpiScale.of(context);
-    final data = summary;
+    // Watch the provider so a force-close (which reloads it) refreshes this view;
+    // fall back to the snapshot passed in for the first frame.
+    final state = ref.watch(cashRegisterViewModelProvider);
+    final data = state.summary ?? summary;
+    final err = state.error ?? error;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Cierres de Caja'),
         centerTitle: false,
       ),
-      body: error != null
-          ? Center(child: Text(error!, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.red)))
+      body: err != null
+          ? Center(child: Text(err, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.red)))
           : data == null
           ? Center(child: Text('Cargando cajas...', style: Theme.of(context).textTheme.bodySmall))
           : ListView(
@@ -1059,7 +1064,15 @@ class _OpenRegisterCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
-    return Container(
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => _OpenRegisterDetailSheet(session: session),
+      ),
+      child: Container(
       margin: EdgeInsets.only(bottom: dpi.space(10)),
       padding: EdgeInsets.all(dpi.space(14)),
       decoration: BoxDecoration(
@@ -1113,6 +1126,259 @@ class _OpenRegisterCard extends StatelessWidget {
           ),
         ],
       ),
+      ),
+    );
+  }
+}
+
+/// Detail sheet for an OPEN register — shows the same reconciliation the closed
+/// sessions show (expected per method), computed live, plus a force-close action.
+class _OpenRegisterDetailSheet extends ConsumerStatefulWidget {
+  const _OpenRegisterDetailSheet({required this.session});
+  final RegisterSession session;
+
+  @override
+  ConsumerState<_OpenRegisterDetailSheet> createState() =>
+      _OpenRegisterDetailSheetState();
+}
+
+class _OpenRegisterDetailSheetState
+    extends ConsumerState<_OpenRegisterDetailSheet> {
+  bool _closing = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final s = widget.session;
+    return SafeArea(
+      top: false,
+      child: Container(
+        constraints:
+            BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+        padding: EdgeInsets.fromLTRB(
+            dpi.space(20), dpi.space(16), dpi.space(20), dpi.space(20)),
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius:
+              BorderRadius.vertical(top: Radius.circular(dpi.radius(24))),
+        ),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(s.registerName,
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleLarge
+                              ?.copyWith(fontWeight: FontWeight.w800)),
+                      Text('Abierta por ${s.openedByName}',
+                          style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: dpi.space(10), vertical: dpi.space(4)),
+                  decoration: BoxDecoration(
+                    color: MangoThemeFactory.success.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(dpi.radius(8)),
+                  ),
+                  child: Text('ABIERTA',
+                      style: TextStyle(
+                          fontSize: dpi.font(10),
+                          fontWeight: FontWeight.w800,
+                          color: MangoThemeFactory.success)),
+                ),
+              ],
+            ),
+            SizedBox(height: dpi.space(16)),
+            _title(context, 'Ventas por método'),
+            _row(context, 'Efectivo', s.cashSales),
+            _row(context, 'Tarjeta', s.cardSales),
+            _row(context, 'Transferencia', s.transferSales),
+            if (s.otherSales > 0) _row(context, 'Otros', s.otherSales),
+            _row(context, 'Total ventas', s.totalSales, bold: true),
+            SizedBox(height: dpi.space(14)),
+            _title(context, 'Movimientos de caja'),
+            _row(context, 'Apertura', s.openingAmount),
+            _row(context, '+ Depósitos', s.totalDeposits),
+            _row(context, '− Retiros', s.totalWithdrawals),
+            _row(context, '− Gastos', s.totalExpenses),
+            SizedBox(height: dpi.space(14)),
+            _title(context, 'Esperado en caja'),
+            _row(context, 'Esperado efectivo', s.expectedCash),
+            _row(context, 'Esperado tarjeta', s.expectedCard),
+            _row(context, 'Esperado transferencia', s.expectedTransfer),
+            _row(context, 'Total esperado', s.expectedTotal, bold: true),
+            SizedBox(height: dpi.space(20)),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _closing ? null : _confirmForceClose,
+                style: FilledButton.styleFrom(
+                  backgroundColor: MangoThemeFactory.warning,
+                  padding: EdgeInsets.symmetric(vertical: dpi.space(14)),
+                ),
+                icon: _closing
+                    ? SizedBox(
+                        width: dpi.icon(16),
+                        height: dpi.icon(16),
+                        child: const CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.lock_clock_rounded),
+                label: Text(_closing ? 'Cerrando…' : 'Forzar cierre de caja'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _title(BuildContext context, String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text(text.toUpperCase(),
+            style: TextStyle(
+                fontSize: DpiScale.of(context).font(10),
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.6,
+                color: MangoThemeFactory.mutedText(context))),
+      );
+
+  Widget _row(BuildContext context, String label, double value,
+          {bool bold = false}) =>
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label,
+                style: TextStyle(
+                    fontWeight: bold ? FontWeight.w800 : FontWeight.w400)),
+            Text(MangoFormatters.currency(value),
+                style: TextStyle(
+                    fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
+          ],
+        ),
+      );
+
+  Future<void> _confirmForceClose() async {
+    final result = await showDialog<_ForceCloseInput>(
+      context: context,
+      builder: (_) =>
+          _ForceCloseDialog(expectedTotal: widget.session.expectedTotal),
+    );
+    if (result == null || !mounted) return;
+    setState(() => _closing = true);
+    final err =
+        await ref.read(cashRegisterViewModelProvider.notifier).forceClose(
+              sessionId: widget.session.id,
+              reason: result.reason,
+              endAmount: result.countedCash,
+            );
+    if (!mounted) return;
+    setState(() => _closing = false);
+    final messenger = ScaffoldMessenger.of(context);
+    if (err == null) {
+      Navigator.of(context).pop();
+      messenger.showSnackBar(SnackBar(
+          content: Text('Caja "${widget.session.registerName}" cerrada.')));
+    } else {
+      messenger.showSnackBar(SnackBar(content: Text(err)));
+    }
+  }
+}
+
+class _ForceCloseInput {
+  const _ForceCloseInput(this.reason, this.countedCash);
+  final String reason;
+  final double? countedCash;
+}
+
+class _ForceCloseDialog extends StatefulWidget {
+  const _ForceCloseDialog({required this.expectedTotal});
+  final double expectedTotal;
+
+  @override
+  State<_ForceCloseDialog> createState() => _ForceCloseDialogState();
+}
+
+class _ForceCloseDialogState extends State<_ForceCloseDialog> {
+  final _reason = TextEditingController();
+  final _amount = TextEditingController();
+  bool _submitted = false;
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    _amount.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final reasonEmpty = _reason.text.trim().isEmpty;
+    return AlertDialog(
+      title: const Text('Forzar cierre de caja'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Cerrarás esta caja como owner. Se cerrará aunque haya mesas u '
+            'órdenes abiertas. Total esperado: '
+            '${MangoFormatters.currency(widget.expectedTotal)}.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _reason,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              labelText: 'Motivo (obligatorio)',
+              errorText: _submitted && reasonEmpty ? 'Escribe un motivo' : null,
+              border: const OutlineInputBorder(),
+            ),
+            maxLines: 2,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _amount,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Efectivo contado (opcional)',
+              helperText: 'En blanco = cierra sin cuadre',
+              prefixText: 'RD\$ ',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () {
+            setState(() => _submitted = true);
+            if (_reason.text.trim().isEmpty) return;
+            final raw = _amount.text.trim().replaceAll(',', '.');
+            Navigator.of(context).pop(
+              _ForceCloseInput(
+                _reason.text.trim(),
+                raw.isEmpty ? null : double.tryParse(raw),
+              ),
+            );
+          },
+          child: const Text('Forzar cierre'),
+        ),
+      ],
     );
   }
 }

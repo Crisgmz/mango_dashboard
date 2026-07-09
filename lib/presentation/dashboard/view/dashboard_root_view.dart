@@ -39,6 +39,9 @@ import '../widgets/modifiers_card.dart';
 import '../widgets/waiter_performance_card.dart';
 import '../../inventory/view/inventory_view.dart';
 import '../../billing/view/billing_view.dart';
+import '../../notifications/view/notification_settings_view.dart';
+import '../../catalog/view/products_admin_view.dart';
+import '../../catalog/view/offers_admin_view.dart';
 import '../../billing/viewmodel/billing_reminder.dart';
 import '../../billing/widgets/billing_reminder_banner.dart';
 import '../../../data/billing/billing_reminder_prefs.dart';
@@ -907,9 +910,27 @@ class _NotificationsSheet extends ConsumerWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('Notificaciones', style: Theme.of(context).textTheme.titleLarge),
-                IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close_rounded),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: 'Ajustes de notificaciones',
+                      onPressed: () {
+                        final nav = Navigator.of(context);
+                        nav.pop();
+                        nav.push(
+                          MaterialPageRoute(
+                            builder: (_) => const NotificationSettingsView(),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.settings_outlined),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -2996,6 +3017,12 @@ class _OrderCardState extends State<_OrderCard> {
                     ),
                   ],
                 ],
+                if (order.isSplit) ...[
+                  SizedBox(height: dpi.space(10)),
+                  Divider(height: 1, color: MangoThemeFactory.borderColor(context)),
+                  SizedBox(height: dpi.space(8)),
+                  _OrderChecksBreakdown(checks: order.checks),
+                ],
                 AnimatedSize(
                   duration: const Duration(milliseconds: 180),
                   alignment: Alignment.topLeft,
@@ -3126,6 +3153,83 @@ class _OrderHeader extends StatelessWidget {
             ),
           ],
         ),
+      ],
+    );
+  }
+}
+
+/// Per-check breakdown for a divided account (C1, C2…) — mirrors the POS split
+/// view: each division with its amount and pagada/pendiente state.
+class _OrderChecksBreakdown extends StatelessWidget {
+  const _OrderChecksBreakdown({required this.checks});
+
+  final List<OrderCheckSummary> checks;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'CUENTA DIVIDIDA',
+          style: TextStyle(
+            fontSize: dpi.font(10),
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.6,
+            color: MangoThemeFactory.mutedText(context),
+          ),
+        ),
+        SizedBox(height: dpi.space(8)),
+        ...checks.map((c) {
+          final color =
+              c.isPaid ? MangoThemeFactory.success : MangoThemeFactory.mango;
+          return Padding(
+            padding: EdgeInsets.only(bottom: dpi.space(6)),
+            child: Row(
+              children: [
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: dpi.space(8), vertical: dpi.space(3)),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(dpi.radius(6)),
+                  ),
+                  child: Text(
+                    c.label,
+                    style: TextStyle(
+                        fontSize: dpi.font(11),
+                        fontWeight: FontWeight.w800,
+                        color: color),
+                  ),
+                ),
+                SizedBox(width: dpi.space(8)),
+                Text(
+                  '${c.itemCount} ${c.itemCount == 1 ? 'ítem' : 'ítems'}',
+                  style: TextStyle(
+                      fontSize: dpi.font(11),
+                      color: MangoThemeFactory.mutedText(context)),
+                ),
+                const Spacer(),
+                Text(
+                  c.isPaid ? 'Pagada' : 'Pendiente',
+                  style: TextStyle(
+                      fontSize: dpi.font(10),
+                      fontWeight: FontWeight.w700,
+                      color: color),
+                ),
+                SizedBox(width: dpi.space(8)),
+                Text(
+                  MangoFormatters.currency(c.total),
+                  style: TextStyle(
+                      fontSize: dpi.font(12),
+                      fontWeight: FontWeight.w800,
+                      color: MangoThemeFactory.textColor(context)),
+                ),
+              ],
+            ),
+          );
+        }),
       ],
     );
   }
@@ -4046,6 +4150,30 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                       Navigator.of(context).pop();
                       Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const InventoryView()),
+                      );
+                    },
+                  ),
+                  _DrawerTile(
+                    icon: Icons.restaurant_menu_rounded,
+                    accent: MangoThemeFactory.info,
+                    label: 'Productos',
+                    subtitle: 'Activar o desactivar productos',
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const ProductsAdminView()),
+                      );
+                    },
+                  ),
+                  _DrawerTile(
+                    icon: Icons.local_offer_rounded,
+                    accent: MangoThemeFactory.success,
+                    label: 'Ofertas',
+                    subtitle: 'Crear, editar y activar promociones',
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const OffersAdminView()),
                       );
                     },
                   ),

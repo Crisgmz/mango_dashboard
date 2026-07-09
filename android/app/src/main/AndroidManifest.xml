@@ -48,6 +48,13 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- FCM: channel the OS uses to post notifications when the app is in
+             background/killed (Flutter code doesn't run then). Must match the
+             channel created at startup in LocalNotificationHelper. Without this,
+             background pushes land on an auto-fallback channel and may not show. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="mango_dashboard" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

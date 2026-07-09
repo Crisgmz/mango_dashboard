@@ -32,12 +32,42 @@ class CashRegisterViewModel extends StateNotifier<CashRegisterState> {
   CashRegisterViewModel(this._ref) : super(const CashRegisterState());
 
   final Ref _ref;
+  String? _businessId;
 
   void reset() {
     state = const CashRegisterState();
   }
 
+  /// Owner force-closes an open session, then reloads. Returns null on success,
+  /// or a user-facing error message. See [CashRegisterDataService.forceCloseSession].
+  Future<String?> forceClose({
+    required String sessionId,
+    required String reason,
+    double? endAmount,
+  }) async {
+    try {
+      await _ref.read(cashRegisterDataServiceProvider).forceCloseSession(
+            sessionId: sessionId,
+            reason: reason,
+            endAmount: endAmount,
+          );
+      final bid = _businessId;
+      if (bid != null) await load(bid);
+      return null;
+    } catch (e) {
+      final msg = e.toString();
+      if (msg.contains('INSUFFICIENT_ROLE') || msg.contains('CLOSE_DENIED')) {
+        return 'No tienes permiso para forzar el cierre de esta caja.';
+      }
+      if (msg.contains('CALLER_REQUIRED')) {
+        return 'No se pudo identificar tu usuario. Vuelve a iniciar sesión.';
+      }
+      return 'No se pudo forzar el cierre. Intenta de nuevo.';
+    }
+  }
+
   Future<void> load(String businessId) async {
+    _businessId = businessId;
     state = state.copyWith(isLoading: true, clearError: true);
     try {
       final summary = await _ref

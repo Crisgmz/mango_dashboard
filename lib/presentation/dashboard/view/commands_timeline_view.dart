@@ -285,7 +285,8 @@ class _ComandaTileState extends ConsumerState<_ComandaTile> {
       // Lazy: only fire the query the first time the user expands.
       _itemsFuture ??= ref
           .read(dashboardDataServiceProvider)
-          .loadItemsForOrder(widget.ticket.orderId);
+          .loadItemsForOrder(widget.ticket.orderId,
+              checkId: widget.ticket.checkId);
     });
   }
 

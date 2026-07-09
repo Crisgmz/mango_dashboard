@@ -5,12 +5,14 @@ import '../../core/auth/biometric_auth_service.dart';
 import '../../data/auth/admin_access_service.dart';
 import '../../data/auth/saved_accounts_service.dart';
 import '../../data/billing/billing_data_service.dart';
+import '../../data/catalog/catalog_admin_service.dart';
 import '../../data/cash_register/cash_register_data_service.dart';
 import '../../data/dashboard/business_day_service.dart';
 import '../../data/dashboard/dashboard_data_service.dart';
 import '../../data/dashboard/dashboard_summary_cache.dart';
 import '../../data/dashboard/sales_layout_service.dart';
 import '../../data/inventory/inventory_data_service.dart';
+import '../../data/notifications/notification_preferences_service.dart';
 import '../../data/notifications/notification_service.dart';
 
 final supabaseClientProvider = Provider<SupabaseClient>((ref) {
@@ -53,12 +55,21 @@ final billingDataServiceProvider = Provider<BillingDataService>((ref) {
   return BillingDataService(ref.read(supabaseClientProvider));
 });
 
+final catalogAdminServiceProvider = Provider<CatalogAdminService>((ref) {
+  return CatalogAdminService(ref.read(supabaseClientProvider));
+});
+
 final savedAccountsServiceProvider = Provider<SavedAccountsService>((ref) {
   return SavedAccountsService();
 });
 
 final notificationServiceProvider = Provider<NotificationService>((ref) {
   return NotificationService(ref.read(supabaseClientProvider));
+});
+
+final notificationPreferencesServiceProvider =
+    Provider<NotificationPreferencesService>((ref) {
+  return NotificationPreferencesService(ref.read(supabaseClientProvider));
 });
 
 final biometricAuthServiceProvider = Provider<BiometricAuthService>((ref) {

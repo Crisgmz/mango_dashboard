@@ -11,12 +11,11 @@ class LocalNotificationHelper {
   static int _idCounter = 0;
   static bool _initialized = false;
 
-  static Future<void> initialize() async {
-    if (Platform.isAndroid) {
-      final status = await Permission.notification.request();
-      if (!status.isGranted) return;
-    }
+  /// The Android channel id. Must match `default_notification_channel_id` in
+  /// AndroidManifest.xml so OS-built pushes (app killed/background) use it too.
+  static const _androidChannelId = 'mango_dashboard';
 
+  static Future<void> initialize() async {
     const androidSettings = AndroidInitializationSettings('@mipmap/launcher_icon');
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
@@ -28,6 +27,25 @@ class LocalNotificationHelper {
       iOS: iosSettings,
     );
     await _plugin.initialize(settings: settings);
+
+    if (Platform.isAndroid) {
+      // Create the high-importance channel up front. The OS needs it to post
+      // notifications when the app is killed/background (Flutter code doesn't
+      // run then). Done before requesting permission so the channel always
+      // exists, even if the user grants the permission later.
+      const channel = AndroidNotificationChannel(
+        _androidChannelId,
+        'Mango Dashboard',
+        description: 'Notificaciones del dashboard',
+        importance: Importance.high,
+      );
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.createNotificationChannel(channel);
+
+      await Permission.notification.request();
+    }
     _initialized = true;
   }
 

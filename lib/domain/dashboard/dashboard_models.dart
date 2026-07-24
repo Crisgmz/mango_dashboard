@@ -25,6 +25,7 @@ class DashboardSummary {
     required this.liveOrders,
     required this.closedOrders,
     required this.salesByCategory,
+    this.cancelledOrders = const [],
     this.customRange,
     this.pendingAmount = 0,
     this.previousDaySales = 0,
@@ -49,6 +50,10 @@ class DashboardSummary {
   final List<CatalogItem> catalogItems;
   final List<LiveOrderItem> liveOrders;
   final List<LiveOrderItem> closedOrders;
+
+  /// Orders voided in the period (`orders.status_ext = void`) — the table was
+  /// released / the whole account cancelled after items were rung up.
+  final List<LiveOrderItem> cancelledOrders;
   final List<SalesByCategory> salesByCategory;
   final double pendingAmount;
   final double previousDaySales;
@@ -565,11 +570,13 @@ class LiveOrderItem {
     required this.total,
     required this.status,
     this.items = const [],
+    this.voidedItems = const [],
     this.checks = const [],
     this.zone,
     this.tableId,
     this.openedAt,
     this.peopleCount,
+    this.sessionNote,
   });
 
   final String id;
@@ -578,6 +585,14 @@ class LiveOrderItem {
   final double total;
   final String status;
   final List<LiveChildItem> items;
+
+  /// Raw `table_sessions.note`. The POS appends audit lines here when an order
+  /// is manually voided: `[ANULACION][iso-ts] usuario: motivo`.
+  final String? sessionNote;
+
+  /// Lines removed from the bill (`order_items.status = void`). Kept apart
+  /// from [items] so they never count toward [total].
+  final List<LiveChildItem> voidedItems;
 
   /// Per-check breakdown for a divided account (C1, C2…). Empty when the order
   /// is not split. `total` above is the whole-table remaining balance.
@@ -589,6 +604,48 @@ class LiveOrderItem {
 
   /// True when the account was divided into 2+ checks.
   bool get isSplit => checks.length >= 2;
+
+  /// True when the whole order was cancelled (`orders.status_ext = void`),
+  /// e.g. the table was released after sending to kitchen.
+  bool get isCancelled => status.toLowerCase() == 'void';
+
+  bool get hasVoidedItems => voidedItems.isNotEmpty;
+
+  /// Amount removed from the bill (sum of voided lines).
+  double get voidedTotal =>
+      voidedItems.fold(0.0, (sum, i) => sum + i.total);
+
+  /// `[ANULACION]` audit lines parsed out of [sessionNote] — who voided the
+  /// order, when, and why. Empty for system releases (no reason is recorded).
+  List<CancellationNote> get cancellationNotes {
+    final note = sessionNote;
+    if (note == null || note.trim().isEmpty) return const [];
+    final pattern = RegExp(r'^\[ANULACION\]\[([^\]]*)\]\s*(.*)$');
+    final result = <CancellationNote>[];
+    for (final line in note.split('\n')) {
+      final match = pattern.firstMatch(line.trim());
+      if (match == null) continue;
+      final rest = match.group(2) ?? '';
+      final sep = rest.indexOf(':');
+      result.add(CancellationNote(
+        at: DateTime.tryParse(match.group(1) ?? ''),
+        author: sep > 0 ? rest.substring(0, sep).trim() : 'Usuario',
+        reason: (sep > 0 ? rest.substring(sep + 1) : rest).trim(),
+      ));
+    }
+    return result;
+  }
+}
+
+/// One `[ANULACION]` audit line from `table_sessions.note`: who voided the
+/// order, when, and the reason the cashier typed.
+@immutable
+class CancellationNote {
+  const CancellationNote({this.at, required this.author, required this.reason});
+
+  final DateTime? at;
+  final String author;
+  final String reason;
 }
 
 /// One division (check) of a split account.
@@ -655,12 +712,16 @@ class LiveChildItem {
     required this.quantity,
     required this.total,
     this.extras = const [],
+    this.isVoid = false,
   });
 
   final String name;
   final double quantity;
   final double total;
   final List<String> extras;
+
+  /// True when the line was removed from the bill (`order_items.status = void`).
+  final bool isVoid;
 }
 
 // ── Cash Register (Caja) Models ──
@@ -849,6 +910,7 @@ class CashTransactionEntry {
     required this.type,
     required this.amount,
     this.description,
+    this.reasonLabel,
     this.createdAt,
     this.relatedOrderId,
   });
@@ -857,7 +919,14 @@ class CashTransactionEntry {
   final String type;
   final String id;
   final double amount;
+
+  /// Free-text note the cashier typed (optional in newer POS versions).
   final String? description;
+
+  /// Structured reason from the per-business catalog
+  /// (`cash_transaction_reasons.label`, fallback `reason_code`).
+  final String? reasonLabel;
+
   final DateTime? createdAt;
   final String? relatedOrderId;
 }

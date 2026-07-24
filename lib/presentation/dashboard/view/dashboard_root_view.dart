@@ -2861,13 +2861,18 @@ class _OrdersViewState extends State<OrdersView> {
     }
 
     final allOrders = widget.dataState.summary?.liveOrders ?? const <LiveOrderItem>[];
-    
+    final allCancelled =
+        widget.dataState.summary?.cancelledOrders ?? const <LiveOrderItem>[];
+
     // Extraer zonas únicas
     final zones = {'Todas', ...allOrders.map((o) => o.zone).whereType<String>()}.toList();
-    
+
     final orders = _selectedZone == 'Todas'
         ? allOrders
         : allOrders.where((o) => o.zone == _selectedZone).toList();
+    final cancelled = _selectedZone == 'Todas'
+        ? allCancelled
+        : allCancelled.where((o) => o.zone == _selectedZone).toList();
 
     return RefreshIndicator(
       key: const ValueKey('content_orders'),
@@ -2929,6 +2934,46 @@ class _OrdersViewState extends State<OrdersView> {
             )
           else
             ...orders.map((order) => _OrderCard(order: order)),
+
+          if (cancelled.isNotEmpty) ...[
+            SizedBox(height: dpi.space(28)),
+            Row(
+              children: [
+                Icon(Icons.remove_shopping_cart_rounded,
+                    size: dpi.icon(18), color: MangoThemeFactory.danger),
+                SizedBox(width: dpi.space(8)),
+                Expanded(
+                  child: Text(
+                    'Canceladas y eliminadas',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                ),
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: dpi.space(8), vertical: dpi.space(3)),
+                  decoration: BoxDecoration(
+                    color: MangoThemeFactory.danger.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(dpi.radius(8)),
+                  ),
+                  child: Text(
+                    '${cancelled.length}',
+                    style: TextStyle(
+                      fontSize: dpi.font(11),
+                      fontWeight: FontWeight.w800,
+                      color: MangoThemeFactory.danger,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: dpi.space(4)),
+            Text(
+              'Mesas liberadas o cuentas anuladas en el período seleccionado',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            SizedBox(height: dpi.space(14)),
+            ...cancelled.map((order) => _OrderCard(order: order)),
+          ],
           SizedBox(height: dpi.space(30)),
         ],
       ),
@@ -3017,6 +3062,18 @@ class _OrderCardState extends State<_OrderCard> {
                     ),
                   ],
                 ],
+                if (order.isCancelled) ...[
+                  SizedBox(height: dpi.space(10)),
+                  Divider(height: 1, color: MangoThemeFactory.borderColor(context)),
+                  SizedBox(height: dpi.space(8)),
+                  _CancellationNotesBlock(order: order),
+                ],
+                if (order.hasVoidedItems) ...[
+                  SizedBox(height: dpi.space(10)),
+                  Divider(height: 1, color: MangoThemeFactory.borderColor(context)),
+                  SizedBox(height: dpi.space(8)),
+                  _VoidedItemsBlock(order: order, showExtras: _expanded),
+                ],
                 if (order.isSplit) ...[
                   SizedBox(height: dpi.space(10)),
                   Divider(height: 1, color: MangoThemeFactory.borderColor(context)),
@@ -3050,16 +3107,26 @@ class _OrderHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
+    final accent =
+        order.isCancelled ? MangoThemeFactory.danger : MangoThemeFactory.mango;
+    final badgeColor =
+        order.isCancelled ? MangoThemeFactory.danger : MangoThemeFactory.success;
     return Row(
       children: [
         Container(
           width: dpi.scale(42),
           height: dpi.scale(42),
           decoration: BoxDecoration(
-            color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+            color: accent.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(dpi.radius(12)),
           ),
-          child: Icon(Icons.restaurant_rounded, color: MangoThemeFactory.mango, size: dpi.icon(22)),
+          child: Icon(
+            order.isCancelled
+                ? Icons.remove_shopping_cart_rounded
+                : Icons.restaurant_rounded,
+            color: accent,
+            size: dpi.icon(22),
+          ),
         ),
         SizedBox(width: dpi.space(14)),
         Expanded(
@@ -3094,9 +3161,36 @@ class _OrderHeader extends StatelessWidget {
                       ),
                     ),
                   ],
+                  if (order.isSplit) ...[
+                    SizedBox(width: dpi.space(6)),
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: dpi.space(6), vertical: dpi.space(2)),
+                      decoration: BoxDecoration(
+                        color: MangoThemeFactory.info.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(dpi.radius(4)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.call_split_rounded,
+                              size: dpi.icon(10), color: MangoThemeFactory.info),
+                          SizedBox(width: dpi.space(3)),
+                          Text(
+                            'DIVIDIDA ${order.checks.length}',
+                            style: TextStyle(
+                              fontSize: dpi.font(9),
+                              fontWeight: FontWeight.w800,
+                              color: MangoThemeFactory.info,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
-              if (order.subtitle.toLowerCase() != 'sent_to_kitchen') ...[
+              if (order.subtitle.toLowerCase() != 'sent_to_kitchen' &&
+                  order.subtitle.toLowerCase() != 'void') ...[
                 SizedBox(height: dpi.space(2)),
                 Text(
                   order.subtitle,
@@ -3127,15 +3221,15 @@ class _OrderHeader extends StatelessWidget {
                 Container(
                   padding: EdgeInsets.symmetric(horizontal: dpi.space(8), vertical: dpi.space(3)),
                   decoration: BoxDecoration(
-                    color: MangoThemeFactory.success.withValues(alpha: 0.1),
+                    color: badgeColor.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(dpi.radius(6)),
                   ),
                   child: Text(
-                    'ACTIVA',
+                    order.isCancelled ? 'CANCELADA' : 'ACTIVA',
                     style: TextStyle(
                       fontSize: dpi.font(10),
                       fontWeight: FontWeight.w800,
-                      color: MangoThemeFactory.success,
+                      color: badgeColor,
                     ),
                   ),
                 ),
@@ -3153,6 +3247,141 @@ class _OrderHeader extends StatelessWidget {
             ),
           ],
         ),
+      ],
+    );
+  }
+}
+
+/// Why a cancelled order was voided: the `[ANULACION]` audit lines the POS
+/// appends to `table_sessions.note` (who, when, reason). System releases have
+/// no recorded reason, so an explanatory fallback is shown instead.
+class _CancellationNotesBlock extends StatelessWidget {
+  const _CancellationNotesBlock({required this.order});
+
+  final LiveOrderItem order;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final notes = order.cancellationNotes;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(dpi.space(10)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.danger.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(dpi.radius(10)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.sticky_note_2_outlined,
+                  size: dpi.icon(13), color: MangoThemeFactory.danger),
+              SizedBox(width: dpi.space(5)),
+              Text(
+                'MOTIVO DE CANCELACIÓN',
+                style: TextStyle(
+                  fontSize: dpi.font(10),
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.6,
+                  color: MangoThemeFactory.danger,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: dpi.space(6)),
+          if (notes.isEmpty)
+            Text(
+              'Sin motivo registrado (mesa liberada automáticamente o proceso del sistema).',
+              style: TextStyle(
+                fontSize: dpi.font(11.5),
+                fontStyle: FontStyle.italic,
+                color: MangoThemeFactory.mutedText(context),
+              ),
+            )
+          else
+            ...notes.map((n) => Padding(
+                  padding: EdgeInsets.only(bottom: dpi.space(4)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        n.reason.isEmpty ? 'Sin detalle' : n.reason,
+                        style: TextStyle(
+                          fontSize: dpi.font(12.5),
+                          fontWeight: FontWeight.w600,
+                          color: MangoThemeFactory.textColor(context),
+                        ),
+                      ),
+                      SizedBox(height: dpi.space(2)),
+                      Text(
+                        n.at != null
+                            ? '${n.author} · ${MangoFormatters.dateTime(n.at!)}'
+                            : n.author,
+                        style: TextStyle(
+                          fontSize: dpi.font(10.5),
+                          color: MangoThemeFactory.mutedText(context),
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+        ],
+      ),
+    );
+  }
+}
+
+/// Lines removed from the bill (`order_items.status = void`) — shown crossed
+/// out with the amount that was taken off, so voids/releases stay visible.
+class _VoidedItemsBlock extends StatelessWidget {
+  const _VoidedItemsBlock({required this.order, required this.showExtras});
+
+  final LiveOrderItem order;
+  final bool showExtras;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final items = order.voidedItems;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.delete_outline_rounded,
+                size: dpi.icon(13), color: MangoThemeFactory.danger),
+            SizedBox(width: dpi.space(5)),
+            Text(
+              'PRODUCTOS ELIMINADOS',
+              style: TextStyle(
+                fontSize: dpi.font(10),
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.6,
+                color: MangoThemeFactory.danger,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '− ${MangoFormatters.currency(order.voidedTotal)}',
+              style: TextStyle(
+                fontSize: dpi.font(11),
+                fontWeight: FontWeight.w800,
+                color: MangoThemeFactory.danger,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: dpi.space(8)),
+        ...List.generate(items.length, (index) {
+          return Padding(
+            padding: EdgeInsets.only(
+              bottom: index == items.length - 1 ? 0 : dpi.space(8),
+            ),
+            child: _OrderItemRow(item: items[index], showExtras: showExtras),
+          );
+        }),
       ],
     );
   }
@@ -3243,6 +3472,8 @@ class _OrderItemRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
+    final accent =
+        item.isVoid ? MangoThemeFactory.danger : MangoThemeFactory.mango;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3251,7 +3482,7 @@ class _OrderItemRow extends StatelessWidget {
           height: dpi.scale(28),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+            color: accent.withValues(alpha: 0.1),
             shape: BoxShape.circle,
           ),
           child: Text(
@@ -3259,7 +3490,7 @@ class _OrderItemRow extends StatelessWidget {
             style: TextStyle(
               fontSize: dpi.font(12),
               fontWeight: FontWeight.bold,
-              color: MangoThemeFactory.mango,
+              color: accent,
             ),
           ),
         ),
@@ -3270,10 +3501,28 @@ class _OrderItemRow extends StatelessWidget {
             children: [
               Text(
                 item.name,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      decoration:
+                          item.isVoid ? TextDecoration.lineThrough : null,
+                      color: item.isVoid
+                          ? MangoThemeFactory.mutedText(context)
+                          : null,
+                    ),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
+              if (item.isVoid) ...[
+                SizedBox(height: dpi.space(2)),
+                Text(
+                  'Eliminado de la cuenta',
+                  style: TextStyle(
+                    fontSize: dpi.font(10),
+                    fontWeight: FontWeight.w600,
+                    color: MangoThemeFactory.danger,
+                  ),
+                ),
+              ],
               if (showExtras && item.extras.isNotEmpty) ...[
                 SizedBox(height: dpi.space(2)),
                 Text(
@@ -3290,7 +3539,12 @@ class _OrderItemRow extends StatelessWidget {
         SizedBox(width: dpi.space(8)),
         Text(
           MangoFormatters.currency(item.total),
-          style: TextStyle(fontWeight: FontWeight.w700, fontSize: dpi.font(13)),
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: dpi.font(13),
+            decoration: item.isVoid ? TextDecoration.lineThrough : null,
+            color: item.isVoid ? MangoThemeFactory.mutedText(context) : null,
+          ),
         ),
       ],
     );
@@ -3438,19 +3692,28 @@ class _OrderDetailsSheet extends StatelessWidget {
             Container(
               padding: EdgeInsets.symmetric(horizontal: dpi.space(8), vertical: dpi.space(3)),
               decoration: BoxDecoration(
-                color: MangoThemeFactory.success.withValues(alpha: 0.1),
+                color: (order.isCancelled
+                        ? MangoThemeFactory.danger
+                        : MangoThemeFactory.success)
+                    .withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(dpi.radius(6)),
               ),
               child: Text(
-                order.status.toUpperCase(),
-                style: TextStyle(fontSize: dpi.font(10), fontWeight: FontWeight.w800, color: MangoThemeFactory.success),
+                order.isCancelled ? 'CANCELADA' : order.status.toUpperCase(),
+                style: TextStyle(
+                  fontSize: dpi.font(10),
+                  fontWeight: FontWeight.w800,
+                  color: order.isCancelled
+                      ? MangoThemeFactory.danger
+                      : MangoThemeFactory.success,
+                ),
               ),
             ),
           ],
           SizedBox(height: dpi.space(16)),
 
-          // Items list - scrollable
-          if (order.items.isEmpty)
+          // Items list (open + removed lines) - scrollable
+          if (order.items.isEmpty && order.voidedItems.isEmpty)
             Padding(
               padding: EdgeInsets.symmetric(vertical: dpi.space(16)),
               child: Center(
@@ -3465,61 +3728,23 @@ class _OrderDetailsSheet extends StatelessWidget {
               child: ListView.separated(
                 shrinkWrap: true,
                 padding: EdgeInsets.zero,
-                itemCount: order.items.length,
+                itemCount: order.items.length + order.voidedItems.length,
                 separatorBuilder: (context, index) => SizedBox(height: dpi.space(10)),
                 itemBuilder: (context, index) {
-                  final it = order.items[index];
-                  return Row(
-                    children: [
-                      Container(
-                        width: dpi.scale(28),
-                        height: dpi.scale(28),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: MangoThemeFactory.mango.withValues(alpha: 0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Text(
-                          it.quantity.toStringAsFixed(0),
-                          style: TextStyle(fontSize: dpi.font(12), fontWeight: FontWeight.bold, color: MangoThemeFactory.mango),
-                        ),
-                      ),
-                      SizedBox(width: dpi.space(12)),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              it.name,
-                              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: 2,
-                            ),
-                            if (it.extras.isNotEmpty) ...[
-                              SizedBox(height: dpi.space(2)),
-                              Text(
-                                it.extras.join(' · '),
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      fontSize: dpi.font(10),
-                                      color: MangoThemeFactory.mutedText(context),
-                                    ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: dpi.space(8)),
-                      Text(
-                        MangoFormatters.currency(it.total),
-                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: dpi.font(14)),
-                      ),
-                    ],
-                  );
+                  final it = index < order.items.length
+                      ? order.items[index]
+                      : order.voidedItems[index - order.items.length];
+                  return _OrderItemRow(item: it, showExtras: true);
                 },
               ),
             ),
+
+          if (order.isSplit) ...[
+            SizedBox(height: dpi.space(12)),
+            const Divider(),
+            SizedBox(height: dpi.space(10)),
+            _OrderChecksBreakdown(checks: order.checks),
+          ],
 
           // Total - fixed at bottom
           SizedBox(height: dpi.space(12)),
@@ -4157,7 +4382,7 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                     icon: Icons.restaurant_menu_rounded,
                     accent: MangoThemeFactory.info,
                     label: 'Productos',
-                    subtitle: 'Activar o desactivar productos',
+                    subtitle: 'Crear, editar y eliminar productos',
                     onTap: () {
                       Navigator.of(context).pop();
                       Navigator.of(context).push(

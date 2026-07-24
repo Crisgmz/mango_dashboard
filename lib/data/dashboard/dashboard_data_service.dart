@@ -8,6 +8,7 @@ import 'fiscal_aggregator.dart';
 import 'menu_engineering_aggregator.dart';
 import 'operations_aggregator.dart';
 import 'sales_trend_aggregator.dart';
+import 'tax_lines_aggregator.dart';
 
 class DashboardDataService {
   DashboardDataService(this._client);
@@ -207,7 +208,7 @@ class DashboardDataService {
       futures.addAll([
         // Active Orders (all of them, regardless of date)
         _client.from('orders')
-            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, subtotal, tax, discounts, status, check_id, order_item_modifiers(name, qty)), payments(amount, change_amount, status), order_checks(id, position, label, is_closed, total)')
+            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, note, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, subtotal, tax, discounts, status, check_id, order_item_modifiers(name, qty)), payments(amount, change_amount, status), order_checks(id, position, label, is_closed, total)')
             .eq('table_sessions.business_id', businessId)
             .neq('status_ext', 'void')
             .isFilter('closed_at', null)
@@ -218,12 +219,24 @@ class DashboardDataService {
             .eq('business_id', businessId).order('name', ascending: true),
         // Closed Orders for the period
         _client.from('orders')
-            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, subtotal, tax, discounts, status, check_id, order_item_modifiers(name, qty)), payments(amount, change_amount, status), order_checks(id, position, label, is_closed, total)')
+            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, note, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, subtotal, tax, discounts, status, check_id, order_item_modifiers(name, qty)), payments(amount, change_amount, status), order_checks(id, position, label, is_closed, total)')
             .eq('table_sessions.business_id', businessId)
             .neq('status_ext', 'void')
             .gte('closed_at', periodStart)
             .lt('closed_at', periodEnd)
             .order('closed_at', ascending: false).limit(500),
+        // Cancelled orders for the period: the whole account was voided (table
+        // released after sending to kitchen, order annulled, or the system
+        // auto-released an empty table). Filtered by closed_at — the moment the
+        // void happened — so a table opened before the period (or before the
+        // 5 AM business-day cutoff) still shows up when it's cancelled today.
+        // Void rows without closed_at (edge/legacy) are included too.
+        _client.from('orders')
+            .select('id, total, status_ext, created_at, closed_at, table_sessions!inner(id, business_id, customer_name, note, opened_at, people_count, origin, dining_tables(*)), order_items(product_name, qty, subtotal, tax, discounts, status, check_id, order_item_modifiers(name, qty)), payments(amount, change_amount, status), order_checks(id, position, label, is_closed, total)')
+            .eq('table_sessions.business_id', businessId)
+            .eq('status_ext', 'void')
+            .or('closed_at.is.null,and(closed_at.gte.$periodStart,closed_at.lt.$periodEnd)')
+            .order('created_at', ascending: false).limit(200),
       ]);
     }
 
@@ -234,6 +247,7 @@ class DashboardDataService {
     final activeOrdersRaw = liteMode ? const <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(results[2]);
     final productsRaw = liteMode ? const <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(results[3]);
     final closedOrdersRaw = liteMode ? const <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(results[4]);
+    final cancelledOrdersRaw = liteMode ? const <Map<String, dynamic>>[] : List<Map<String, dynamic>>.from(results[5]);
 
     // Canonical scope: paid orders closed in the period (and the prev window).
     // Payments on orders not yet marked paid are excluded, so totalSales here
@@ -289,6 +303,11 @@ class DashboardDataService {
     for (final row in closedOrdersRaw) {
       closedOrders.add(_mapToLiveOrderItem(row));
     }
+
+    // Part C: Cancelled orders of the period (table released / account voided).
+    final cancelledOrders = <LiveOrderItem>[
+      for (final row in cancelledOrdersRaw) _mapToLiveOrderItem(row),
+    ];
 
     // Catalog
     final catalogItems = productsRaw.map((row) {
@@ -454,6 +473,7 @@ class DashboardDataService {
       catalogItems: catalogItems,
       liveOrders: liveOrders,
       closedOrders: closedOrders,
+      cancelledOrders: cancelledOrders,
       hourlySales: hourlySales,
       salesByMethod: salesByMethod,
       salesByCategory: salesByCategory,
@@ -584,6 +604,9 @@ class DashboardDataService {
     final customerName = session is Map<String, dynamic>
         ? session['customer_name']?.toString()
         : null;
+    final sessionNote = session is Map<String, dynamic>
+        ? session['note']?.toString()
+        : null;
     final openedAt = session is Map<String, dynamic>
         ? DateTime.tryParse(session['opened_at']?.toString() ?? '')
         : null;
@@ -608,20 +631,38 @@ class DashboardDataService {
     // Per the POS (order_pricing_utils.summarizeOrderPricing): recompute each
     // line from subtotal + tax − discounts. NEVER use order_items.total — it's a
     // pre-tax generated column (quantity*unit_price, no tax/mods/discounts).
-    // Void items are excluded from everything. An ACTIVE order lists only its
+    // Void items go to a separate list (never into the balance) so the UI can
+    // surface what was removed from the bill. An ACTIVE order lists only its
     // OPEN items (unpaid and not in a closed check) → the remaining balance,
     // exactly like the POS table screen; a CLOSED order lists everything it sold.
     // The header total is ALWAYS the sum of the displayed items, so the list and
     // the total can never disagree.
     final isClosed = row['closed_at'] != null;
+    final isVoidOrder = row['status_ext']?.toString() == 'void';
     final rawItems = row['order_items'] as List? ?? [];
     final childItems = <LiveChildItem>[];
+    final voidedItems = <LiveChildItem>[];
     final checkItemCounts = <String, int>{};
     var itemsTotal = 0.0;
     for (final ri in rawItems) {
       if (ri is! Map) continue;
       final status = ri['status']?.toString();
-      if (status == 'void') continue;
+      final amount = _toDouble(ri['subtotal']) +
+          _toDouble(ri['tax']) -
+          _toDouble(ri['discounts']);
+      final modifiers = ri['order_item_modifiers'] as List? ?? [];
+      final extras =
+          modifiers.map((m) => m['name']?.toString()).whereType<String>().toList();
+      if (status == 'void') {
+        voidedItems.add(LiveChildItem(
+          name: ri['product_name']?.toString() ?? 'Producto',
+          quantity: _toDouble(ri['qty'] ?? ri['quantity']),
+          total: amount,
+          extras: extras,
+          isVoid: true,
+        ));
+        continue;
+      }
       final checkId = ri['check_id']?.toString();
       if (checkId != null && checkId.isNotEmpty) {
         checkItemCounts[checkId] = (checkItemCounts[checkId] ?? 0) + 1;
@@ -629,14 +670,10 @@ class DashboardDataService {
       final settled = status == 'paid' ||
           (ri['check_id'] != null &&
               closedCheckIds.contains(ri['check_id'].toString()));
-      if (!isClosed && settled) continue; // active → only the open remainder
-      final amount = _toDouble(ri['subtotal']) +
-          _toDouble(ri['tax']) -
-          _toDouble(ri['discounts']);
+      if (!isClosed && !isVoidOrder && settled) {
+        continue; // active → only the open remainder
+      }
       itemsTotal += amount;
-      final modifiers = ri['order_item_modifiers'] as List? ?? [];
-      final extras =
-          modifiers.map((m) => m['name']?.toString()).whereType<String>().toList();
       childItems.add(LiveChildItem(
         name: ri['product_name']?.toString() ?? 'Producto',
         quantity: _toDouble(ri['qty'] ?? ri['quantity']),
@@ -664,8 +701,17 @@ class DashboardDataService {
       }
     }
 
-    final total =
-        itemsTotal > 0 ? itemsTotal : (paid > 0 ? paid : _toDouble(row['total']));
+    // A voided order's headline is the amount that was cancelled (its lines
+    // typically all end up void, so the open balance would read RD$0).
+    final voidedTotal =
+        voidedItems.fold(0.0, (sum, i) => sum + i.total);
+    final total = isVoidOrder
+        ? (itemsTotal + voidedTotal > 0
+            ? itemsTotal + voidedTotal
+            : _toDouble(row['total']))
+        : itemsTotal > 0
+            ? itemsTotal
+            : (paid > 0 ? paid : _toDouble(row['total']));
 
     // Per-check breakdown, only for genuinely divided accounts (2+ checks).
     // Each check shows its amount (order_checks.total) + paid state (is_closed),
@@ -700,11 +746,13 @@ class DashboardDataService {
       total: total,
       status: row['status_ext']?.toString() ?? 'open',
       items: childItems,
+      voidedItems: voidedItems,
       checks: checks,
       zone: zone,
       tableId: tableId,
       openedAt: openedAt,
       peopleCount: peopleCount,
+      sessionNote: sessionNote,
     );
   }
 
@@ -927,8 +975,47 @@ class DashboardDataService {
     return aggregateDailySales(
       orderRows: results[0],
       payRows: results[1],
-      taxRows: results[2],
+      taxRows: await _taxRowsWithItemsFallback(
+        taxRows: results[2],
+        businessId: businessId,
+        startIso: startIso,
+        endIso: endIso,
+      ),
     );
+  }
+
+  /// Devuelve [taxRows] tal cual cuando hay `order_item_tax_lines`; si el
+  /// rango vino VACÍO, deriva filas equivalentes desde `order_items.tax` +
+  /// la config de `taxes` (espejo del reporte de impuestos del POS). Sin esto,
+  /// negocios/rangos anteriores al trigger que puebla las tax lines mostraban
+  /// "Impuestos 0" aunque sí se cobró impuesto. Solo cuesta un round-trip
+  /// extra en ese caso degenerado.
+  Future<List<Map<String, dynamic>>> _taxRowsWithItemsFallback({
+    required List<Map<String, dynamic>> taxRows,
+    required String businessId,
+    required String startIso,
+    required String endIso,
+  }) async {
+    if (taxRows.isNotEmpty) return taxRows;
+    final itemRows = await _paginate((from, to) => _client
+        .from('order_items')
+        // Mismo scope canónico que las tax lines: ítems no anulados de
+        // órdenes no anuladas CERRADAS en el rango.
+        .select('tax, tax_rate, status, orders!inner(status_ext, closed_at)')
+        .eq('business_id', businessId)
+        .neq('status', 'void')
+        .neq('orders.status_ext', 'void')
+        .gte('orders.closed_at', startIso)
+        .lt('orders.closed_at', endIso)
+        .range(from, to));
+    if (itemRows.isEmpty) return taxRows;
+    final taxConfigs = List<Map<String, dynamic>>.from(
+      await _client
+          .from('taxes')
+          .select('name, rate, is_active')
+          .eq('business_id', businessId),
+    );
+    return deriveTaxRowsFromItems(itemRows: itemRows, taxConfigs: taxConfigs);
   }
 
   /// Sales trend over [start, end): gross per week/month bucket plus a
@@ -1071,7 +1158,15 @@ class DashboardDataService {
           .range(from, to)),
     ]);
 
-    return aggregateFiscal(fiscalRows: results[0], taxRows: results[1]);
+    return aggregateFiscal(
+      fiscalRows: results[0],
+      taxRows: await _taxRowsWithItemsFallback(
+        taxRows: results[1],
+        businessId: businessId,
+        startIso: startIso,
+        endIso: endIso,
+      ),
+    );
   }
 
   /// Fetches every page of a PostgREST query (which caps responses at ~1000

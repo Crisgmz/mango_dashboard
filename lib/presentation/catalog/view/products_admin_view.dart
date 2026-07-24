@@ -7,8 +7,10 @@ import '../../../domain/catalog/admin_product.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
 import '../viewmodel/products_admin_view_model.dart';
+import 'product_form_view.dart';
 
-/// Pantalla para activar/desactivar productos (tabla `menu_items`).
+/// Pantalla para administrar productos (tabla `menu_items`): crear, editar,
+/// activar/desactivar y eliminar.
 class ProductsAdminView extends ConsumerStatefulWidget {
   const ProductsAdminView({super.key});
 
@@ -55,6 +57,17 @@ class _ProductsAdminViewState extends ConsumerState<ProductsAdminView> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Productos')),
+      floatingActionButton: id == null
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ProductFormView()),
+              ),
+              backgroundColor: MangoThemeFactory.mango,
+              foregroundColor: Colors.white,
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Nuevo producto'),
+            ),
       body: id == null
           ? const Center(child: Text('No hay un negocio activo.'))
           : Column(
@@ -108,7 +121,7 @@ class _ProductsAdminViewState extends ConsumerState<ProductsAdminView> {
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(8), dpi.space(16), dpi.space(28)),
+      padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(8), dpi.space(16), dpi.space(96)),
       children: [
         for (final g in groupNames) ...[
           Padding(
@@ -128,6 +141,9 @@ class _ProductsAdminViewState extends ConsumerState<ProductsAdminView> {
                 saving: vm.savingIds.contains(p.id),
                 onChanged: (v) =>
                     ref.read(productsAdminViewModelProvider.notifier).toggle(p.id, v),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => ProductFormView(existing: p)),
+                ),
               )),
         ],
       ],
@@ -136,64 +152,86 @@ class _ProductsAdminViewState extends ConsumerState<ProductsAdminView> {
 }
 
 class _ProductRow extends StatelessWidget {
-  const _ProductRow({required this.product, required this.saving, required this.onChanged});
+  const _ProductRow({
+    required this.product,
+    required this.saving,
+    required this.onChanged,
+    required this.onTap,
+  });
 
   final AdminProduct product;
   final bool saving;
   final ValueChanged<bool> onChanged;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     return Container(
       margin: EdgeInsets.only(bottom: dpi.space(8)),
-      padding: EdgeInsets.symmetric(horizontal: dpi.space(14), vertical: dpi.space(10)),
       decoration: BoxDecoration(
         color: MangoThemeFactory.cardColor(context),
         borderRadius: BorderRadius.circular(dpi.radius(14)),
         border: Border.all(color: MangoThemeFactory.borderColor(context)),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(dpi.radius(14)),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+                horizontal: dpi.space(14), vertical: dpi.space(10)),
+            child: Row(
               children: [
-                Text(
-                  product.name,
-                  style: TextStyle(
-                    fontSize: dpi.font(14),
-                    fontWeight: FontWeight.w600,
-                    color: MangoThemeFactory.textColor(context),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        product.name,
+                        style: TextStyle(
+                          fontSize: dpi.font(14),
+                          fontWeight: FontWeight.w600,
+                          color: MangoThemeFactory.textColor(context),
+                        ),
+                      ),
+                      SizedBox(height: dpi.space(2)),
+                      Text(
+                        '${MangoFormatters.currency(product.price)} · ${product.isActive ? 'Disponible' : 'No disponible'}',
+                        style: TextStyle(
+                          fontSize: dpi.font(11.5),
+                          color: product.isActive
+                              ? MangoThemeFactory.mutedText(context)
+                              : MangoThemeFactory.danger,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                SizedBox(height: dpi.space(2)),
-                Text(
-                  '${MangoFormatters.currency(product.price)} · ${product.isActive ? 'Disponible' : 'No disponible'}',
-                  style: TextStyle(
-                    fontSize: dpi.font(11.5),
-                    color: product.isActive
-                        ? MangoThemeFactory.mutedText(context)
-                        : MangoThemeFactory.danger,
-                  ),
+                SizedBox(width: dpi.space(4)),
+                Icon(
+                  Icons.edit_rounded,
+                  size: dpi.icon(16),
+                  color: MangoThemeFactory.mutedText(context),
                 ),
+                SizedBox(width: dpi.space(8)),
+                if (saving)
+                  SizedBox(
+                    width: dpi.icon(20),
+                    height: dpi.icon(20),
+                    child: const CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  Switch(
+                    value: product.isActive,
+                    activeThumbColor: MangoThemeFactory.success,
+                    onChanged: onChanged,
+                  ),
               ],
             ),
           ),
-          SizedBox(width: dpi.space(8)),
-          if (saving)
-            SizedBox(
-              width: dpi.icon(20),
-              height: dpi.icon(20),
-              child: const CircularProgressIndicator(strokeWidth: 2),
-            )
-          else
-            Switch(
-              value: product.isActive,
-              activeThumbColor: MangoThemeFactory.success,
-              onChanged: onChanged,
-            ),
-        ],
+        ),
       ),
     );
   }

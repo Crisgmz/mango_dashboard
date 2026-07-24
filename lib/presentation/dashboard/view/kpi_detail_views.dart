@@ -444,7 +444,7 @@ class OrdersDetailView extends StatefulWidget {
 }
 
 class _OrdersDetailViewState extends State<OrdersDetailView> {
-  int _filterIndex = 0; // 0: Todas, 1: Activas, 2: Cerradas
+  int _filterIndex = 0; // 0: Todas, 1: Activas, 2: Cerradas, 3: Canceladas
 
   @override
   Widget build(BuildContext context) {
@@ -452,11 +452,17 @@ class _OrdersDetailViewState extends State<OrdersDetailView> {
 
     final List<LiveOrderItem> displayedOrders;
     if (_filterIndex == 0) {
-      displayedOrders = [...widget.summary.liveOrders, ...widget.summary.closedOrders];
+      displayedOrders = [
+        ...widget.summary.liveOrders,
+        ...widget.summary.closedOrders,
+        ...widget.summary.cancelledOrders,
+      ];
     } else if (_filterIndex == 1) {
       displayedOrders = widget.summary.liveOrders;
-    } else {
+    } else if (_filterIndex == 2) {
       displayedOrders = widget.summary.closedOrders;
+    } else {
+      displayedOrders = widget.summary.cancelledOrders;
     }
 
     return Scaffold(
@@ -477,7 +483,13 @@ class _OrdersDetailViewState extends State<OrdersDetailView> {
             child: displayedOrders.isEmpty
                 ? Center(
                     child: Text(
-                      _filterIndex == 1 ? 'No hay órdenes activas.' : (_filterIndex == 2 ? 'No hay órdenes cerradas.' : 'No hay órdenes registradas.'),
+                      _filterIndex == 1
+                          ? 'No hay órdenes activas.'
+                          : _filterIndex == 2
+                              ? 'No hay órdenes cerradas.'
+                              : _filterIndex == 3
+                                  ? 'No hay órdenes canceladas en el período.'
+                                  : 'No hay órdenes registradas.',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   )
@@ -512,6 +524,19 @@ class _OrdersDetailViewState extends State<OrdersDetailView> {
                              children: [
                                SizedBox(height: dpi.space(16)),
                                _SectionHeader(title: 'CERRADAS', count: widget.summary.closedOrders.length, color: Colors.grey),
+                               _OrderDetailCard(order: order),
+                             ],
+                           );
+                         }
+                         if (orderIndex ==
+                                 widget.summary.liveOrders.length +
+                                     widget.summary.closedOrders.length &&
+                             widget.summary.cancelledOrders.isNotEmpty) {
+                           return Column(
+                             crossAxisAlignment: CrossAxisAlignment.start,
+                             children: [
+                               SizedBox(height: dpi.space(16)),
+                               _SectionHeader(title: 'CANCELADAS', count: widget.summary.cancelledOrders.length, color: MangoThemeFactory.danger),
                                _OrderDetailCard(order: order),
                              ],
                            );
@@ -589,6 +614,7 @@ class _OrderFilterTabs extends StatelessWidget {
           _TabItem(label: 'Todas', isSelected: selectedIndex == 0, onTap: () => onChanged(0)),
           _TabItem(label: 'Activas', isSelected: selectedIndex == 1, onTap: () => onChanged(1)),
           _TabItem(label: 'Cerradas', isSelected: selectedIndex == 2, onTap: () => onChanged(2)),
+          _TabItem(label: 'Canceladas', isSelected: selectedIndex == 3, onTap: () => onChanged(3)),
         ],
       ),
     );
@@ -676,6 +702,14 @@ class _OrderDetailCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
+    final isDone = order.status == 'closed' || order.status == 'completed';
+    final cancelled = order.isCancelled;
+    final accent = cancelled
+        ? MangoThemeFactory.danger
+        : isDone
+            ? Colors.grey
+            : MangoThemeFactory.mango;
+    final notes = cancelled ? order.cancellationNotes : const <CancellationNote>[];
     return Container(
       margin: EdgeInsets.only(bottom: dpi.space(10)),
       padding: EdgeInsets.all(dpi.space(14)),
@@ -693,19 +727,17 @@ class _OrderDetailCard extends StatelessWidget {
                 width: dpi.scale(38),
                 height: dpi.scale(38),
                 decoration: BoxDecoration(
-                  color: (order.status == 'closed' || order.status == 'completed') 
-                    ? Colors.grey.withValues(alpha: 0.1)
-                    : MangoThemeFactory.mango.withValues(alpha: 0.1),
+                  color: accent.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(dpi.radius(10)),
                 ),
                 child: Icon(
-                  (order.status == 'closed' || order.status == 'completed') 
-                    ? Icons.check_circle_outline_rounded 
-                    : Icons.restaurant_rounded, 
-                  color: (order.status == 'closed' || order.status == 'completed')
-                    ? Colors.grey
-                    : MangoThemeFactory.mango, 
-                  size: dpi.icon(18)
+                  cancelled
+                      ? Icons.remove_shopping_cart_rounded
+                      : isDone
+                          ? Icons.check_circle_outline_rounded
+                          : Icons.restaurant_rounded,
+                  color: accent,
+                  size: dpi.icon(18),
                 ),
               ),
               SizedBox(width: dpi.space(12)),
@@ -715,7 +747,16 @@ class _OrderDetailCard extends StatelessWidget {
                   children: [
                     Text(order.title, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
                     SizedBox(height: dpi.space(2)),
-                    Text(order.subtitle, style: Theme.of(context).textTheme.bodySmall),
+                    Text(
+                      cancelled ? 'CANCELADA' : order.subtitle,
+                      style: cancelled
+                          ? TextStyle(
+                              fontSize: dpi.font(10),
+                              fontWeight: FontWeight.w800,
+                              color: MangoThemeFactory.danger,
+                            )
+                          : Theme.of(context).textTheme.bodySmall,
+                    ),
                   ],
                 ),
               ),
@@ -729,6 +770,31 @@ class _OrderDetailCard extends StatelessWidget {
               ),
             ],
           ),
+          if (cancelled) ...[
+            SizedBox(height: dpi.space(8)),
+            if (notes.isEmpty)
+              Text(
+                'Sin motivo registrado (mesa liberada automáticamente o proceso del sistema).',
+                style: TextStyle(
+                  fontSize: dpi.font(11),
+                  fontStyle: FontStyle.italic,
+                  color: MangoThemeFactory.mutedText(context),
+                ),
+              )
+            else
+              ...notes.map((n) => Padding(
+                    padding: EdgeInsets.only(bottom: dpi.space(3)),
+                    child: Text(
+                      n.at != null
+                          ? '${n.reason} — ${n.author} · ${MangoFormatters.dateTime(n.at!)}'
+                          : '${n.reason} — ${n.author}',
+                      style: TextStyle(
+                        fontSize: dpi.font(11.5),
+                        color: MangoThemeFactory.textColor(context),
+                      ),
+                    ),
+                  )),
+          ],
           if (order.items.isNotEmpty) ...[
             SizedBox(height: dpi.space(12)),
             ...order.items.take(4).map(
@@ -1146,6 +1212,42 @@ class _OpenRegisterDetailSheetState
     extends ConsumerState<_OpenRegisterDetailSheet> {
   bool _closing = false;
 
+  /// Movimientos individuales de la sesión (con sus notas), para el drill-down
+  /// de Depósitos/Retiros/Gastos — igual que en los cierres.
+  late final Future<List<CashTransactionEntry>> _transactionsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _transactionsFuture = ref
+        .read(cashRegisterDataServiceProvider)
+        .loadSessionTransactions(widget.session.id);
+  }
+
+  Future<void> _openTransactions(
+      String type, String title, IconData icon, Color color) async {
+    List<CashTransactionEntry> all;
+    try {
+      all = await _transactionsFuture;
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudieron cargar los movimientos.')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    final entries = all.where((t) => t.type == type).toList(growable: false);
+    final total = entries.fold<double>(0, (sum, t) => sum + t.amount);
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _TransactionListSheet(
+          title: title, icon: icon, color: color, total: total, entries: entries),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
@@ -1206,9 +1308,26 @@ class _OpenRegisterDetailSheetState
             SizedBox(height: dpi.space(14)),
             _title(context, 'Movimientos de caja'),
             _row(context, 'Apertura', s.openingAmount),
-            _row(context, '+ Depósitos', s.totalDeposits),
-            _row(context, '− Retiros', s.totalWithdrawals),
-            _row(context, '− Gastos', s.totalExpenses),
+            _row(context, '+ Depósitos', s.totalDeposits,
+                onTap: () => _openTransactions('deposit', 'Depósitos',
+                    Icons.add_circle_outline_rounded, MangoThemeFactory.success)),
+            _row(context, '− Retiros', s.totalWithdrawals,
+                onTap: () => _openTransactions('withdrawal', 'Retiros',
+                    Icons.remove_circle_outline_rounded, MangoThemeFactory.warning)),
+            _row(context, '− Gastos', s.totalExpenses,
+                onTap: () => _openTransactions('expense', 'Gastos',
+                    Icons.receipt_long_rounded, MangoThemeFactory.danger)),
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                'Toca un movimiento para ver el detalle y sus notas.',
+                style: TextStyle(
+                  fontSize: dpi.font(10),
+                  fontStyle: FontStyle.italic,
+                  color: MangoThemeFactory.mutedText(context),
+                ),
+              ),
+            ),
             SizedBox(height: dpi.space(14)),
             _title(context, 'Esperado en caja'),
             _row(context, 'Esperado efectivo', s.expectedCash),
@@ -1251,21 +1370,39 @@ class _OpenRegisterDetailSheetState
       );
 
   Widget _row(BuildContext context, String label, double value,
-          {bool bold = false}) =>
-      Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      {bool bold = false, VoidCallback? onTap}) {
+    final row = Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label,
+            style:
+                TextStyle(fontWeight: bold ? FontWeight.w800 : FontWeight.w400)),
+        Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Text(label,
-                style: TextStyle(
-                    fontWeight: bold ? FontWeight.w800 : FontWeight.w400)),
             Text(MangoFormatters.currency(value),
                 style: TextStyle(
                     fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
+            if (onTap != null) ...[
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_right_rounded,
+                  size: DpiScale.of(context).icon(16),
+                  color: MangoThemeFactory.mutedText(context)),
+            ],
           ],
         ),
-      );
+      ],
+    );
+    if (onTap == null) {
+      return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3), child: row);
+    }
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3), child: row),
+    );
+  }
 
   Future<void> _confirmForceClose() async {
     final result = await showDialog<_ForceCloseInput>(
@@ -1968,17 +2105,40 @@ class _TransactionListSheet extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                (entry.description != null && entry.description!.trim().isNotEmpty)
-                                    ? entry.description!.trim()
-                                    : 'Sin descripción',
-                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                      fontWeight: FontWeight.w600,
-                                      fontStyle: (entry.description == null || entry.description!.trim().isEmpty)
-                                          ? FontStyle.italic
-                                          : null,
+                              // Primero la razón estructurada del catálogo; la
+                              // descripción libre queda como nota secundaria.
+                              Builder(builder: (context) {
+                                final reason = entry.reasonLabel?.trim() ?? '';
+                                final desc = entry.description?.trim() ?? '';
+                                final title = reason.isNotEmpty
+                                    ? reason
+                                    : (desc.isNotEmpty ? desc : 'Sin descripción');
+                                final showDescBelow =
+                                    reason.isNotEmpty && desc.isNotEmpty && desc != reason;
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                            fontWeight: FontWeight.w600,
+                                            fontStyle: (reason.isEmpty && desc.isEmpty)
+                                                ? FontStyle.italic
+                                                : null,
+                                          ),
                                     ),
-                              ),
+                                    if (showDescBelow) ...[
+                                      SizedBox(height: dpi.space(2)),
+                                      Text(
+                                        desc,
+                                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                              color: MangoThemeFactory.mutedText(context),
+                                            ),
+                                      ),
+                                    ],
+                                  ],
+                                );
+                              }),
                               if (entry.createdAt != null) ...[
                                 SizedBox(height: dpi.space(2)),
                                 Text(MangoFormatters.dateTime(entry.createdAt!), style: Theme.of(context).textTheme.bodySmall),

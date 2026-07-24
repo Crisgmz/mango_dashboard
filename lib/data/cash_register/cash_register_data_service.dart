@@ -353,24 +353,47 @@ class CashRegisterDataService {
     );
   }
 
+  /// Individual cash movements of an OPEN session (with their notes), for the
+  /// same Depósitos/Retiros/Gastos drill-down that closed sessions already have.
+  Future<List<CashTransactionEntry>> loadSessionTransactions(String sessionId) =>
+      _loadTransactions(sessionId);
+
   Future<List<CashTransactionEntry>> _loadTransactions(String sessionId) async {
     if (sessionId.isEmpty) return const [];
-    final rows = await _client
-        .from('cash_transactions')
-        .select('id, type, amount, description, related_order_id, created_at')
-        .eq('session_id', sessionId)
-        .order('created_at', ascending: true);
+    List<dynamic> rows;
+    try {
+      // Con la razón estructurada del módulo pro de caja (reason_code +
+      // catálogo cash_transaction_reasons).
+      rows = await _client
+          .from('cash_transactions')
+          .select('id, type, amount, description, reason_code, related_order_id, '
+              'created_at, cash_transaction_reasons(label)')
+          .eq('session_id', sessionId)
+          .order('created_at', ascending: true);
+    } on PostgrestException {
+      // Backend sin la migración del módulo pro: solo la descripción libre.
+      rows = await _client
+          .from('cash_transactions')
+          .select('id, type, amount, description, related_order_id, created_at')
+          .eq('session_id', sessionId)
+          .order('created_at', ascending: true);
+    }
 
-    return List<Map<String, dynamic>>.from(rows)
-        .map((row) => CashTransactionEntry(
-              id: row['id']?.toString() ?? '',
-              type: row['type']?.toString() ?? '',
-              amount: _toDouble(row['amount']),
-              description: row['description']?.toString(),
-              createdAt: DateTime.tryParse(row['created_at']?.toString() ?? ''),
-              relatedOrderId: row['related_order_id']?.toString(),
-            ))
-        .toList(growable: false);
+    return List<Map<String, dynamic>>.from(rows).map((row) {
+      final reason = row['cash_transaction_reasons'];
+      final reasonLabel = reason is Map<String, dynamic>
+          ? reason['label']?.toString()
+          : null;
+      return CashTransactionEntry(
+        id: row['id']?.toString() ?? '',
+        type: row['type']?.toString() ?? '',
+        amount: _toDouble(row['amount']),
+        description: row['description']?.toString(),
+        reasonLabel: reasonLabel ?? row['reason_code']?.toString(),
+        createdAt: DateTime.tryParse(row['created_at']?.toString() ?? ''),
+        relatedOrderId: row['related_order_id']?.toString(),
+      );
+    }).toList(growable: false);
   }
 
   /// Loads NCFs (fiscal documents) issued during a cash session, grouped by type.

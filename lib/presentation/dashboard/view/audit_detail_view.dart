@@ -5,6 +5,7 @@ import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/date/date_range_utils.dart';
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../data/dashboard/business_day_service.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
@@ -36,6 +37,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
   late String _periodLabel;
   DetailPeriod _period = DetailPeriod.initial;
   DateTimeRange? _customRange;
+  int _cutoffHour = BusinessDayService.cachedCutoffHour;
   String _query = '';
   AuditDetail _loaded = const AuditDetail();
 
@@ -77,7 +79,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
       });
       return;
     }
-    final range = rangeForDetailPeriod(period, DateTime.now());
+    final range = rangeForDetailPeriod(period, DateTime.now(), cutoffHour: _cutoffHour);
     if (range == null) return;
     setState(() {
       _period = period;
@@ -86,6 +88,21 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
       _periodLabel = labelForDetailPeriod(period);
       _future = _load();
     });
+  }
+
+  /// Cambia la hora de corte usada por este reporte y recalcula el período.
+  void _applyCutoff(int hour) {
+    setState(() => _cutoffHour = hour);
+    if (_period == DetailPeriod.custom && _customRange != null) {
+      final range = operativeRangeForPickedDays(_customRange!, cutoffHour: hour);
+      setState(() {
+        _start = range.start;
+        _end = range.end;
+        _future = _load();
+      });
+      return;
+    }
+    _applyPeriod(_period);
   }
 
   Future<void> _pickCustomRange() async {
@@ -107,9 +124,10 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
       initialDateRange: seed,
     );
     if (picked == null || !mounted) return;
-    final start = DateTime(picked.start.year, picked.start.month, picked.start.day);
-    final end = DateTime(picked.end.year, picked.end.month, picked.end.day)
-        .add(const Duration(days: 1));
+    final pickedRange =
+        operativeRangeForPickedDays(picked, cutoffHour: _cutoffHour);
+    final start = pickedRange.start;
+    final end = pickedRange.end;
     setState(() {
       _period = DetailPeriod.custom;
       _customRange = picked;
@@ -139,6 +157,13 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
       .where((d) => _matchesQuery(
           '${d.tableLabel ?? ''} ${d.customerName ?? ''} ${d.waiterName ?? ''}'))
       .toList();
+
+  List<CancelledOrderAudit> get _filteredCancelledOrders =>
+      _loaded.cancelledOrders
+          .where((o) => _matchesQuery(
+              '${o.tableLabel ?? ''} ${o.customerName ?? ''} ${o.waiterName ?? ''} '
+              '${o.notes.map((n) => '${n.author} ${n.reason}').join(' ')}'))
+          .toList();
 
   List<List<String>> _rowsForExport() {
     final rows = <List<String>>[];
@@ -180,6 +205,23 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
         ].join(' · '),
       ]);
     }
+    for (final o in _filteredCancelledOrders) {
+      rows.add([
+        'Mesa anulada',
+        _formatDateTime(o.closedAt ?? o.createdAt),
+        o.tableLabel ?? 'Orden',
+        o.amount.toStringAsFixed(2),
+        [
+          if (o.customerName != null && o.customerName!.trim().isNotEmpty)
+            o.customerName!,
+          if (o.waiterName != null) 'Mesero: ${o.waiterName}',
+          if (o.notes.isEmpty)
+            'Sin motivo registrado'
+          else
+            ...o.notes.map((n) => 'Motivo (${n.author}): ${n.reason}'),
+        ].join(' · '),
+      ]);
+    }
     return rows;
   }
 
@@ -206,7 +248,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Auditoría'),
@@ -215,7 +257,8 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
             ExportMenuButton(
               enabled: _loaded.voidedItems.isNotEmpty ||
                   _loaded.cancelledPayments.isNotEmpty ||
-                  _loaded.discountedOrders.isNotEmpty,
+                  _loaded.discountedOrders.isNotEmpty ||
+                  _loaded.cancelledOrders.isNotEmpty,
               onExportCsv: _exportCsv,
               onExportPdf: _exportPdf,
             ),
@@ -223,10 +266,15 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
           bottom: const TabBar(
             indicatorColor: MangoThemeFactory.mango,
             labelColor: MangoThemeFactory.mango,
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
             tabs: [
               Tab(icon: Icon(Icons.block_rounded), text: 'Devoluciones'),
               Tab(icon: Icon(Icons.cancel_rounded), text: 'Cancelaciones'),
               Tab(icon: Icon(Icons.discount_rounded), text: 'Descuentos'),
+              Tab(
+                  icon: Icon(Icons.table_restaurant_rounded),
+                  text: 'Mesas anuladas'),
             ],
           ),
         ),
@@ -259,6 +307,8 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
                   initialLabel: widget.periodLabel,
                   onSelected: _applyPeriod,
                   onPickCustom: _pickCustomRange,
+                  cutoffHour: _cutoffHour,
+                  onCutoffChanged: _applyCutoff,
                   accent: MangoThemeFactory.danger,
                 ),
                 SizedBox(height: dpi.space(10)),
@@ -286,6 +336,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
                             _VoidedItemsTab(items: _filteredVoids),
                             _CancelledPaymentsTab(items: _filteredCancellations),
                             _DiscountedOrdersTab(items: _filteredDiscounts),
+                            _CancelledOrdersTab(items: _filteredCancelledOrders),
                           ],
                         ),
                 ),
@@ -388,6 +439,14 @@ class _AuditHeader extends StatelessWidget {
                   amount: MangoFormatters.currency(summary.discountsAmount),
                 ),
               ),
+              _verticalDivider(dpi),
+              Expanded(
+                child: _MiniStat(
+                  label: 'Mesas anul.',
+                  value: '${summary.cancelledOrdersCount}',
+                  amount: MangoFormatters.currency(summary.cancelledOrdersAmount),
+                ),
+              ),
             ],
           ),
         ],
@@ -460,6 +519,9 @@ class _VoidedItemsTab extends StatelessWidget {
         title: items[index].productName,
         amount: items[index].amount,
         subtitleParts: _voidSubtitle(items[index]),
+        noteLines: items[index].note != null
+            ? ['Nota: ${items[index].note}']
+            : const [],
       ),
     );
   }
@@ -563,6 +625,55 @@ class _DiscountedOrdersTab extends StatelessWidget {
   }
 }
 
+/// Mesas liberadas / cuentas anuladas con su motivo [ANULACION]. Las notas se
+/// muestran SIEMPRE que existan, completas (sin recortar).
+class _CancelledOrdersTab extends StatelessWidget {
+  const _CancelledOrdersTab({required this.items});
+  final List<CancelledOrderAudit> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    if (items.isEmpty) {
+      return _EmptyTab(message: 'Sin mesas anuladas en este periodo.');
+    }
+    return ListView.separated(
+      padding: EdgeInsets.fromLTRB(
+          dpi.space(16), dpi.space(8), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
+      itemCount: items.length,
+      separatorBuilder: (_, _) => SizedBox(height: dpi.space(8)),
+      itemBuilder: (context, index) {
+        final o = items[index];
+        return _AuditTile(
+          accent: MangoThemeFactory.danger,
+          icon: Icons.table_restaurant_rounded,
+          title: o.tableLabel ?? 'Orden',
+          amount: o.amount,
+          subtitleParts: _subtitle(o),
+          noteLines: o.notes.isEmpty
+              ? const ['Sin motivo registrado (liberación automática o proceso del sistema).']
+              : [
+                  for (final n in o.notes)
+                    n.at != null
+                        ? '${n.reason} — ${n.author} · ${_formatDateTime(n.at!)}'
+                        : '${n.reason} — ${n.author}',
+                ],
+        );
+      },
+    );
+  }
+
+  static List<String> _subtitle(CancelledOrderAudit o) {
+    final parts = <String>[];
+    if (o.customerName != null && o.customerName!.trim().isNotEmpty) {
+      parts.add(o.customerName!);
+    }
+    if (o.waiterName != null) parts.add('Mesero: ${o.waiterName}');
+    parts.add(_formatTime(o.closedAt ?? o.createdAt));
+    return parts;
+  }
+}
+
 class _AuditTile extends StatelessWidget {
   const _AuditTile({
     required this.accent,
@@ -571,6 +682,7 @@ class _AuditTile extends StatelessWidget {
     required this.amount,
     required this.subtitleParts,
     this.amountSuffix,
+    this.noteLines = const [],
   });
 
   final Color accent;
@@ -579,6 +691,9 @@ class _AuditTile extends StatelessWidget {
   final double amount;
   final String? amountSuffix;
   final List<String> subtitleParts;
+
+  /// Notas/motivos del registro. Siempre visibles y completas cuando existen.
+  final List<String> noteLines;
 
   @override
   Widget build(BuildContext context) {
@@ -591,58 +706,89 @@ class _AuditTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(dpi.radius(14)),
         border: Border.all(color: MangoThemeFactory.borderColor(context)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: dpi.scale(38),
-            height: dpi.scale(38),
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: isDark ? 0.2 : 0.12),
-              borderRadius: BorderRadius.circular(dpi.radius(10)),
-            ),
-            child: Icon(icon, color: accent, size: dpi.icon(20)),
-          ),
-          SizedBox(width: dpi.space(12)),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                SizedBox(height: dpi.space(2)),
-                Text(
-                  subtitleParts.join(' · '),
-                  style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-          SizedBox(width: dpi.space(8)),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
+          Row(
             children: [
-              Text(
-                MangoFormatters.currency(amount),
-                style: TextStyle(
-                  fontSize: dpi.font(13),
-                  fontWeight: FontWeight.w800,
-                  color: accent,
+              Container(
+                width: dpi.scale(38),
+                height: dpi.scale(38),
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: isDark ? 0.2 : 0.12),
+                  borderRadius: BorderRadius.circular(dpi.radius(10)),
+                ),
+                child: Icon(icon, color: accent, size: dpi.icon(20)),
+              ),
+              SizedBox(width: dpi.space(12)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    SizedBox(height: dpi.space(2)),
+                    Text(
+                      subtitleParts.join(' · '),
+                      style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ),
               ),
-              if (amountSuffix != null)
-                Text(
-                  amountSuffix!,
-                  style: TextStyle(
-                      fontSize: dpi.font(10), color: MangoThemeFactory.mutedText(context)),
-                ),
+              SizedBox(width: dpi.space(8)),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    MangoFormatters.currency(amount),
+                    style: TextStyle(
+                      fontSize: dpi.font(13),
+                      fontWeight: FontWeight.w800,
+                      color: accent,
+                    ),
+                  ),
+                  if (amountSuffix != null)
+                    Text(
+                      amountSuffix!,
+                      style: TextStyle(
+                          fontSize: dpi.font(10), color: MangoThemeFactory.mutedText(context)),
+                    ),
+                ],
+              ),
             ],
           ),
+          if (noteLines.isNotEmpty) ...[
+            SizedBox(height: dpi.space(8)),
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(dpi.space(10)),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: isDark ? 0.1 : 0.06),
+                borderRadius: BorderRadius.circular(dpi.radius(10)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var i = 0; i < noteLines.length; i++) ...[
+                    Text(
+                      noteLines[i],
+                      style: TextStyle(
+                        fontSize: dpi.font(11.5),
+                        color: MangoThemeFactory.textColor(context),
+                      ),
+                    ),
+                    if (i < noteLines.length - 1) SizedBox(height: dpi.space(4)),
+                  ],
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

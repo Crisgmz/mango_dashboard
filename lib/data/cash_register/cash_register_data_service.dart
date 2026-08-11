@@ -358,6 +358,80 @@ class CashRegisterDataService {
   Future<List<CashTransactionEntry>> loadSessionTransactions(String sessionId) =>
       _loadTransactions(sessionId);
 
+  /// Manual cash movements (deposit/withdrawal/expense) of the whole business
+  /// in a period, with structured reason + free note + register and user —
+  /// powers the "Ingresos y egresos" report.
+  Future<List<CashMovement>> loadCashMovements({
+    required String businessId,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final startIso = start.toUtc().toIso8601String();
+    final endIso = end.toUtc().toIso8601String();
+    const baseSelect =
+        'id, type, amount, description, created_at, '
+        'cash_register_sessions!inner(user_id, cash_registers!inner(business_id, name))';
+
+    List<dynamic> rows;
+    try {
+      rows = await _client
+          .from('cash_transactions')
+          .select('$baseSelect, reason_code, cash_transaction_reasons(label)')
+          .eq('cash_register_sessions.cash_registers.business_id', businessId)
+          .inFilter('type', ['deposit', 'withdrawal', 'expense'])
+          .gte('created_at', startIso)
+          .lt('created_at', endIso)
+          .order('created_at', ascending: false)
+          .limit(1000);
+    } on PostgrestException {
+      // Backend sin la migración del módulo pro de caja.
+      rows = await _client
+          .from('cash_transactions')
+          .select(baseSelect)
+          .eq('cash_register_sessions.cash_registers.business_id', businessId)
+          .inFilter('type', ['deposit', 'withdrawal', 'expense'])
+          .gte('created_at', startIso)
+          .lt('created_at', endIso)
+          .order('created_at', ascending: false)
+          .limit(1000);
+    }
+
+    final data = List<Map<String, dynamic>>.from(rows);
+    final userIds = <String>[
+      for (final row in data)
+        if (row['cash_register_sessions'] is Map<String, dynamic> &&
+            row['cash_register_sessions']['user_id'] != null)
+          row['cash_register_sessions']['user_id'].toString(),
+    ];
+    final namesById = await _profilesByUserId(userIds);
+
+    return data.map((row) {
+      final session = row['cash_register_sessions'];
+      final register =
+          session is Map<String, dynamic> ? session['cash_registers'] : null;
+      final userId = session is Map<String, dynamic>
+          ? session['user_id']?.toString()
+          : null;
+      final reason = row['cash_transaction_reasons'];
+      final reasonLabel = reason is Map<String, dynamic>
+          ? reason['label']?.toString()
+          : null;
+      return CashMovement(
+        id: row['id']?.toString() ?? '',
+        type: row['type']?.toString() ?? '',
+        amount: _toDouble(row['amount']),
+        description: (row['description']?.toString().trim().isNotEmpty ?? false)
+            ? row['description'].toString().trim()
+            : null,
+        reasonLabel: reasonLabel ?? row['reason_code']?.toString(),
+        createdAt: DateTime.tryParse(row['created_at']?.toString() ?? ''),
+        registerName:
+            register is Map<String, dynamic> ? register['name']?.toString() : null,
+        userName: userId != null ? namesById[userId] : null,
+      );
+    }).toList(growable: false);
+  }
+
   Future<List<CashTransactionEntry>> _loadTransactions(String sessionId) async {
     if (sessionId.isEmpty) return const [];
     List<dynamic> rows;

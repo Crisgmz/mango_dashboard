@@ -4378,30 +4378,34 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                       );
                     },
                   ),
-                  _DrawerTile(
-                    icon: Icons.restaurant_menu_rounded,
-                    accent: MangoThemeFactory.info,
-                    label: 'Productos',
-                    subtitle: 'Crear, editar y eliminar productos',
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const ProductsAdminView()),
-                      );
-                    },
-                  ),
-                  _DrawerTile(
-                    icon: Icons.local_offer_rounded,
-                    accent: MangoThemeFactory.success,
-                    label: 'Ofertas',
-                    subtitle: 'Crear, editar y activar promociones',
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const OffersAdminView()),
-                      );
-                    },
-                  ),
+                  // Administración de catálogo: la RLS de escritura del
+                  // backend excluye a manager, así que ni se le ofrece.
+                  if (isOwnerOrAdminRole(widget.profile.normalizedRole)) ...[
+                    _DrawerTile(
+                      icon: Icons.restaurant_menu_rounded,
+                      accent: MangoThemeFactory.info,
+                      label: 'Productos',
+                      subtitle: 'Crear, editar y eliminar productos',
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const ProductsAdminView()),
+                        );
+                      },
+                    ),
+                    _DrawerTile(
+                      icon: Icons.local_offer_rounded,
+                      accent: MangoThemeFactory.success,
+                      label: 'Ofertas',
+                      subtitle: 'Crear, editar y activar promociones',
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const OffersAdminView()),
+                        );
+                      },
+                    ),
+                  ],
                   _DrawerTile(
                     icon: Icons.assessment_rounded,
                     accent: MangoThemeFactory.warning,
@@ -4414,18 +4418,19 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                       );
                     },
                   ),
-                  _DrawerTile(
-                    icon: Icons.credit_card_rounded,
-                    accent: MangoThemeFactory.mango,
-                    label: 'Suscripción',
-                    subtitle: 'Plan, tarjeta e historial de cobros',
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const BillingView()),
-                      );
-                    },
-                  ),
+                  if (isOwnerOrAdminRole(widget.profile.normalizedRole))
+                    _DrawerTile(
+                      icon: Icons.credit_card_rounded,
+                      accent: MangoThemeFactory.mango,
+                      label: 'Suscripción',
+                      subtitle: 'Plan, tarjeta e historial de cobros',
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const BillingView()),
+                        );
+                      },
+                    ),
                   _DrawerTile(
                     icon: Icons.switch_account_rounded,
                     accent: MangoThemeFactory.success,

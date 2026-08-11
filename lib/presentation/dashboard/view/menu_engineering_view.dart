@@ -5,6 +5,7 @@ import '../../../app/di/providers.dart';
 import '../../../core/date/date_range_utils.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../data/dashboard/business_day_service.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
@@ -37,6 +38,7 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
   late String _periodLabel;
   DetailPeriod _period = DetailPeriod.initial;
   DateTimeRange? _customRange;
+  int _cutoffHour = BusinessDayService.cachedCutoffHour;
 
   MenuEngineeringReport _loaded = const MenuEngineeringReport();
 
@@ -73,7 +75,7 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
       });
       return;
     }
-    final range = rangeForDetailPeriod(period, DateTime.now());
+    final range = rangeForDetailPeriod(period, DateTime.now(), cutoffHour: _cutoffHour);
     if (range == null) return;
     setState(() {
       _period = period;
@@ -82,6 +84,21 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
       _periodLabel = labelForDetailPeriod(period);
       _future = _load();
     });
+  }
+
+  /// Cambia la hora de corte usada por este reporte y recalcula el período.
+  void _applyCutoff(int hour) {
+    setState(() => _cutoffHour = hour);
+    if (_period == DetailPeriod.custom && _customRange != null) {
+      final range = operativeRangeForPickedDays(_customRange!, cutoffHour: hour);
+      setState(() {
+        _start = range.start;
+        _end = range.end;
+        _future = _load();
+      });
+      return;
+    }
+    _applyPeriod(_period);
   }
 
   Future<void> _pickCustomRange() async {
@@ -101,9 +118,10 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
       initialDateRange: seed,
     );
     if (picked == null || !mounted) return;
-    final start = DateTime(picked.start.year, picked.start.month, picked.start.day);
-    final end = DateTime(picked.end.year, picked.end.month, picked.end.day)
-        .add(const Duration(days: 1));
+    final pickedRange =
+        operativeRangeForPickedDays(picked, cutoffHour: _cutoffHour);
+    final start = pickedRange.start;
+    final end = pickedRange.end;
     setState(() {
       _period = DetailPeriod.custom;
       _customRange = picked;
@@ -181,6 +199,8 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
                 initialLabel: widget.periodLabel,
                 onSelected: _applyPeriod,
                 onPickCustom: _pickCustomRange,
+                cutoffHour: _cutoffHour,
+                onCutoffChanged: _applyCutoff,
               ),
               SizedBox(height: dpi.space(10)),
               Expanded(

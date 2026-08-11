@@ -420,6 +420,8 @@ class AuditSummary {
     this.cancelledPaymentsCount = 0,
     this.discountsAmount = 0,
     this.discountsAppliedCount = 0,
+    this.cancelledOrdersAmount = 0,
+    this.cancelledOrdersCount = 0,
   });
 
   final double voidedAmount;
@@ -429,10 +431,17 @@ class AuditSummary {
   final double discountsAmount;
   final int discountsAppliedCount;
 
+  /// Whole orders voided in the period (mesa liberada / cuenta anulada).
+  /// NOT added to [totalLoss]: an annulled order's items may already be
+  /// counted in [voidedAmount], so adding both would double-count.
+  final double cancelledOrdersAmount;
+  final int cancelledOrdersCount;
+
   bool get isEmpty =>
       voidedItemsCount == 0 &&
       cancelledPaymentsCount == 0 &&
-      discountsAppliedCount == 0;
+      discountsAppliedCount == 0 &&
+      cancelledOrdersCount == 0;
 
   double get totalLoss => voidedAmount + cancelledAmount + discountsAmount;
 }
@@ -444,11 +453,16 @@ class AuditDetail {
     this.voidedItems = const [],
     this.cancelledPayments = const [],
     this.discountedOrders = const [],
+    this.cancelledOrders = const [],
   });
 
   final List<VoidedItem> voidedItems;
   final List<CancelledPayment> cancelledPayments;
   final List<DiscountedOrder> discountedOrders;
+
+  /// Mesas liberadas / cuentas anuladas (orders.status_ext = void) with their
+  /// `[ANULACION]` reasons.
+  final List<CancelledOrderAudit> cancelledOrders;
 }
 
 @immutable
@@ -462,6 +476,7 @@ class VoidedItem {
     this.tableLabel,
     this.customerName,
     this.waiterName,
+    this.note,
   });
 
   final String orderItemId;
@@ -472,6 +487,37 @@ class VoidedItem {
   final String? tableLabel;
   final String? customerName;
   final String? waiterName;
+
+  /// Line note (`order_items.notes`) if the item had one.
+  final String? note;
+}
+
+/// A whole order voided in the period — the table was released or the account
+/// annulled. Carries the `[ANULACION]` audit notes (who/when/why) when the POS
+/// recorded them; empty notes mean an automatic/system release.
+@immutable
+class CancelledOrderAudit {
+  const CancelledOrderAudit({
+    required this.orderId,
+    required this.amount,
+    required this.createdAt,
+    this.closedAt,
+    this.tableLabel,
+    this.customerName,
+    this.waiterName,
+    this.notes = const [],
+  });
+
+  final String orderId;
+
+  /// What the account was worth when it was voided (sum of its lines).
+  final double amount;
+  final DateTime createdAt;
+  final DateTime? closedAt;
+  final String? tableLabel;
+  final String? customerName;
+  final String? waiterName;
+  final List<CancellationNote> notes;
 }
 
 @immutable
@@ -617,8 +663,23 @@ class LiveOrderItem {
 
   /// `[ANULACION]` audit lines parsed out of [sessionNote] — who voided the
   /// order, when, and why. Empty for system releases (no reason is recorded).
-  List<CancellationNote> get cancellationNotes {
-    final note = sessionNote;
+  List<CancellationNote> get cancellationNotes =>
+      CancellationNote.parseAll(sessionNote);
+}
+
+/// One `[ANULACION]` audit line from `table_sessions.note`: who voided the
+/// order, when, and the reason the cashier typed.
+@immutable
+class CancellationNote {
+  const CancellationNote({this.at, required this.author, required this.reason});
+
+  final DateTime? at;
+  final String author;
+  final String reason;
+
+  /// Extracts the `[ANULACION][iso-ts] usuario: motivo` lines the POS appends
+  /// to `table_sessions.note`.
+  static List<CancellationNote> parseAll(String? note) {
     if (note == null || note.trim().isEmpty) return const [];
     final pattern = RegExp(r'^\[ANULACION\]\[([^\]]*)\]\s*(.*)$');
     final result = <CancellationNote>[];
@@ -635,17 +696,6 @@ class LiveOrderItem {
     }
     return result;
   }
-}
-
-/// One `[ANULACION]` audit line from `table_sessions.note`: who voided the
-/// order, when, and the reason the cashier typed.
-@immutable
-class CancellationNote {
-  const CancellationNote({this.at, required this.author, required this.reason});
-
-  final DateTime? at;
-  final String author;
-  final String reason;
 }
 
 /// One division (check) of a split account.
@@ -929,6 +979,54 @@ class CashTransactionEntry {
 
   final DateTime? createdAt;
   final String? relatedOrderId;
+}
+
+/// One manual cash movement (deposit / withdrawal / expense) for the
+/// "Ingresos y egresos" report: amount + structured reason + free note, with
+/// the register and user that recorded it.
+@immutable
+class CashMovement {
+  const CashMovement({
+    required this.id,
+    required this.type,
+    required this.amount,
+    this.description,
+    this.reasonLabel,
+    this.createdAt,
+    this.registerName,
+    this.userName,
+  });
+
+  final String id;
+
+  /// `deposit | withdrawal | expense`.
+  final String type;
+  final double amount;
+
+  /// Free-text note the cashier typed (optional).
+  final String? description;
+
+  /// Structured reason from `cash_transaction_reasons` (fallback reason_code).
+  final String? reasonLabel;
+
+  final DateTime? createdAt;
+  final String? registerName;
+  final String? userName;
+
+  bool get isIncome => type == 'deposit';
+
+  String get typeLabel {
+    switch (type) {
+      case 'deposit':
+        return 'Depósito';
+      case 'withdrawal':
+        return 'Retiro';
+      case 'expense':
+        return 'Gasto';
+      default:
+        return type;
+    }
+  }
 }
 
 /// Fully reconciled view of a cash closing — the dashboard equivalent of the

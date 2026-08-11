@@ -10,6 +10,7 @@ import 'customer_analytics_view.dart';
 import 'daily_sales_report_view.dart';
 import 'kpi_detail_views.dart';
 import 'fiscal_view.dart';
+import 'income_expense_report_view.dart';
 import 'menu_engineering_view.dart';
 import 'modifiers_breakdown_view.dart';
 import 'operations_view.dart';
@@ -202,10 +203,31 @@ class ReportsHubView extends ConsumerWidget {
                 ),
                 SizedBox(height: dpi.space(10)),
                 _ReportTile(
+                  icon: Icons.swap_vert_rounded,
+                  accent: MangoThemeFactory.success,
+                  title: 'Ingresos y egresos',
+                  subtitle: 'Depósitos, retiros y gastos de caja con sus notas',
+                  onTap: () {
+                    final start = summary.periodStart ??
+                        DateTime.now().subtract(const Duration(days: 30));
+                    final end = summary.periodEnd ?? DateTime.now();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => IncomeExpenseReportView(
+                          start: start,
+                          end: end,
+                          periodLabel: periodLabelFor(summary.filter),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                SizedBox(height: dpi.space(10)),
+                _ReportTile(
                   icon: Icons.gavel_rounded,
                   accent: MangoThemeFactory.danger,
                   title: 'Auditoría',
-                  subtitle: 'Anulaciones, pagos cancelados y descuentos',
+                  subtitle: 'Mesas anuladas, devoluciones, pagos cancelados y descuentos',
                   onTap: () {
                     final start = summary.periodStart ??
                         DateTime.now().subtract(const Duration(days: 30));

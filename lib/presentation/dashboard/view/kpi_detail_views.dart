@@ -6,9 +6,11 @@ import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/date/date_range_utils.dart';
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../data/dashboard/business_day_service.dart';
 import '../../../data/cash_register/reporte_z_pdf_builder.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
+import '../../../core/auth/role_mapper.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../viewmodel/cash_register_view_model.dart';
 import '../../theme/theme_data_factory.dart';
@@ -31,6 +33,7 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
   late String _periodLabel;
   DetailPeriod _period = DetailPeriod.initial;
   DateTimeRange? _customRange;
+  int _cutoffHour = BusinessDayService.cachedCutoffHour;
   String _query = '';
 
   late List<TicketItem> _tickets;
@@ -90,7 +93,7 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
       _reload();
       return;
     }
-    final range = rangeForDetailPeriod(period, DateTime.now());
+    final range = rangeForDetailPeriod(period, DateTime.now(), cutoffHour: _cutoffHour);
     if (range == null) return;
     setState(() {
       _period = period;
@@ -99,6 +102,21 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
       _periodLabel = labelForDetailPeriod(period);
     });
     _reload();
+  }
+
+  /// Cambia la hora de corte usada por este reporte y recalcula el período.
+  void _applyCutoff(int hour) {
+    setState(() => _cutoffHour = hour);
+    if (_period == DetailPeriod.custom && _customRange != null) {
+      final range = operativeRangeForPickedDays(_customRange!, cutoffHour: hour);
+      setState(() {
+        _start = range.start;
+        _end = range.end;
+      });
+      _reload();
+      return;
+    }
+    _applyPeriod(_period);
   }
 
   Future<void> _pickCustomRange() async {
@@ -120,9 +138,10 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
       initialDateRange: seed,
     );
     if (picked == null || !mounted) return;
-    final start = DateTime(picked.start.year, picked.start.month, picked.start.day);
-    final end = DateTime(picked.end.year, picked.end.month, picked.end.day)
-        .add(const Duration(days: 1));
+    final pickedRange =
+        operativeRangeForPickedDays(picked, cutoffHour: _cutoffHour);
+    final start = pickedRange.start;
+    final end = pickedRange.end;
     setState(() {
       _period = DetailPeriod.custom;
       _customRange = picked;
@@ -208,6 +227,8 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
             initialLabel: periodLabelFor(widget.summary.filter),
             onSelected: _applyPeriod,
             onPickCustom: _pickCustomRange,
+            cutoffHour: _cutoffHour,
+            onCutoffChanged: _applyCutoff,
             accent: MangoThemeFactory.success,
           ),
           SizedBox(height: dpi.space(10)),
@@ -1335,24 +1356,28 @@ class _OpenRegisterDetailSheetState
             _row(context, 'Esperado transferencia', s.expectedTransfer),
             _row(context, 'Total esperado', s.expectedTotal, bold: true),
             SizedBox(height: dpi.space(20)),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _closing ? null : _confirmForceClose,
-                style: FilledButton.styleFrom(
-                  backgroundColor: MangoThemeFactory.warning,
-                  padding: EdgeInsets.symmetric(vertical: dpi.space(14)),
+            // Forzar cierre: acción sensible, solo owner/admin (manager ve la
+            // caja pero no puede cerrarla a la fuerza).
+            if (isOwnerOrAdminRole(
+                ref.read(authGateViewModelProvider).profile?.normalizedRole))
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _closing ? null : _confirmForceClose,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: MangoThemeFactory.warning,
+                    padding: EdgeInsets.symmetric(vertical: dpi.space(14)),
+                  ),
+                  icon: _closing
+                      ? SizedBox(
+                          width: dpi.icon(16),
+                          height: dpi.icon(16),
+                          child: const CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.lock_clock_rounded),
+                  label: Text(_closing ? 'Cerrando…' : 'Forzar cierre de caja'),
                 ),
-                icon: _closing
-                    ? SizedBox(
-                        width: dpi.icon(16),
-                        height: dpi.icon(16),
-                        child: const CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.lock_clock_rounded),
-                label: Text(_closing ? 'Cerrando…' : 'Forzar cierre de caja'),
               ),
-            ),
           ],
         ),
       ),
@@ -2429,6 +2454,7 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
   late String _periodLabel;
   DetailPeriod _period = DetailPeriod.initial;
   DateTimeRange? _customRange;
+  int _cutoffHour = BusinessDayService.cachedCutoffHour;
   late List<TopProduct> _products;
   bool _loading = false;
   String? _error;
@@ -2482,7 +2508,7 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
       _reload();
       return;
     }
-    final range = rangeForDetailPeriod(period, DateTime.now());
+    final range = rangeForDetailPeriod(period, DateTime.now(), cutoffHour: _cutoffHour);
     if (range == null) return;
     setState(() {
       _period = period;
@@ -2491,6 +2517,21 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
       _periodLabel = labelForDetailPeriod(period);
     });
     _reload();
+  }
+
+  /// Cambia la hora de corte usada por este reporte y recalcula el período.
+  void _applyCutoff(int hour) {
+    setState(() => _cutoffHour = hour);
+    if (_period == DetailPeriod.custom && _customRange != null) {
+      final range = operativeRangeForPickedDays(_customRange!, cutoffHour: hour);
+      setState(() {
+        _start = range.start;
+        _end = range.end;
+      });
+      _reload();
+      return;
+    }
+    _applyPeriod(_period);
   }
 
   Future<void> _pickCustomRange() async {
@@ -2512,9 +2553,10 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
       initialDateRange: seed,
     );
     if (picked == null || !mounted) return;
-    final start = DateTime(picked.start.year, picked.start.month, picked.start.day);
-    final end = DateTime(picked.end.year, picked.end.month, picked.end.day)
-        .add(const Duration(days: 1));
+    final pickedRange =
+        operativeRangeForPickedDays(picked, cutoffHour: _cutoffHour);
+    final start = pickedRange.start;
+    final end = pickedRange.end;
     setState(() {
       _period = DetailPeriod.custom;
       _customRange = picked;
@@ -2611,6 +2653,8 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
             initialLabel: periodLabelFor(widget.summary.filter),
             onSelected: _applyPeriod,
             onPickCustom: _pickCustomRange,
+            cutoffHour: _cutoffHour,
+            onCutoffChanged: _applyCutoff,
             accent: MangoThemeFactory.mango,
           ),
           SizedBox(height: dpi.space(10)),

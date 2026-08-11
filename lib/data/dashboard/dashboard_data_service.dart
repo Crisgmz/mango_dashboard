@@ -927,6 +927,7 @@ class DashboardDataService {
     required String businessId,
     required DateTime start,
     required DateTime end,
+    int cutoffHour = 0,
   }) async {
     final startIso = start.toUtc().toIso8601String();
     final endIso = end.toUtc().toIso8601String();
@@ -975,6 +976,7 @@ class DashboardDataService {
     return aggregateDailySales(
       orderRows: results[0],
       payRows: results[1],
+      cutoffHour: cutoffHour,
       taxRows: await _taxRowsWithItemsFallback(
         taxRows: results[2],
         businessId: businessId,
@@ -1366,7 +1368,7 @@ class DashboardDataService {
       _client
           .from('order_items')
           .select(
-              'id, product_name, qty, quantity, subtotal, orders!inner(id, created_at, table_sessions!inner(id, business_id, customer_name, waiter_user_id, dining_tables(label, code)))')
+              'id, product_name, qty, quantity, subtotal, notes, orders!inner(id, created_at, table_sessions!inner(id, business_id, customer_name, waiter_user_id, dining_tables(label, code)))')
           .eq('status', 'void')
           .eq('orders.table_sessions.business_id', businessId)
           .gte('orders.created_at', periodStart)
@@ -1391,11 +1393,23 @@ class DashboardDataService {
           .gt('discounts', 0)
           .gte('created_at', periodStart)
           .lt('created_at', periodEnd),
+
+      // Whole orders voided in the period (mesa liberada / cuenta anulada),
+      // by closed_at = the moment of the void. The [ANULACION] reason lives in
+      // table_sessions.note.
+      _client
+          .from('orders')
+          .select(
+              'id, total, created_at, closed_at, order_items(subtotal, tax, discounts), table_sessions!inner(id, business_id, customer_name, note, waiter_user_id, dining_tables(label, code))')
+          .eq('table_sessions.business_id', businessId)
+          .eq('status_ext', 'void')
+          .or('closed_at.is.null,and(closed_at.gte.$periodStart,closed_at.lt.$periodEnd)'),
     ]);
 
     final voidRows = List<Map<String, dynamic>>.from(results[0]);
     final cancelRows = List<Map<String, dynamic>>.from(results[1]);
     final discountRows = List<Map<String, dynamic>>.from(results[2]);
+    final cancelledOrderRows = List<Map<String, dynamic>>.from(results[3]);
 
     // Collect all user IDs we need to resolve names for.
     final userIds = <String>{};
@@ -1413,6 +1427,13 @@ class DashboardDataService {
       if (id != null && id.isNotEmpty) userIds.add(id);
     }
     for (final row in discountRows) {
+      final session = row['table_sessions'];
+      if (session is Map<String, dynamic>) {
+        final id = session['waiter_user_id']?.toString();
+        if (id != null && id.isNotEmpty) userIds.add(id);
+      }
+    }
+    for (final row in cancelledOrderRows) {
       final session = row['table_sessions'];
       if (session is Map<String, dynamic>) {
         final id = session['waiter_user_id']?.toString();
@@ -1439,6 +1460,9 @@ class DashboardDataService {
         productName: row['product_name']?.toString() ?? 'Producto',
         amount: amount,
         quantity: _toDouble(row['qty'] ?? row['quantity']),
+        note: (row['notes']?.toString().trim().isNotEmpty ?? false)
+            ? row['notes'].toString().trim()
+            : null,
         createdAt: order is Map<String, dynamic>
             ? (DateTime.tryParse(order['created_at']?.toString() ?? '') ?? DateTime.now())
             : DateTime.now(),
@@ -1505,6 +1529,50 @@ class DashboardDataService {
     }
     discountedOrders.sort((a, b) => b.discount.compareTo(a.discount));
 
+    // Build CancelledOrderAudit list (mesas liberadas / cuentas anuladas) with
+    // their [ANULACION] notes.
+    double cancelledOrdersAmount = 0;
+    final cancelledOrders = <CancelledOrderAudit>[];
+    for (final row in cancelledOrderRows) {
+      final session = row['table_sessions'];
+      final tableData =
+          session is Map<String, dynamic> ? session['dining_tables'] : null;
+      // Worth of the account when voided: every line, whatever its status.
+      var amount = 0.0;
+      final items = row['order_items'];
+      if (items is List) {
+        for (final it in items) {
+          if (it is! Map) continue;
+          amount += _toDouble(it['subtotal']) +
+              _toDouble(it['tax']) -
+              _toDouble(it['discounts']);
+        }
+      }
+      if (amount <= 0) amount = _toDouble(row['total']);
+      cancelledOrdersAmount += amount;
+      final waiterId = session is Map<String, dynamic>
+          ? session['waiter_user_id']?.toString()
+          : null;
+      cancelledOrders.add(CancelledOrderAudit(
+        orderId: row['id']?.toString() ?? '',
+        amount: amount,
+        createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '') ??
+            DateTime.now(),
+        closedAt: DateTime.tryParse(row['closed_at']?.toString() ?? ''),
+        tableLabel: tableData is Map<String, dynamic>
+            ? (tableData['label']?.toString() ?? tableData['code']?.toString())
+            : null,
+        customerName: session is Map<String, dynamic>
+            ? session['customer_name']?.toString()
+            : null,
+        waiterName: waiterId != null ? namesById[waiterId] : null,
+        notes: CancellationNote.parseAll(
+            session is Map<String, dynamic> ? session['note']?.toString() : null),
+      ));
+    }
+    cancelledOrders.sort((a, b) =>
+        (b.closedAt ?? b.createdAt).compareTo(a.closedAt ?? a.createdAt));
+
     final summary = AuditSummary(
       voidedAmount: voidedAmount,
       voidedItemsCount: voidedItems.length,
@@ -1512,6 +1580,8 @@ class DashboardDataService {
       cancelledPaymentsCount: cancelledPayments.length,
       discountsAmount: discountsAmount,
       discountsAppliedCount: discountedOrders.length,
+      cancelledOrdersAmount: cancelledOrdersAmount,
+      cancelledOrdersCount: cancelledOrders.length,
     );
 
     return (
@@ -1520,6 +1590,7 @@ class DashboardDataService {
         voidedItems: voidedItems,
         cancelledPayments: cancelledPayments,
         discountedOrders: discountedOrders,
+        cancelledOrders: cancelledOrders,
       ),
     );
   }

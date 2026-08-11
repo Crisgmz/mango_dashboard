@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../data/dashboard/business_day_service.dart';
 import '../../theme/theme_data_factory.dart';
 
 /// Date range presets used by the in-screen filter bar on detail views
@@ -9,30 +10,50 @@ import '../../theme/theme_data_factory.dart';
 /// inherited from the dashboard.
 enum DetailPeriod { initial, today, yesterday, week, month, custom }
 
-/// Resolves the [DateTimeRange] for a given preset, anchored to `now`.
+/// Resolves the [DateTimeRange] for a given preset, anchored to `now` and to
+/// the business-day cutoff hour (default 5 AM): "Hoy" runs from today at the
+/// cutoff to tomorrow at the cutoff, so a shift that crosses midnight still
+/// counts as one operative day — same rule as the dashboard's Hoy/Ayer.
 /// `initial` returns null because that range comes from the caller.
-DateTimeRange? rangeForDetailPeriod(DetailPeriod period, DateTime now) {
-  final today = DateTime(now.year, now.month, now.day);
+DateTimeRange? rangeForDetailPeriod(DetailPeriod period, DateTime now,
+    {int? cutoffHour}) {
+  final cutoff = cutoffHour ?? BusinessDayService.cachedCutoffHour;
+  // Inicio del día OPERATIVO actual: hoy a la hora de corte, o ayer a esa hora
+  // si todavía no hemos llegado al corte (ej. 2 AM con corte a las 5).
+  var day = DateTime(now.year, now.month, now.day, cutoff);
+  if (now.isBefore(day)) {
+    day = DateTime(now.year, now.month, now.day - 1, cutoff);
+  }
+  DateTime shift(DateTime base, int days) =>
+      DateTime(base.year, base.month, base.day + days, cutoff);
   switch (period) {
     case DetailPeriod.today:
-      return DateTimeRange(start: today, end: today.add(const Duration(days: 1)));
+      return DateTimeRange(start: day, end: shift(day, 1));
     case DetailPeriod.yesterday:
-      final start = today.subtract(const Duration(days: 1));
-      return DateTimeRange(start: start, end: today);
+      return DateTimeRange(start: shift(day, -1), end: day);
     case DetailPeriod.week:
-      return DateTimeRange(
-        start: today.subtract(const Duration(days: 7)),
-        end: today.add(const Duration(days: 1)),
-      );
+      return DateTimeRange(start: shift(day, -7), end: shift(day, 1));
     case DetailPeriod.month:
       return DateTimeRange(
-        start: DateTime(now.year, now.month, 1),
-        end: DateTime(now.year, now.month + 1, 1),
+        start: DateTime(day.year, day.month, 1, cutoff),
+        end: DateTime(day.year, day.month + 1, 1, cutoff),
       );
     case DetailPeriod.initial:
     case DetailPeriod.custom:
       return null;
   }
+}
+
+/// Convierte los días elegidos en `showDateRangePicker` a un rango de días
+/// OPERATIVOS: del día inicial a la hora de corte hasta el día siguiente al
+/// final a la hora de corte (fin exclusivo).
+DateTimeRange operativeRangeForPickedDays(DateTimeRange picked,
+    {int? cutoffHour}) {
+  final cutoff = cutoffHour ?? BusinessDayService.cachedCutoffHour;
+  return DateTimeRange(
+    start: DateTime(picked.start.year, picked.start.month, picked.start.day, cutoff),
+    end: DateTime(picked.end.year, picked.end.month, picked.end.day + 1, cutoff),
+  );
 }
 
 String labelForDetailPeriod(DetailPeriod period, {DateTimeRange? customRange, String? initialLabel}) {
@@ -67,6 +88,8 @@ class PeriodFilterBar extends StatelessWidget {
     this.accent,
     this.initialLabel,
     this.customRange,
+    this.cutoffHour,
+    this.onCutoffChanged,
   });
 
   final DetailPeriod selected;
@@ -75,6 +98,22 @@ class PeriodFilterBar extends StatelessWidget {
   final Color? accent;
   final String? initialLabel;
   final DateTimeRange? customRange;
+
+  /// Hora de corte del día operativo usada por los presets. Si se pasa junto
+  /// con [onCutoffChanged], se muestra un chip "Corte HH:00" que permite
+  /// cambiarla al momento de generar el reporte.
+  final int? cutoffHour;
+  final ValueChanged<int>? onCutoffChanged;
+
+  Future<void> _pickCutoff(BuildContext context) async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: cutoffHour ?? 0, minute: 0),
+      helpText: 'Hora de corte del día operativo',
+    );
+    if (picked == null) return;
+    onCutoffChanged?.call(picked.hour);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -130,6 +169,16 @@ class PeriodFilterBar extends StatelessWidget {
             icon: Icons.calendar_today_rounded,
             onTap: onPickCustom,
           ),
+          if (cutoffHour != null && onCutoffChanged != null) ...[
+            SizedBox(width: dpi.space(6)),
+            _Chip(
+              label: 'Corte ${cutoffHour.toString().padLeft(2, '0')}:00',
+              selected: false,
+              accent: color,
+              icon: Icons.schedule_rounded,
+              onTap: () => _pickCutoff(context),
+            ),
+          ],
         ],
       ),
     );

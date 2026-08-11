@@ -13,8 +13,11 @@ DailySalesReport aggregateDailySales({
   required List<Map<String, dynamic>> orderRows,
   required List<Map<String, dynamic>> payRows,
   required List<Map<String, dynamic>> taxRows,
+  int cutoffHour = 0,
 }) {
-  // ── Map each paid order to its local day + per-day count ──
+  // ── Map each paid order to its local OPERATIVE day + per-day count ──
+  // The business day starts at [cutoffHour] (e.g. 5 AM): a sale at 2 AM
+  // belongs to the previous day's bucket, matching the dashboard's Hoy/Ayer.
   final orderDay = <String, DateTime>{};
   final byDay = <DateTime, _DayAgg>{};
   var orderCount = 0;
@@ -23,7 +26,7 @@ DailySalesReport aggregateDailySales({
     final id = row['id']?.toString();
     final closedAt = DateTime.tryParse(row['closed_at']?.toString() ?? '');
     if (id == null || id.isEmpty || closedAt == null) continue;
-    final local = closedAt.toLocal();
+    final local = closedAt.toLocal().subtract(Duration(hours: cutoffHour));
     final day = DateTime(local.year, local.month, local.day);
     orderDay[id] = day;
     byDay.putIfAbsent(day, _DayAgg.new).count += 1;

@@ -5,6 +5,7 @@ import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/inventory/inventory_models.dart';
 import '../../theme/theme_data_factory.dart';
+import '../../purchasing/view/purchase_orders_view.dart';
 import '../viewmodel/inventory_view_model.dart';
 import 'shopping_list_view.dart';
 
@@ -63,6 +64,15 @@ class _InventoryViewState extends ConsumerState<InventoryView> {
         title: const Text('Inventario'),
         centerTitle: false,
         actions: [
+          // Entrada al módulo de compras (PRD 6.1): órdenes de compra y
+          // suplidores.
+          IconButton(
+            tooltip: 'Compras',
+            icon: const Icon(Icons.local_shipping_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const PurchaseOrdersView()),
+            ),
+          ),
           if (lowCount > 0)
             Padding(
               padding: EdgeInsets.only(right: dpi.space(8)),

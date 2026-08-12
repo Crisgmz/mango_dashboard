@@ -37,7 +37,7 @@ import '../widgets/commands_card.dart';
 import '../widgets/customers_card.dart';
 import '../widgets/modifiers_card.dart';
 import '../widgets/waiter_performance_card.dart';
-import '../../inventory/view/inventory_view.dart';
+import '../../inventory/view/inventory_hub_view.dart';
 import '../../billing/view/billing_view.dart';
 import '../../notifications/view/notification_settings_view.dart';
 import '../../catalog/view/products_admin_view.dart';
@@ -278,7 +278,10 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
         onRefresh: () => _refreshAll(profile),
       ),
       SalesView(profile: profile, dataState: salesDataState, onRefresh: () => _refreshAll(profile)),
-      ItemsView(dataState: homeDataState, onRefresh: () => _refreshAll(profile)),
+      InventoryHubView(
+        catalog: ItemsView(
+            dataState: homeDataState, onRefresh: () => _refreshAll(profile)),
+      ),
       OrdersView(dataState: homeDataState, onRefresh: () => _refreshAll(profile)),
       SettingsView(themeMode: themeMode, profile: profile, cashState: cashRegisterState, onRefresh: () => _refreshAll(profile)),
     ];
@@ -287,7 +290,11 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
       // Refreshes happen silently in the background — values just change in
       // place. The freshness badge in HomeView already shows "Actualizado
       // hace Xm" when relevant, no need for a top loader.
-      drawer: MainDrawer(profile: profile, cashState: cashRegisterState),
+      drawer: MainDrawer(
+        profile: profile,
+        cashState: cashRegisterState,
+        onOpenInventory: () => setState(() => _currentIndex = 2),
+      ),
       body: SafeArea(
         child: IndexedStack(index: _currentIndex, children: pages),
       ),
@@ -297,7 +304,7 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.space_dashboard_outlined), activeIcon: Icon(Icons.space_dashboard_rounded), label: 'Inicio'),
           BottomNavigationBarItem(icon: Icon(Icons.insights_outlined), activeIcon: Icon(Icons.insights_rounded), label: 'Ventas'),
-          BottomNavigationBarItem(icon: Icon(Icons.fastfood_outlined), activeIcon: Icon(Icons.fastfood_rounded), label: 'Artículos'),
+          BottomNavigationBarItem(icon: Icon(Icons.inventory_2_outlined), activeIcon: Icon(Icons.inventory_2_rounded), label: 'Inventario'),
           BottomNavigationBarItem(icon: Icon(Icons.shopping_bag_outlined), activeIcon: Icon(Icons.shopping_bag_rounded), label: 'Órdenes'),
           BottomNavigationBarItem(icon: Icon(Icons.tune_outlined), activeIcon: Icon(Icons.tune_rounded), label: 'Ajustes'),
         ],
@@ -4193,10 +4200,18 @@ class BusinessSelectorCard extends ConsumerWidget {
 }
 
 class MainDrawer extends ConsumerStatefulWidget {
-  const MainDrawer({super.key, required this.profile, required this.cashState});
+  const MainDrawer({
+    super.key,
+    required this.profile,
+    required this.cashState,
+    this.onOpenInventory,
+  });
 
   final AdminAccessProfile profile;
   final CashRegisterState cashState;
+
+  /// Cambia a la pestaña Inventario del bottom nav (el hub).
+  final VoidCallback? onOpenInventory;
 
   @override
   ConsumerState<MainDrawer> createState() => _MainDrawerState();
@@ -4370,12 +4385,10 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                     icon: Icons.inventory_2_rounded,
                     accent: MangoThemeFactory.mango,
                     label: 'Inventario',
-                    subtitle: 'Stock en tiempo real · lista de compras',
+                    subtitle: 'Stock · catálogo · compras',
                     onTap: () {
                       Navigator.of(context).pop();
-                      Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const InventoryView()),
-                      );
+                      widget.onOpenInventory?.call();
                     },
                   ),
                   // Administración de catálogo: la RLS de escritura del

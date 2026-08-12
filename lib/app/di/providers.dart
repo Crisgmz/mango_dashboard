@@ -14,6 +14,7 @@ import '../../data/dashboard/sales_layout_service.dart';
 import '../../data/inventory/inventory_data_service.dart';
 import '../../data/notifications/notification_preferences_service.dart';
 import '../../data/notifications/notification_service.dart';
+import '../../data/purchasing/purchasing_data_service.dart';
 
 final supabaseClientProvider = Provider<SupabaseClient>((ref) {
   return Supabase.instance.client;
@@ -57,6 +58,10 @@ final billingDataServiceProvider = Provider<BillingDataService>((ref) {
 
 final catalogAdminServiceProvider = Provider<CatalogAdminService>((ref) {
   return CatalogAdminService(ref.read(supabaseClientProvider));
+});
+
+final purchasingDataServiceProvider = Provider<PurchasingDataService>((ref) {
+  return PurchasingDataService(ref.read(supabaseClientProvider));
 });
 
 final savedAccountsServiceProvider = Provider<SavedAccountsService>((ref) {

@@ -16,7 +16,7 @@ class MangoThemeFactory {
   static const Color whatsapp = Color(0xFF25D366);
 
   static ThemeData get lightTheme {
-    const background = Color(0xFFF6F7F9);
+    const background = Color(0xFFFBFCFE);
     const surface = Color(0xFFFFFFFF);
     const surfaceAlt = Color(0xFFF1F3F6);
     const card = Color(0xFFFFFFFF);

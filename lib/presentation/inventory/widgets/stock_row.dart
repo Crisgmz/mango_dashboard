@@ -46,10 +46,10 @@ class StockRow extends StatelessWidget {
   }
 
   /// Semáforo de cobertura: verde ≥ 1.5× reorden · ámbar 1–1.5× · rojo por
-  /// debajo. Sin punto de reorden configurado → neutro.
-  Color _coverageColor(BuildContext context) {
+  /// debajo. Sin punto de reorden configurado → sin barra.
+  Color? _coverageColor(BuildContext context) {
     final min = item.minStock;
-    if (min <= 0) return MangoThemeFactory.borderColor(context);
+    if (min <= 0) return null;
     final qty = item.totalQuantity;
     if (qty >= min * 1.5) return MangoThemeFactory.success;
     if (qty >= min) return MangoThemeFactory.warning;
@@ -85,15 +85,16 @@ class StockRow extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Borde-semáforo de cobertura (4px).
-                Container(
-                  width: 4,
-                  decoration: BoxDecoration(
-                    color: coverage,
-                    borderRadius: BorderRadius.horizontal(
-                        left: Radius.circular(dpi.radius(14))),
+                // Borde-semáforo de cobertura (4px); sin reorden no se pinta.
+                if (coverage != null)
+                  Container(
+                    width: 4,
+                    decoration: BoxDecoration(
+                      color: coverage,
+                      borderRadius: BorderRadius.horizontal(
+                          left: Radius.circular(dpi.radius(14))),
+                    ),
                   ),
-                ),
                 Expanded(
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(dpi.space(12), dpi.space(10),

@@ -61,6 +61,77 @@ class InventoryItemSnapshot {
   }
 }
 
+/// Movimiento del kardex (vista `v_inventory_movements_with_balance`):
+/// tipo, delta firmado, saldo corrido y quién lo hizo. Solo lectura.
+@immutable
+class KardexEntry {
+  const KardexEntry({
+    required this.id,
+    required this.movementType,
+    required this.quantity,
+    required this.runningBalance,
+    this.warehouseName,
+    this.reasonCode,
+    this.referenceType,
+    this.notes,
+    this.createdByName,
+    this.createdAt,
+  });
+
+  final String id;
+  final String movementType;
+
+  /// Delta firmado (+entrada / −salida).
+  final double quantity;
+
+  /// Saldo resultante en la bodega tras este movimiento.
+  final double runningBalance;
+  final String? warehouseName;
+  final String? reasonCode;
+  final String? referenceType;
+  final String? notes;
+  final String? createdByName;
+  final DateTime? createdAt;
+
+  String get typeLabel {
+    switch (movementType) {
+      case 'purchase':
+        return 'Compra';
+      case 'sale':
+        return 'Venta';
+      case 'adjustment':
+        return 'Ajuste';
+      case 'transfer_in':
+        return 'Transf. entrada';
+      case 'transfer_out':
+        return 'Transf. salida';
+      case 'waste':
+        return 'Merma';
+      case 'return':
+        return 'Devolución';
+      default:
+        return movementType;
+    }
+  }
+
+  factory KardexEntry.fromJson(Map<String, dynamic> json) {
+    double toD(dynamic v) =>
+        v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '') ?? 0;
+    return KardexEntry(
+      id: json['id']?.toString() ?? '',
+      movementType: json['movement_type']?.toString() ?? '',
+      quantity: toD(json['quantity']),
+      runningBalance: toD(json['running_balance']),
+      warehouseName: json['warehouse_name']?.toString(),
+      reasonCode: json['reason_code']?.toString(),
+      referenceType: json['reference_type']?.toString(),
+      notes: json['notes']?.toString(),
+      createdByName: json['created_by_name']?.toString(),
+      createdAt: DateTime.tryParse(json['created_at']?.toString() ?? ''),
+    );
+  }
+}
+
 @immutable
 class WarehouseStock {
   const WarehouseStock({

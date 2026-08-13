@@ -278,10 +278,7 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
         onRefresh: () => _refreshAll(profile),
       ),
       SalesView(profile: profile, dataState: salesDataState, onRefresh: () => _refreshAll(profile)),
-      InventoryHubView(
-        catalog: ItemsView(
-            dataState: homeDataState, onRefresh: () => _refreshAll(profile)),
-      ),
+      const InventoryHubView(),
       OrdersView(dataState: homeDataState, onRefresh: () => _refreshAll(profile)),
       SettingsView(themeMode: themeMode, profile: profile, cashState: cashRegisterState, onRefresh: () => _refreshAll(profile)),
     ];
@@ -290,11 +287,7 @@ class _DashboardRootViewState extends ConsumerState<DashboardRootView> with Widg
       // Refreshes happen silently in the background — values just change in
       // place. The freshness badge in HomeView already shows "Actualizado
       // hace Xm" when relevant, no need for a top loader.
-      drawer: MainDrawer(
-        profile: profile,
-        cashState: cashRegisterState,
-        onOpenInventory: () => setState(() => _currentIndex = 2),
-      ),
+      drawer: MainDrawer(profile: profile, cashState: cashRegisterState),
       body: SafeArea(
         child: IndexedStack(index: _currentIndex, children: pages),
       ),
@@ -4200,18 +4193,10 @@ class BusinessSelectorCard extends ConsumerWidget {
 }
 
 class MainDrawer extends ConsumerStatefulWidget {
-  const MainDrawer({
-    super.key,
-    required this.profile,
-    required this.cashState,
-    this.onOpenInventory,
-  });
+  const MainDrawer({super.key, required this.profile, required this.cashState});
 
   final AdminAccessProfile profile;
   final CashRegisterState cashState;
-
-  /// Cambia a la pestaña Inventario del bottom nav (el hub).
-  final VoidCallback? onOpenInventory;
 
   @override
   ConsumerState<MainDrawer> createState() => _MainDrawerState();
@@ -4379,16 +4364,6 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                           ),
                         ),
                       );
-                    },
-                  ),
-                  _DrawerTile(
-                    icon: Icons.inventory_2_rounded,
-                    accent: MangoThemeFactory.mango,
-                    label: 'Inventario',
-                    subtitle: 'Stock · catálogo · compras',
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      widget.onOpenInventory?.call();
                     },
                   ),
                   // Administración de catálogo: la RLS de escritura del

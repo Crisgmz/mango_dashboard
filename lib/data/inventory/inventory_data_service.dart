@@ -13,6 +13,148 @@ class InventoryDataService {
 
   final SupabaseClient _client;
 
+  /// Precio de venta del producto vinculado a cada insumo
+  /// (`menu_items.inventory_item_id`, retail 1:1) — alimenta la columna
+  /// Margen de la Vista de stock (PRD 6.2 B.1). Si varios productos apuntan
+  /// al mismo insumo, gana el de mayor precio.
+  Future<Map<String, double>> loadLinkedPrices(String businessId) async {
+    final rows = await _client
+        .from('menu_items')
+        .select('inventory_item_id, price')
+        .eq('business_id', businessId)
+        .eq('is_inventory_tracked', true)
+        .not('inventory_item_id', 'is', null);
+    final byItem = <String, double>{};
+    for (final row in List<Map<String, dynamic>>.from(rows)) {
+      final itemId = row['inventory_item_id']?.toString();
+      if (itemId == null) continue;
+      final price = row['price'] is num
+          ? (row['price'] as num).toDouble()
+          : double.tryParse(row['price']?.toString() ?? '') ?? 0;
+      if (price > (byItem[itemId] ?? 0)) byItem[itemId] = price;
+    }
+    return byItem;
+  }
+
+  /// Unidades comprometidas por insumo en órdenes ABIERTAS del POS (ítems
+  /// vivos de productos con vínculo directo a inventario). Alimenta
+  /// Disponible = En mano − comprometido (PRD 6.2 B.1). Solo cubre el vínculo
+  /// directo retail; el consumo por receta queda fuera (PRD aparte).
+  Future<Map<String, double>> loadCommittedByItem(String businessId) async {
+    final rows = await _client
+        .from('order_items')
+        .select(
+            'qty, menu_items!inner(inventory_item_id), orders!inner(closed_at, status_ext, table_sessions!inner(business_id))')
+        .eq('orders.table_sessions.business_id', businessId)
+        .isFilter('orders.closed_at', null)
+        .neq('orders.status_ext', 'void')
+        .not('status', 'in', '(void,paid)')
+        .not('menu_items.inventory_item_id', 'is', null)
+        .limit(2000);
+    final byItem = <String, double>{};
+    for (final row in List<Map<String, dynamic>>.from(rows)) {
+      final mi = row['menu_items'];
+      final itemId =
+          mi is Map<String, dynamic> ? mi['inventory_item_id']?.toString() : null;
+      if (itemId == null) continue;
+      final qty = row['qty'] is num
+          ? (row['qty'] as num).toDouble()
+          : double.tryParse(row['qty']?.toString() ?? '') ?? 0;
+      if (qty <= 0) continue;
+      byItem[itemId] = (byItem[itemId] ?? 0) + qty;
+    }
+    return byItem;
+  }
+
+  /// Campos extra de la ficha de artículo que el snapshot de lista no trae.
+  Future<({String? barcode, String? purchaseUnit, double packSize})>
+      loadItemExtras(String itemId) async {
+    final row = await _client
+        .from('inventory_items')
+        .select('barcode, purchase_unit, pack_size')
+        .eq('id', itemId)
+        .single();
+    final rawPack = row['pack_size'];
+    return (
+      barcode: row['barcode']?.toString(),
+      purchaseUnit: row['purchase_unit']?.toString(),
+      packSize: rawPack is num
+          ? rawPack.toDouble()
+          : double.tryParse(rawPack?.toString() ?? '') ?? 1,
+    );
+  }
+
+  /// Kardex del artículo (vista `v_inventory_movements_with_balance`), del
+  /// más reciente al más viejo.
+  Future<List<KardexEntry>> loadKardex(String itemId, {int limit = 40}) async {
+    final rows = await _client
+        .from('v_inventory_movements_with_balance')
+        .select(
+            'id, movement_type, quantity, running_balance, warehouse_name, reason_code, reference_type, notes, created_by_name, created_at')
+        .eq('item_id', itemId)
+        .order('created_at', ascending: false)
+        .limit(limit);
+    return List<Map<String, dynamic>>.from(rows)
+        .map(KardexEntry.fromJson)
+        .toList(growable: false);
+  }
+
+  /// Consumo por venta de los últimos 28 días, para la cobertura
+  /// (PRD 6.2 C.3): unidades vendidas por día.
+  Future<double> loadDailySaleRate28d(String itemId) async {
+    final since = DateTime.now()
+        .subtract(const Duration(days: 28))
+        .toUtc()
+        .toIso8601String();
+    final rows = await _client
+        .from('inventory_movements')
+        .select('quantity')
+        .eq('item_id', itemId)
+        .eq('movement_type', 'sale')
+        .gte('created_at', since)
+        .limit(5000);
+    var total = 0.0;
+    for (final row in List<Map<String, dynamic>>.from(rows)) {
+      final q = row['quantity'];
+      final v = q is num ? q.toDouble() : double.tryParse(q?.toString() ?? '') ?? 0;
+      total += v.abs();
+    }
+    return total / 28;
+  }
+
+  /// Ajuste manual con motivo OBLIGATORIO vía `fn_inventory_adjust`: recibe la
+  /// cantidad CONTADA (el delta lo calcula el servidor) y escribe el
+  /// movimiento con reason_code — no hay edición silenciosa de cantidad.
+  Future<void> adjustStock({
+    required String businessId,
+    required String warehouseId,
+    required String itemId,
+    required double countedQuantity,
+    required String reasonCode,
+    String? notes,
+  }) async {
+    await _client.rpc('fn_inventory_adjust', params: {
+      'p_business_id': businessId,
+      'p_warehouse_id': warehouseId,
+      'p_item_id': itemId,
+      'p_counted_quantity': countedQuantity,
+      'p_reason_code': reasonCode,
+      'p_notes': notes,
+    });
+  }
+
+  /// Punto de reorden y stock máximo del artículo.
+  Future<void> updateStockLimits({
+    required String itemId,
+    required double minStock,
+    double? maxStock,
+  }) async {
+    await _client.from('inventory_items').update({
+      'min_stock': minStock,
+      'max_stock': maxStock,
+    }).eq('id', itemId);
+  }
+
   /// Loads all active inventory items for [businessId] with their current
   /// stock from every active warehouse. Items without any stock row are
   /// included with `totalQuantity = 0` (so newly created items still show).

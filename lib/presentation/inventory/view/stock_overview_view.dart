@@ -2,22 +2,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/di/providers.dart';
-import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/inventory/inventory_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
+import '../../catalog/view/product_form_view.dart';
 import '../../purchasing/view/direct_reception_view.dart';
 import '../../purchasing/view/reception_scanner_page.dart';
 import '../../theme/theme_data_factory.dart';
 import '../viewmodel/inventory_view_model.dart';
+import '../widgets/stock_row.dart';
 import 'shopping_list_view.dart';
+import 'stock_item_detail_view.dart';
 
 enum _StockSort { lowestFirst, highestFirst, alphabetical }
 
-/// Stock overview al estilo Square for Retail: tabla de insumos con
+enum _StockFilter { all, belowMin, onOrder, lowMargin }
+
+/// Pantalla B del PRD 6.2 — Vista de stock: tabla de insumos con
 /// En mano / En camino, búsqueda por nombre/SKU/código (con escáner en el
-/// campo), orden "menor stock primero" y el botón primario "Recibir stock".
-/// Vive dentro del hub de Inventario (content-only, sin Scaffold).
+/// campo), orden "menor stock primero", "Recibir stock" y FAB de nuevo
+/// artículo. Se abre desde el hub de Inventario.
 class StockOverviewView extends ConsumerStatefulWidget {
   const StockOverviewView({super.key});
 
@@ -28,7 +32,10 @@ class StockOverviewView extends ConsumerStatefulWidget {
 class _StockOverviewViewState extends ConsumerState<StockOverviewView> {
   String _query = '';
   _StockSort _sort = _StockSort.lowestFirst;
+  _StockFilter _filter = _StockFilter.all;
   Map<String, double> _onOrder = const {};
+  Map<String, double> _committed = const {};
+  Map<String, double> _prices = const {};
   Map<String, String> _codeToItem = const {};
   String? _scannedItemId;
 
@@ -50,7 +57,19 @@ class _StockOverviewViewState extends ConsumerState<StockOverviewView> {
           .read(purchasingDataServiceProvider)
           .loadOnOrderByItem(businessId);
       if (mounted) setState(() => _onOrder = onOrder);
-    } catch (_) {/* la columna En camino queda en 0 */}
+    } catch (_) {/* la columna En orden queda en 0 */}
+    try {
+      final committed = await ref
+          .read(inventoryDataServiceProvider)
+          .loadCommittedByItem(businessId);
+      if (mounted) setState(() => _committed = committed);
+    } catch (_) {/* Disponible = En mano */}
+    try {
+      final prices = await ref
+          .read(inventoryDataServiceProvider)
+          .loadLinkedPrices(businessId);
+      if (mounted) setState(() => _prices = prices);
+    } catch (_) {/* Margen queda en — */}
     try {
       final items = ref.read(inventoryViewModelProvider).items;
       final codes = await ref
@@ -94,8 +113,39 @@ class _StockOverviewViewState extends ConsumerState<StockOverviewView> {
     if (mounted) setState(() {});
   }
 
+  /// Margen % del insumo con producto vinculado (null sin precio o costo).
+  double? _marginOf(InventoryItemSnapshot i) {
+    final price = _prices[i.itemId];
+    final cost = i.cost;
+    if (price == null || price <= 0 || cost == null) return null;
+    return (price - cost) / price * 100;
+  }
+
+  bool _matchesFilter(InventoryItemSnapshot i) {
+    switch (_filter) {
+      case _StockFilter.all:
+        return true;
+      case _StockFilter.belowMin:
+        return i.minStock > 0 && i.totalQuantity < i.minStock;
+      case _StockFilter.onOrder:
+        return (_onOrder[i.itemId] ?? 0) > 0;
+      case _StockFilter.lowMargin:
+        final m = _marginOf(i);
+        return m != null && m < 25;
+    }
+  }
+
+  int _filterCount(_StockFilter f) {
+    final items = ref.read(inventoryViewModelProvider).items;
+    final prev = _filter;
+    _filter = f;
+    final count = items.where(_matchesFilter).length;
+    _filter = prev;
+    return count;
+  }
+
   List<InventoryItemSnapshot> _visible(List<InventoryItemSnapshot> items) {
-    var list = items;
+    var list = items.where(_matchesFilter).toList();
     if (_scannedItemId != null) {
       list = list.where((i) => i.itemId == _scannedItemId).toList();
     } else if (_query.isNotEmpty) {
@@ -128,13 +178,24 @@ class _StockOverviewViewState extends ConsumerState<StockOverviewView> {
         .where((i) => i.isLow || i.isOut)
         .toList(growable: false);
 
-    return RefreshIndicator(
+    return Scaffold(
+      appBar: AppBar(title: const Text('Vista de stock'), centerTitle: false),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const ProductFormView()),
+        ),
+        backgroundColor: MangoThemeFactory.mango,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Nuevo artículo'),
+      ),
+      body: RefreshIndicator(
       onRefresh: _load,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(
             parent: BouncingScrollPhysics()),
         padding: EdgeInsets.fromLTRB(
-            dpi.space(16), dpi.space(4), dpi.space(16), dpi.space(28)),
+            dpi.space(16), dpi.space(12), dpi.space(16), dpi.space(96)),
         children: [
           // ── Acciones principales ──
           Row(
@@ -207,12 +268,26 @@ class _StockOverviewViewState extends ConsumerState<StockOverviewView> {
           ],
           SizedBox(height: dpi.space(10)),
 
-          // ── Orden + encabezado de columnas ──
+          // ── Chips de filtro con conteo (PRD 6.2 B.2) ──
+          SizedBox(
+            height: dpi.scale(34),
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              children: [
+                _filterChip(_StockFilter.all, 'Todos'),
+                _filterChip(_StockFilter.belowMin, 'Bajo mínimo'),
+                _filterChip(_StockFilter.onOrder, 'En orden'),
+                _filterChip(_StockFilter.lowMargin, 'Margen bajo'),
+              ],
+            ),
+          ),
+          SizedBox(height: dpi.space(8)),
           Row(
             children: [
               Expanded(
                 child: Text(
-                  '${items.length} insumo(s)',
+                  '${items.length} artículo(s)',
                   style: TextStyle(
                     fontSize: dpi.font(11),
                     color: MangoThemeFactory.mutedText(context),
@@ -258,30 +333,6 @@ class _StockOverviewViewState extends ConsumerState<StockOverviewView> {
             ],
           ),
           SizedBox(height: dpi.space(8)),
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: dpi.space(14)),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text('INSUMO',
-                      style: _colStyle(context, dpi)),
-                ),
-                SizedBox(
-                  width: dpi.scale(74),
-                  child: Text('EN MANO',
-                      textAlign: TextAlign.right,
-                      style: _colStyle(context, dpi)),
-                ),
-                SizedBox(
-                  width: dpi.scale(74),
-                  child: Text('EN CAMINO',
-                      textAlign: TextAlign.right,
-                      style: _colStyle(context, dpi)),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(height: dpi.space(6)),
 
           if (state.isLoading && state.items.isEmpty)
             const Padding(
@@ -302,141 +353,54 @@ class _StockOverviewViewState extends ConsumerState<StockOverviewView> {
               ),
             )
           else
-            ...items.map((i) => _StockRow(
+            ...items.map((i) => StockRow(
                   item: i,
                   onOrder: _onOrder[i.itemId] ?? 0,
+                  committed: _committed[i.itemId] ?? 0,
+                  price: _prices[i.itemId],
+                  onTap: () => Navigator.of(context)
+                      .push(
+                        MaterialPageRoute(
+                          builder: (_) => StockItemDetailView(
+                            item: i,
+                            price: _prices[i.itemId],
+                            committed: _committed[i.itemId] ?? 0,
+                          ),
+                        ),
+                      )
+                      .then((_) => _load()),
                 )),
         ],
+      ),
       ),
     );
   }
 
-  TextStyle _colStyle(BuildContext context, DpiScale dpi) => TextStyle(
-        fontSize: dpi.font(9.5),
-        fontWeight: FontWeight.w800,
-        letterSpacing: 0.5,
-        color: MangoThemeFactory.mutedText(context),
-      );
-}
-
-class _StockRow extends StatelessWidget {
-  const _StockRow({required this.item, required this.onOrder});
-
-  final InventoryItemSnapshot item;
-  final double onOrder;
-
-  @override
-  Widget build(BuildContext context) {
+  /// Chip de filtro con conteo: el número ES la información; sin resultados
+  /// se muestra sin número (regla B.2).
+  Widget _filterChip(_StockFilter value, String label) {
     final dpi = DpiScale.of(context);
-    final out = item.isOut;
-    final low = item.isLow && !out;
-    final qtyColor = out
+    final selected = _filter == value;
+    final count = value == _StockFilter.all ? null : _filterCount(value);
+    final accent = value == _StockFilter.belowMin
         ? MangoThemeFactory.danger
-        : low
-            ? MangoThemeFactory.warning
-            : MangoThemeFactory.textColor(context);
-
-    return Container(
-      margin: EdgeInsets.only(bottom: dpi.space(6)),
-      padding: EdgeInsets.symmetric(
-          horizontal: dpi.space(14), vertical: dpi.space(10)),
-      decoration: BoxDecoration(
-        color: MangoThemeFactory.cardColor(context),
-        borderRadius: BorderRadius.circular(dpi.radius(12)),
-        border: Border.all(
-          color: out
-              ? MangoThemeFactory.danger.withValues(alpha: 0.35)
-              : MangoThemeFactory.borderColor(context),
+        : MangoThemeFactory.mango;
+    return Padding(
+      padding: EdgeInsets.only(right: dpi.space(6)),
+      child: ChoiceChip(
+        label: Text(
+            count != null && count > 0 ? '$label ($count)' : label),
+        selected: selected,
+        onSelected: (_) => setState(() => _filter = value),
+        showCheckmark: false,
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        selectedColor: accent.withValues(alpha: 0.2),
+        labelStyle: TextStyle(
+          color: selected ? accent : null,
+          fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+          fontSize: dpi.font(12),
         ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.name,
-                  style: TextStyle(
-                    fontSize: dpi.font(13),
-                    fontWeight: FontWeight.w600,
-                    color: MangoThemeFactory.textColor(context),
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (item.sku != null && item.sku!.isNotEmpty) ...[
-                  SizedBox(height: dpi.space(1)),
-                  Text(
-                    item.sku!,
-                    style: TextStyle(
-                      fontSize: dpi.font(10.5),
-                      fontFamily: 'monospace',
-                      color: MangoThemeFactory.mutedText(context),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          SizedBox(
-            width: dpi.scale(74),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                out
-                    ? Container(
-                        padding: EdgeInsets.symmetric(
-                            horizontal: dpi.space(7),
-                            vertical: dpi.space(1)),
-                        decoration: BoxDecoration(
-                          color:
-                              MangoThemeFactory.danger.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          '0',
-                          style: TextStyle(
-                            fontSize: dpi.font(12),
-                            fontWeight: FontWeight.w800,
-                            color: MangoThemeFactory.danger,
-                          ),
-                        ),
-                      )
-                    : Text(
-                        MangoFormatters.number(item.totalQuantity),
-                        style: TextStyle(
-                          fontSize: dpi.font(13),
-                          fontWeight: FontWeight.w800,
-                          color: qtyColor,
-                        ),
-                      ),
-                Text(
-                  item.unit,
-                  style: TextStyle(
-                    fontSize: dpi.font(9.5),
-                    color: MangoThemeFactory.mutedText(context),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(
-            width: dpi.scale(74),
-            child: Text(
-              onOrder > 0 ? MangoFormatters.number(onOrder) : '—',
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                fontSize: dpi.font(13),
-                fontWeight:
-                    onOrder > 0 ? FontWeight.w800 : FontWeight.w500,
-                color: onOrder > 0
-                    ? MangoThemeFactory.info
-                    : MangoThemeFactory.mutedText(context),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

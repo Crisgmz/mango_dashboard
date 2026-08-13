@@ -12,6 +12,8 @@ import '../../data/dashboard/dashboard_data_service.dart';
 import '../../data/dashboard/dashboard_summary_cache.dart';
 import '../../data/dashboard/sales_layout_service.dart';
 import '../../data/inventory/inventory_data_service.dart';
+import '../../data/inventory/physical_count_service.dart';
+import '../../data/inventory/stock_transfer_service.dart';
 import '../../data/notifications/notification_preferences_service.dart';
 import '../../data/notifications/notification_service.dart';
 import '../../data/purchasing/purchasing_data_service.dart';
@@ -62,6 +64,14 @@ final catalogAdminServiceProvider = Provider<CatalogAdminService>((ref) {
 
 final purchasingDataServiceProvider = Provider<PurchasingDataService>((ref) {
   return PurchasingDataService(ref.read(supabaseClientProvider));
+});
+
+final physicalCountServiceProvider = Provider<PhysicalCountService>((ref) {
+  return PhysicalCountService(ref.read(supabaseClientProvider));
+});
+
+final stockTransferServiceProvider = Provider<StockTransferService>((ref) {
+  return StockTransferService(ref.read(supabaseClientProvider));
 });
 
 final savedAccountsServiceProvider = Provider<SavedAccountsService>((ref) {

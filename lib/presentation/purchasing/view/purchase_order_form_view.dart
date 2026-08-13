@@ -14,7 +14,18 @@ import '../viewmodel/purchase_orders_view_model.dart';
 /// esperada y líneas tomadas del inventario (cantidad y costo en unidad base,
 /// como el POS). Se guarda como borrador o directamente como enviada.
 class PurchaseOrderFormView extends ConsumerStatefulWidget {
-  const PurchaseOrderFormView({super.key});
+  const PurchaseOrderFormView({
+    super.key,
+    this.initialLines = const [],
+    this.initialSupplierId,
+  });
+
+  /// Líneas precargadas (p.ej. "Agregar a orden de compra" desde la ficha de
+  /// un artículo o desde Qué comprar hoy).
+  final List<PurchaseOrderLineDraft> initialLines;
+
+  /// Suplidor preseleccionado (p.ej. el sugerido por la última compra).
+  final String? initialSupplierId;
 
   @override
   ConsumerState<PurchaseOrderFormView> createState() =>
@@ -36,6 +47,8 @@ class _PurchaseOrderFormViewState extends ConsumerState<PurchaseOrderFormView> {
   void initState() {
     super.initState();
     _expectedDate = DateTime.now().add(const Duration(days: 3));
+    _lines.addAll(widget.initialLines);
+    _supplierId = widget.initialSupplierId;
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadInventory());
   }
 
@@ -51,6 +64,12 @@ class _PurchaseOrderFormViewState extends ConsumerState<PurchaseOrderFormView> {
   Future<void> _loadInventory() async {
     final businessId = _businessId;
     if (businessId == null) return;
+    // Si se llegó directo (ficha / Qué comprar hoy) sin pasar por Compras,
+    // los suplidores y bodegas del provider aún no están cargados.
+    final vm = ref.read(purchaseOrdersViewModelProvider);
+    if (vm.suppliers.isEmpty || vm.warehouses.isEmpty) {
+      await ref.read(purchaseOrdersViewModelProvider.notifier).load(businessId);
+    }
     try {
       final items =
           await ref.read(inventoryDataServiceProvider).loadInventory(businessId);
@@ -225,7 +244,9 @@ class _PurchaseOrderFormViewState extends ConsumerState<PurchaseOrderFormView> {
         padding: EdgeInsets.all(dpi.space(16)),
         children: [
           DropdownButtonFormField<String>(
-            initialValue: _supplierId,
+            initialValue: vm.suppliers.any((s) => s.id == _supplierId)
+                ? _supplierId
+                : null,
             decoration: const InputDecoration(labelText: 'Suplidor'),
             items: [
               for (final s in vm.suppliers)

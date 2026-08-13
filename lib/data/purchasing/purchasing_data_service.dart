@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../domain/inventory/inventory_models.dart';
 import '../../domain/purchasing/purchase_order.dart';
+import '../../domain/purchasing/reorder_suggestion.dart';
 import '../../domain/purchasing/supplier.dart';
 
 /// Datos del módulo de compras (PRD 6.1) contra el Supabase compartido con el
@@ -284,6 +285,49 @@ class PurchasingDataService {
       byItem[itemId] = (byItem[itemId] ?? 0) + pending;
     }
     return byItem;
+  }
+
+  /// "Qué comprar hoy": insumos en o bajo su punto de reorden, con cantidad
+  /// sugerida y suplidor de la última compra
+  /// (vista `v_inventory_reorder_suggestions`).
+  Future<List<ReorderSuggestion>> loadReorderSuggestions(
+      String businessId) async {
+    final rows = await _client
+        .from('v_inventory_reorder_suggestions')
+        .select(
+            'inventory_item_id, name, unit, sku, current_stock, min_stock, '
+            'suggested_qty, cost, last_unit_cost, suggested_supplier_id, '
+            'suggested_supplier_name')
+        .eq('business_id', businessId)
+        .order('deficit', ascending: false);
+    return List<Map<String, dynamic>>.from(rows)
+        .map(ReorderSuggestion.fromJson)
+        .toList(growable: false);
+  }
+
+  /// "En orden" de UN artículo desglosado por bodega destino (ficha C.3).
+  Future<Map<String, double>> loadItemOnOrderByWarehouse(
+      String businessId, String itemId) async {
+    final rows = await _client
+        .from('purchase_order_items')
+        .select(
+            'quantity_ordered, quantity_received, purchase_orders!inner(business_id, warehouse_id, status)')
+        .eq('inventory_item_id', itemId)
+        .eq('purchase_orders.business_id', businessId)
+        .inFilter('purchase_orders.status', ['sent', 'partial']);
+    final byWarehouse = <String, double>{};
+    for (final row in List<Map<String, dynamic>>.from(rows)) {
+      final po = row['purchase_orders'];
+      final wh =
+          po is Map<String, dynamic> ? po['warehouse_id']?.toString() : null;
+      if (wh == null) continue;
+      double toD(dynamic v) =>
+          v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '') ?? 0;
+      final pending = toD(row['quantity_ordered']) - toD(row['quantity_received']);
+      if (pending <= 0) continue;
+      byWarehouse[wh] = (byWarehouse[wh] ?? 0) + pending;
+    }
+    return byWarehouse;
   }
 
   /// Códigos de barra y SKU de los insumos indicados, para mapear el escaneo

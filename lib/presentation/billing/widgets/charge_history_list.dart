@@ -142,7 +142,7 @@ class _ChargeRow extends StatelessWidget {
         return MangoThemeFactory.danger;
       case ChargeStatus.voided:
       case ChargeStatus.unknown:
-        return const Color(0xFF9CA3AF);
+        return MangoThemeFactory.neutral;
     }
   }
 }

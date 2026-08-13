@@ -77,7 +77,6 @@ class DashboardSalesChart extends StatelessWidget {
 
   Widget _buildChart(BuildContext context) {
     final dpi = DpiScale.of(context);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final spots = hourlySales.map((s) => FlSpot(s.hour.toDouble(), s.amount)).toList();
 
     final maxY = spots.fold<double>(0, (prev, s) => s.y > prev ? s.y : prev);
@@ -149,7 +148,7 @@ class DashboardSalesChart extends StatelessWidget {
                 radius: dpi.scale(4),
                 color: MangoThemeFactory.success,
                 strokeWidth: 2,
-                strokeColor: isDark ? const Color(0xFF1A1D21) : Colors.white,
+                strokeColor: MangoThemeFactory.cardColor(context),
               ),
             ),
             belowBarData: BarAreaData(
@@ -167,7 +166,7 @@ class DashboardSalesChart extends StatelessWidget {
         ],
         lineTouchData: LineTouchData(
           touchTooltipData: LineTouchTooltipData(
-            getTooltipColor: (_) => isDark ? const Color(0xFF2B3138) : Colors.white,
+            getTooltipColor: (_) => MangoThemeFactory.tooltipBackground(context),
             getTooltipItems: (spots) => spots.map((s) {
               return LineTooltipItem(
                 MangoFormatters.currency(s.y),

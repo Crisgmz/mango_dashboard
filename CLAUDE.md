@@ -163,7 +163,8 @@ Toda la UI del sistema sigue el estilo **"cards blandas"**: superficies planas c
 
 - **Colores** — SIEMPRE vía `MangoThemeFactory` (`lib/presentation/theme/theme_data_factory.dart`). Prohibido usar colores literales (`Color(0xFF...)`, `Colors.orange`, etc.) en las vistas.
   - Marca: `MangoThemeFactory.mango` (naranja #F97316), `mangoDeep` para énfasis.
-  - Semánticos: `success` (verde), `warning` (ámbar), `danger` (rojo), `info` (azul).
+  - Semánticos: `success` (verde, `successDeep` para gradientes), `warning` (ámbar), `danger` (rojo), `info` (azul).
+  - Métodos de pago: `payCard` (azul), `payTransfer` (morado); efectivo usa `success`. Estados apagados/fallback: `neutral`. Marca externa: `whatsapp`. Tooltips de gráficas: `tooltipBackground(context)`.
   - Por contexto (respetan light/dark): `cardColor(context)`, `borderColor(context)`, `altSurface(context)` (fondos de inputs/chips), `textColor(context)`, `mutedText(context)`.
 - **Espaciado/tamaños** — SIEMPRE vía `DpiScale.of(context)`: `dpi.space(n)` para paddings/gaps, `dpi.radius(n)` para esquinas, `dpi.font(n)` para fuentes, `dpi.icon(n)` para íconos, `dpi.scale(n)` para dimensiones. Nunca números crudos en EdgeInsets/SizedBox.
 - **Números/moneda** — SIEMPRE vía `MangoFormatters`: `.currency()` (RD$), `.number()`, `.percent()`. Nunca `toStringAsFixed` directo en UI.

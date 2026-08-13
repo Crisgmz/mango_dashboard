@@ -503,7 +503,7 @@ class _PurchaseOrderDetailViewState
                 FilledButton.icon(
                   onPressed: () => _sendWhatsApp(order),
                   style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF25D366),
+                    backgroundColor: MangoThemeFactory.whatsapp,
                     padding: EdgeInsets.symmetric(vertical: dpi.space(14)),
                   ),
                   icon: const Icon(Icons.send_rounded),

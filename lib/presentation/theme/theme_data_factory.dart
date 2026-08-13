@@ -7,6 +7,13 @@ class MangoThemeFactory {
   static const Color warning = Color(0xFFF59E0B);
   static const Color danger = Color(0xFFEF4444);
   static const Color info = Color(0xFF38BDF8);
+  static const Color successDeep = Color(0xFF16A34A);
+  // Métodos de pago (chips/leyendas): tarjeta azul, transferencia morada.
+  static const Color payCard = Color(0xFF448AFF);
+  static const Color payTransfer = Color(0xFF7C4DFF);
+  // Estados apagados (cancelado, desconocido, fallback de método).
+  static const Color neutral = Color(0xFF9CA3AF);
+  static const Color whatsapp = Color(0xFF25D366);
 
   static ThemeData get lightTheme {
     const background = Color(0xFFF6F7F9);
@@ -235,6 +242,11 @@ class MangoThemeFactory {
   }
 
   static Color cardColor(BuildContext context) => Theme.of(context).cardColor;
+  /// Fondo de tooltips de gráficas (fl_chart): claro = blanco, oscuro = gris azulado.
+  static Color tooltipBackground(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark
+          ? const Color(0xFF2B3138)
+          : Colors.white;
   static Color borderColor(BuildContext context) => Theme.of(context).dividerColor;
   static Color altSurface(BuildContext context) => Theme.of(context).inputDecorationTheme.fillColor ?? Theme.of(context).cardColor;
   static Color mutedText(BuildContext context) => Theme.of(context).textTheme.bodySmall?.color ?? Colors.grey;

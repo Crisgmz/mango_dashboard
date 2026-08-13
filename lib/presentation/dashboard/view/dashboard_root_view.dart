@@ -858,7 +858,7 @@ class _HeaderIconButton extends StatelessWidget {
                 child: Container(
                   padding: EdgeInsets.all(dpi.space(4)),
                   decoration: const BoxDecoration(
-                    color: Colors.red,
+                    color: MangoThemeFactory.danger,
                     shape: BoxShape.circle,
                   ),
                   constraints: BoxConstraints(
@@ -889,8 +889,8 @@ class _NotificationsSheet extends ConsumerWidget {
     NotificationType.tableOpened: Icons.table_restaurant_rounded,
   };
   static const _typeColors = <NotificationType, Color>{
-    NotificationType.itemVoided: Colors.redAccent,
-    NotificationType.cashClosed: Colors.blueAccent,
+    NotificationType.itemVoided: MangoThemeFactory.danger,
+    NotificationType.cashClosed: MangoThemeFactory.payCard,
     NotificationType.tableOpened: MangoThemeFactory.success,
   };
 
@@ -2186,8 +2186,8 @@ class _SalesByMethodCard extends StatelessWidget {
 
   static const _methodColors = <String, Color>{
     'cash': MangoThemeFactory.success,
-    'card': Colors.blueAccent,
-    'transfer': Colors.deepPurpleAccent,
+    'card': MangoThemeFactory.payCard,
+    'transfer': MangoThemeFactory.payTransfer,
   };
 
   @override
@@ -2221,7 +2221,7 @@ class _SalesByMethodCard extends StatelessWidget {
                     return Flexible(
                       flex: (fraction * 1000).round().clamp(1, 1000),
                       child: Container(
-                        color: _methodColors[m.code] ?? Colors.grey,
+                        color: _methodColors[m.code] ?? MangoThemeFactory.neutral,
                       ),
                     );
                   }).toList(),
@@ -2231,7 +2231,7 @@ class _SalesByMethodCard extends StatelessWidget {
           SizedBox(height: dpi.space(14)),
           ...methods.map((m) {
             final icon = _methodIcons[m.code] ?? Icons.more_horiz_rounded;
-            final color = _methodColors[m.code] ?? Colors.grey;
+            final color = _methodColors[m.code] ?? MangoThemeFactory.neutral;
             final percent = total > 0 ? (m.amount / total * 100) : 0.0;
             return Padding(
               padding: EdgeInsets.only(bottom: dpi.space(10)),
@@ -2821,7 +2821,7 @@ class _ProductCardState extends State<_ProductCard> {
                         if (mod.priceDelta != 0)
                           Text(
                             '${mod.priceDelta > 0 ? '+' : ''}${MangoFormatters.currency(mod.priceDelta)}',
-                            style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w700, color: mod.priceDelta > 0 ? MangoThemeFactory.mango : Colors.redAccent),
+                            style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w700, color: mod.priceDelta > 0 ? MangoThemeFactory.mango : MangoThemeFactory.danger),
                           ),
                       ],
                     ),
@@ -4454,17 +4454,17 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                       width: dpi.scale(38),
                       height: dpi.scale(38),
                       decoration: BoxDecoration(
-                        color: Colors.red.withValues(alpha: isDark ? 0.18 : 0.1),
+                        color: MangoThemeFactory.danger.withValues(alpha: isDark ? 0.18 : 0.1),
                         borderRadius: BorderRadius.circular(dpi.radius(10)),
                       ),
                       child: Icon(Icons.logout_rounded,
-                          color: Colors.redAccent, size: dpi.icon(20)),
+                          color: MangoThemeFactory.danger, size: dpi.icon(20)),
                     ),
                     SizedBox(width: dpi.space(14)),
                     Text(
                       'Cerrar sesión',
                       style: TextStyle(
-                        color: Colors.redAccent,
+                        color: MangoThemeFactory.danger,
                         fontWeight: FontWeight.w700,
                         fontSize: dpi.font(14),
                       ),
@@ -5354,9 +5354,9 @@ class EmptyStateCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     final isError = title.toLowerCase().contains('error');
-    final color = isError ? Colors.redAccent : MangoThemeFactory.textColor(context);
-    final bgColor = isError ? Colors.red.withValues(alpha: 0.05) : MangoThemeFactory.cardColor(context);
-    final borderColor = isError ? Colors.red.withValues(alpha: 0.2) : MangoThemeFactory.borderColor(context);
+    final color = isError ? MangoThemeFactory.danger : MangoThemeFactory.textColor(context);
+    final bgColor = isError ? MangoThemeFactory.danger.withValues(alpha: 0.05) : MangoThemeFactory.cardColor(context);
+    final borderColor = isError ? MangoThemeFactory.danger.withValues(alpha: 0.2) : MangoThemeFactory.borderColor(context);
 
     return Container(
       width: double.infinity,

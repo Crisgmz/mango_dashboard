@@ -352,10 +352,7 @@ class _TrendCard extends StatelessWidget {
                 ),
                 barTouchData: BarTouchData(
                   touchTooltipData: BarTouchTooltipData(
-                    getTooltipColor: (_) =>
-                        Theme.of(context).brightness == Brightness.dark
-                            ? const Color(0xFF2B3138)
-                            : Colors.white,
+                    getTooltipColor: (_) => MangoThemeFactory.tooltipBackground(context),
                     getTooltipItem: (group, groupIdx, rod, rodIdx) => BarTooltipItem(
                       MangoFormatters.currency(rod.toY),
                       TextStyle(

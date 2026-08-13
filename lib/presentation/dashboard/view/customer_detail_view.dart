@@ -269,8 +269,8 @@ class _VisitTile extends StatelessWidget {
   };
   static const _methodColors = <String, Color>{
     'cash': MangoThemeFactory.success,
-    'card': Colors.blueAccent,
-    'transfer': Colors.deepPurpleAccent,
+    'card': MangoThemeFactory.payCard,
+    'transfer': MangoThemeFactory.payTransfer,
   };
   static const _methodLabels = <String, String>{
     'cash': 'Efectivo',

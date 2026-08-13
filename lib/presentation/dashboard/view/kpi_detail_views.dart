@@ -315,7 +315,7 @@ class _SalesSummaryHeader extends StatelessWidget {
       padding: EdgeInsets.all(dpi.space(18)),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [MangoThemeFactory.success, Color(0xFF16A34A)],
+          colors: [MangoThemeFactory.success, MangoThemeFactory.successDeep],
         ),
         borderRadius: BorderRadius.circular(dpi.radius(20)),
       ),
@@ -373,8 +373,8 @@ class _TicketCard extends StatelessWidget {
   };
   static const _methodColors = <String, Color>{
     'cash': MangoThemeFactory.success,
-    'card': Colors.blueAccent,
-    'transfer': Colors.deepPurpleAccent,
+    'card': MangoThemeFactory.payCard,
+    'transfer': MangoThemeFactory.payTransfer,
   };
   static const _methodLabels = <String, String>{
     'cash': 'Efectivo',
@@ -544,7 +544,7 @@ class _OrdersDetailViewState extends State<OrdersDetailView> {
                              crossAxisAlignment: CrossAxisAlignment.start,
                              children: [
                                SizedBox(height: dpi.space(16)),
-                               _SectionHeader(title: 'CERRADAS', count: widget.summary.closedOrders.length, color: Colors.grey),
+                               _SectionHeader(title: 'CERRADAS', count: widget.summary.closedOrders.length, color: MangoThemeFactory.neutral),
                                _OrderDetailCard(order: order),
                              ],
                            );
@@ -728,7 +728,7 @@ class _OrderDetailCard extends StatelessWidget {
     final accent = cancelled
         ? MangoThemeFactory.danger
         : isDone
-            ? Colors.grey
+            ? MangoThemeFactory.neutral
             : MangoThemeFactory.mango;
     final notes = cancelled ? order.cancellationNotes : const <CancellationNote>[];
     return Container(
@@ -1046,7 +1046,7 @@ class CashRegisterDetailView extends ConsumerWidget {
         centerTitle: false,
       ),
       body: err != null
-          ? Center(child: Text(err, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.red)))
+          ? Center(child: Text(err, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: MangoThemeFactory.danger)))
           : data == null
           ? Center(child: Text('Cargando cajas...', style: Theme.of(context).textTheme.bodySmall))
           : ListView(
@@ -1197,11 +1197,11 @@ class _OpenRegisterCard extends StatelessWidget {
                     if (session.cashSales > 0)
                       _PayMethodChip(icon: Icons.payments_rounded, label: MangoFormatters.currency(session.cashSales), color: MangoThemeFactory.success),
                     if (session.cardSales > 0)
-                      _PayMethodChip(icon: Icons.credit_card_rounded, label: MangoFormatters.currency(session.cardSales), color: Colors.blueAccent),
+                      _PayMethodChip(icon: Icons.credit_card_rounded, label: MangoFormatters.currency(session.cardSales), color: MangoThemeFactory.payCard),
                     if (session.transferSales > 0)
-                      _PayMethodChip(icon: Icons.swap_horiz_rounded, label: MangoFormatters.currency(session.transferSales), color: Colors.deepPurpleAccent),
+                      _PayMethodChip(icon: Icons.swap_horiz_rounded, label: MangoFormatters.currency(session.transferSales), color: MangoThemeFactory.payTransfer),
                     if (session.otherSales > 0)
-                      _PayMethodChip(icon: Icons.more_horiz_rounded, label: MangoFormatters.currency(session.otherSales), color: Colors.grey),
+                      _PayMethodChip(icon: Icons.more_horiz_rounded, label: MangoFormatters.currency(session.otherSales), color: MangoThemeFactory.neutral),
                   ],
                 ),
               ],
@@ -1775,9 +1775,9 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
             if (d.cashSales > 0)
               _PayMethodChip(icon: Icons.payments_rounded, label: MangoFormatters.currency(d.cashSales), color: MangoThemeFactory.success),
             if (d.cardSales > 0)
-              _PayMethodChip(icon: Icons.credit_card_rounded, label: MangoFormatters.currency(d.cardSales), color: Colors.blueAccent),
+              _PayMethodChip(icon: Icons.credit_card_rounded, label: MangoFormatters.currency(d.cardSales), color: MangoThemeFactory.payCard),
             if (d.transferSales > 0)
-              _PayMethodChip(icon: Icons.swap_horiz_rounded, label: MangoFormatters.currency(d.transferSales), color: Colors.deepPurpleAccent),
+              _PayMethodChip(icon: Icons.swap_horiz_rounded, label: MangoFormatters.currency(d.transferSales), color: MangoThemeFactory.payTransfer),
           ],
         ),
       ),
@@ -1802,11 +1802,11 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
       SizedBox(height: dpi.space(10)),
       _MetricCard(
         icon: Icons.receipt_rounded,
-        color: Colors.redAccent,
+        color: MangoThemeFactory.danger,
         label: 'Gastos',
         value: MangoFormatters.currency(d.totalExpenses),
         count: d.transactions.where((t) => t.type == 'expense').length,
-        onTap: () => _openTransactions(d, 'expense', 'Gastos', Icons.receipt_rounded, Colors.redAccent),
+        onTap: () => _openTransactions(d, 'expense', 'Gastos', Icons.receipt_rounded, MangoThemeFactory.danger),
       ),
 
       SizedBox(height: dpi.space(18)),

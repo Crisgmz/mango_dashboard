@@ -135,8 +135,8 @@ Color billingStatusColor(BillingStatus status) {
     case BillingStatus.suspended:
       return MangoThemeFactory.danger;
     case BillingStatus.cancelled:
-      return const Color(0xFF9CA3AF);
+      return MangoThemeFactory.neutral;
     case BillingStatus.unknown:
-      return const Color(0xFF9CA3AF);
+      return MangoThemeFactory.neutral;
   }
 }

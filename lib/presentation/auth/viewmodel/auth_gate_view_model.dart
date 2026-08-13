@@ -64,7 +64,23 @@ class AuthGateState {
 class AuthGateViewModel extends StateNotifier<AuthGateState> {
   AuthGateViewModel(this._ref) : super(const AuthGateState.initial()) {
     _subscription = _ref.read(adminAccessServiceProvider).authStates().listen(
-      (_) => bootstrap(),
+      (authState) {
+        switch (authState.event) {
+          case AuthChangeEvent.tokenRefreshed:
+            // El refresh silencioso de cada hora NO debe re-bootstrapear (eso
+            // convertía la app en un spinner a mitad de uso y, con un blip de
+            // red, botaba al usuario al login). Solo persistimos el refresh
+            // token rotado para que el cambio de cuenta siga funcionando.
+            unawaited(_persistRotatedSession());
+          case AuthChangeEvent.signedIn:
+          case AuthChangeEvent.initialSession:
+          case AuthChangeEvent.signedOut:
+          case AuthChangeEvent.userUpdated:
+            bootstrap();
+          default:
+            break; // passwordRecovery / MFA: no nos aplican.
+        }
+      },
       // Supabase's auth client also notifies exceptions through this stream
       // (e.g. recoverSession failures with corrupt cached sessions). Sin un
       // onError aquí, esos errores se convierten en uncaught exceptions y
@@ -72,6 +88,16 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
       // estado coherente (probablemente termine en login).
       onError: (_) => bootstrap(),
     );
+  }
+
+  /// Guarda el refresh token rotado y la sesión serializada frescos en la
+  /// cuenta activa, sin tocar el estado de la UI. Best-effort.
+  Future<void> _persistRotatedSession() async {
+    final profile = state.profile;
+    if (profile == null) return;
+    try {
+      await _saveCurrentAccount(profile);
+    } catch (_) {/* la próxima rotación reintenta */}
   }
 
   final Ref _ref;
@@ -95,7 +121,13 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
     // overwrite a successful state with a stale one.
     if (_bootstrapping) return;
     _bootstrapping = true;
-    state = state.copyWith(isLoading: true, clearError: true);
+    // Silencioso cuando ya hay UI: un re-bootstrap con perfil en pantalla
+    // (cambio de cuenta, evento de auth) no debe blanquear la app con el
+    // spinner global — el root muestra spinner total cuando isLoading=true.
+    final hasUi = state.isAuthenticated && state.profile != null;
+    if (!hasUi) {
+      state = state.copyWith(isLoading: true, clearError: true);
+    }
     final service = _ref.read(adminAccessServiceProvider);
 
     try {

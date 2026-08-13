@@ -13,11 +13,20 @@ class AdminAccessService {
 
   User? get currentUser => _client.auth.currentUser;
 
+  /// Tope para llamadas de auth/resolución: sin esto, una red mala deja al
+  /// usuario mirando un spinner sin fin ("el login se queda pegado").
+  static const _authTimeout = Duration(seconds: 12);
+
   Future<AdminAccessProfile?> resolveCurrentAccess() async {
     final user = currentUser;
     if (user == null) return null;
 
-    final memberships = await _loadMemberships(user.id);
+    // Membresías y nombre en paralelo: un round-trip menos por arranque.
+    final results = await Future.wait([
+      _loadMemberships(user.id),
+      _loadProfileFullName(user.id),
+    ]).timeout(_authTimeout);
+    final memberships = results[0] as List<AdminBusinessMembership>;
     if (memberships.isEmpty) return null;
 
     final selected = memberships.firstWhere(
@@ -25,7 +34,7 @@ class AdminAccessService {
       orElse: () => memberships.first,
     );
 
-    final profileName = await _loadProfileFullName(user.id);
+    final profileName = results[1] as String?;
     final metadata = user.userMetadata;
     final displayName = _firstNonEmpty([
           profileName,
@@ -143,14 +152,17 @@ class AdminAccessService {
   int? get currentAccessTokenExpiresAt => _client.auth.currentSession?.expiresAt;
 
   Future<void> signIn({required String email, required String password}) async {
-    await _client.auth.signInWithPassword(email: email, password: password);
+    await _client.auth
+        .signInWithPassword(email: email, password: password)
+        .timeout(_authTimeout);
   }
 
   /// Restaura sesión usando un refresh token guardado.
   /// Retorna true si la sesión se restauró exitosamente.
   Future<bool> restoreSession(String refreshToken) async {
     try {
-      final response = await _client.auth.setSession(refreshToken);
+      final response =
+          await _client.auth.setSession(refreshToken).timeout(_authTimeout);
       return response.session != null;
     } catch (_) {
       return false;
@@ -179,12 +191,20 @@ class AdminAccessService {
   }
 
   /// Sanity-check: ¿este string parece un Session JSON serializado válido?
-  /// Lo que necesita Supabase: access_token, refresh_token, expires_in y
-  /// un objeto user con id. Si falta alguno, no llamamos al SDK.
+  /// Lo que necesita Supabase: access_token, refresh_token y un objeto user
+  /// con id. Si falta alguno, no llamamos al SDK.
+  ///
+  /// OJO: [currentSerializedSession] guarda el formato ENVUELTO
+  /// `{currentSession: {...}, expiresAt: ...}` — hay que desenvolverlo antes
+  /// de validar. (Validar el nivel superior rechazaba TODAS nuestras propias
+  /// sesiones guardadas, matando la ruta instantánea del cambio de cuenta y
+  /// forzando siempre el round-trip de red: el "cambio lento".)
   bool _looksLikeValidSession(String serializedJson) {
     try {
-      final data = jsonDecode(serializedJson);
+      var data = jsonDecode(serializedJson);
       if (data is! Map<String, dynamic>) return false;
+      final wrapped = data['currentSession'];
+      if (wrapped is Map<String, dynamic>) data = wrapped;
       final accessToken = data['access_token'];
       final refreshToken = data['refresh_token'];
       final user = data['user'];

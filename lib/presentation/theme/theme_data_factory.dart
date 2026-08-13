@@ -100,6 +100,8 @@ class MangoThemeFactory {
         filled: true,
         fillColor: surfaceAlt,
         hintStyle: TextStyle(color: mutedText),
+        labelStyle: TextStyle(color: mutedText),
+        floatingLabelStyle: const TextStyle(color: mango),
         prefixIconColor: mutedText,
         suffixIconColor: mutedText,
         border: OutlineInputBorder(
@@ -115,6 +117,120 @@ class MangoThemeFactory {
           borderSide: const BorderSide(color: mango, width: 1.2),
         ),
       ),
+      // Diálogos como cards blandas: fondo de card sin tinte del seed,
+      // esquinas 24 — el look durazno de M3 queda prohibido.
+      dialogTheme: DialogThemeData(
+        backgroundColor: card,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        titleTextStyle: TextStyle(
+            fontSize: 18, fontWeight: FontWeight.w700, color: text),
+        contentTextStyle: TextStyle(fontSize: 14, color: text),
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: background,
+        surfaceTintColor: Colors.transparent,
+        modalBackgroundColor: background,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+      ),
+      datePickerTheme: DatePickerThemeData(
+        backgroundColor: card,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      ),
+      timePickerTheme: TimePickerThemeData(
+        backgroundColor: card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      ),
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith((states) =>
+            states.contains(WidgetState.selected) ? Colors.white : mutedText),
+        trackColor: WidgetStateProperty.resolveWith((states) =>
+            states.contains(WidgetState.selected) ? mango : surfaceAlt),
+        trackOutlineColor: WidgetStateProperty.resolveWith((states) =>
+            states.contains(WidgetState.selected) ? mango : border),
+      ),
+      checkboxTheme: CheckboxThemeData(
+        fillColor: WidgetStateProperty.resolveWith((states) =>
+            states.contains(WidgetState.selected)
+                ? mango
+                : Colors.transparent),
+        side: BorderSide(color: mutedText, width: 1.6),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+      ),
+      radioTheme: RadioThemeData(
+        fillColor: WidgetStateProperty.resolveWith((states) =>
+            states.contains(WidgetState.selected) ? mango : mutedText),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: mango,
+          foregroundColor: Colors.white,
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14)),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        ),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: mango,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14)),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: mango,
+          side: BorderSide(color: border),
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14)),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: mango,
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: card,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: border),
+        ),
+        textStyle: TextStyle(fontSize: 14, color: text),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: brightness == Brightness.light
+            ? const Color(0xFF23262B)
+            : surfaceAlt,
+        contentTextStyle: const TextStyle(fontSize: 13.5, color: Colors.white),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      dropdownMenuTheme: DropdownMenuThemeData(
+        menuStyle: MenuStyle(
+          backgroundColor: WidgetStatePropertyAll(card),
+          surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+          shape: WidgetStatePropertyAll(RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: border),
+          )),
+        ),
+      ),
+      progressIndicatorTheme: const ProgressIndicatorThemeData(color: mango),
     );
   }
 

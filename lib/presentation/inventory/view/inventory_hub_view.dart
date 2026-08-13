@@ -9,8 +9,10 @@ import '../../purchasing/view/purchase_orders_view.dart';
 import '../../purchasing/view/reorder_suggestions_view.dart';
 import '../../purchasing/view/suppliers_admin_view.dart';
 import '../../theme/theme_data_factory.dart';
+import '../../widgets/marquee_text.dart';
 import '../viewmodel/inventory_hub_view_model.dart';
 import 'counts_view.dart';
+import 'metrics_view.dart';
 import 'stock_overview_view.dart';
 import 'transfers_view.dart';
 
@@ -54,6 +56,7 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
       'suppliers',
       'reorder',
       'transfers',
+      'metrics',
     ]) {
       final storedKey = 'hub_section_first_seen_$key';
       final stored = prefs.getString(storedKey);
@@ -87,11 +90,13 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
     final dpi = DpiScale.of(context);
     final hub = ref.watch(inventoryHubViewModelProvider);
     final profile = ref.watch(authGateViewModelProvider).profile;
+    // "Nombre - Sucursal" en una línea; si no cabe, MarqueeText lo desplaza
+    // en vaivén en lugar de recortarlo.
     final subtitle = [
       if (profile?.businessName != null) profile!.businessName!,
       if (profile?.branchName?.trim().isNotEmpty == true)
         profile!.branchName!.trim(),
-    ].join(' · ');
+    ].join(' - ');
 
     return RefreshIndicator(
       onRefresh: _refresh,
@@ -112,7 +117,7 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                         style: Theme.of(context).textTheme.headlineMedium),
                     if (subtitle.isNotEmpty) ...[
                       SizedBox(height: dpi.space(2)),
-                      Text(subtitle,
+                      MarqueeText(subtitle,
                           style: Theme.of(context).textTheme.bodySmall),
                     ],
                   ],
@@ -271,9 +276,14 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                       : 'Proveedores y RNC para el 606',
                   onTap: () => _push(const SuppliersAdminView()),
                 ),
-                // Qué comprar hoy · Transferencias · Métricas: se listan
-                // cuando su fase esté desplegada (regla A.2 — sin filas
-                // muertas).
+                _divider(context),
+                _SectionRow(
+                  icon: Icons.query_stats_rounded,
+                  title: 'Métricas',
+                  isNew: _isNew['metrics'] ?? false,
+                  subtitle: 'Valor ABC, rotación y envejecido',
+                  onTap: () => _push(const MetricsView()),
+                ),
               ],
             ),
           ),

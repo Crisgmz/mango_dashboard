@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../domain/inventory/inventory_models.dart';
+import '../../domain/inventory/metrics_models.dart';
 
 /// Loads inventory snapshots for the admin dashboard.
 ///
@@ -64,6 +65,36 @@ class InventoryDataService {
       byItem[itemId] = (byItem[itemId] ?? 0) + qty;
     }
     return byItem;
+  }
+
+  /// Valoración con clase ABC (vista `v_inventory_valuation_summary`),
+  /// ordenada por valor descendente.
+  Future<List<ValuationItem>> loadValuationSummary(String businessId) async {
+    final rows = await _client
+        .from('v_inventory_valuation_summary')
+        .select(
+            'item_id, item_name, item_unit, total_quantity, total_value, '
+            'cumulative_pct, abc_class, last_movement_at')
+        .eq('business_id', businessId)
+        .order('total_value', ascending: false)
+        .limit(500);
+    return List<Map<String, dynamic>>.from(rows)
+        .map(ValuationItem.fromJson)
+        .toList(growable: false);
+  }
+
+  /// Rotación por artículo en los últimos [daysBack] días
+  /// (`fn_inventory_rotation_analysis`): velocidad de salida, días de
+  /// cobertura y clase star/active/slow/dormant.
+  Future<List<RotationItem>> loadRotationAnalysis(String businessId,
+      {int daysBack = 30}) async {
+    final rows = await _client.rpc('fn_inventory_rotation_analysis', params: {
+      'p_business_id': businessId,
+      'p_days_back': daysBack,
+    });
+    return List<Map<String, dynamic>>.from(rows as List)
+        .map(RotationItem.fromJson)
+        .toList(growable: false);
   }
 
   /// Campos extra de la ficha de artículo que el snapshot de lista no trae.

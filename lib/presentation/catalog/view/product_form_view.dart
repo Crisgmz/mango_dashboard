@@ -5,6 +5,7 @@ import '../../../core/responsive/dpi_scale.dart';
 import '../../../domain/catalog/admin_product.dart';
 import '../../../domain/catalog/catalog_options.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
+import '../../purchasing/view/reception_scanner_page.dart';
 import '../../theme/theme_data_factory.dart';
 import '../viewmodel/products_admin_view_model.dart';
 
@@ -302,8 +303,23 @@ class _ProductFormViewState extends ConsumerState<ProductFormView> {
           SizedBox(height: dpi.space(14)),
           TextField(
             controller: _barcode,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Código de barras (opcional)',
+              suffixIcon: IconButton(
+                tooltip: 'Escanear con cámara',
+                icon: const Icon(Icons.qr_code_scanner_rounded),
+                onPressed: () async {
+                  final code = await Navigator.of(context).push<String>(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          const ReceptionScannerPage(captureOnce: true),
+                    ),
+                  );
+                  if (code != null && code.isNotEmpty) {
+                    setState(() => _barcode.text = code);
+                  }
+                },
+              ),
             ),
           ),
           SizedBox(height: dpi.space(14)),

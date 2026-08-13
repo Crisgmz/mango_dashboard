@@ -40,6 +40,8 @@ class _StockItemDetailViewState extends ConsumerState<StockItemDetailView> {
   String? _barcode;
   String? _purchaseUnit;
   double _packSize = 1;
+  String? _preferredSupplierId;
+  String? _preferredSupplierName;
   Map<String, double> _onOrderByWh = const {};
   List<KardexEntry> _kardex = const [];
   double? _dailyRate;
@@ -65,6 +67,8 @@ class _StockItemDetailViewState extends ConsumerState<StockItemDetailView> {
           _barcode = extras.barcode;
           _purchaseUnit = extras.purchaseUnit;
           _packSize = extras.packSize;
+          _preferredSupplierId = extras.preferredSupplierId;
+          _preferredSupplierName = extras.preferredSupplierName;
         });
       }
     } catch (_) {}
@@ -159,6 +163,76 @@ class _StockItemDetailViewState extends ConsumerState<StockItemDetailView> {
       _reloadItem();
     } catch (_) {
       _snack('No se pudo actualizar.');
+    }
+  }
+
+  /// Elige el suplidor preferido: manda sobre la heurística de última compra
+  /// en "Qué comprar hoy" (PRD 6.2 C.2).
+  Future<void> _editPreferredSupplier() async {
+    final businessId = _businessId;
+    if (businessId == null) return;
+    List suppliers;
+    try {
+      suppliers = (await ref
+              .read(purchasingDataServiceProvider)
+              .loadSuppliers(businessId))
+          .where((s) => s.isActive)
+          .toList();
+    } catch (_) {
+      _snack('No se pudieron cargar los suplidores.');
+      return;
+    }
+    if (!mounted) return;
+    if (suppliers.isEmpty) {
+      _snack('Crea suplidores primero (Inventario → Suplidores).');
+      return;
+    }
+    String? selected = _preferredSupplierId;
+    final result = await showDialog<({String? id})>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Suplidor preferido'),
+          content: DropdownButtonFormField<String?>(
+            initialValue:
+                suppliers.any((s) => (s as dynamic).id == selected)
+                    ? selected
+                    : null,
+            decoration: const InputDecoration(labelText: 'Suplidor'),
+            items: [
+              const DropdownMenuItem<String?>(
+                  value: null, child: Text('Sin preferido (última compra)')),
+              for (final s in suppliers)
+                DropdownMenuItem<String?>(
+                    value: (s as dynamic).id as String,
+                    child: Text((s as dynamic).name as String)),
+            ],
+            onChanged: (v) => setDialogState(() => selected = v),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop((id: selected)),
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    try {
+      await ref
+          .read(inventoryDataServiceProvider)
+          .setPreferredSupplier(_item.itemId, result.id);
+      _snack(result.id == null
+          ? 'Preferido eliminado: vuelve la heurística de última compra.'
+          : 'Suplidor preferido guardado.');
+      _load();
+    } catch (_) {
+      _snack('No se pudo guardar (¿migración de suplidor preferido aplicada?).');
     }
   }
 
@@ -267,6 +341,14 @@ class _StockItemDetailViewState extends ConsumerState<StockItemDetailView> {
               ),
               child: Column(
                 children: [
+                  InkWell(
+                    onTap: _editPreferredSupplier,
+                    child: _detailRow(
+                      context,
+                      'Suplidor preferido',
+                      _preferredSupplierName ?? 'Toca para elegir',
+                    ),
+                  ),
                   _detailRow(context, 'Unidad de venta', _item.unit),
                   _detailRow(
                       context,

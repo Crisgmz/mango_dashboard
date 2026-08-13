@@ -300,9 +300,50 @@ class PurchasingDataService {
             'suggested_supplier_name')
         .eq('business_id', businessId)
         .order('deficit', ascending: false);
-    return List<Map<String, dynamic>>.from(rows)
+    final suggestions = List<Map<String, dynamic>>.from(rows)
         .map(ReorderSuggestion.fromJson)
-        .toList(growable: false);
+        .toList();
+
+    // El suplidor PREFERIDO de la ficha manda sobre la heurística de última
+    // compra de la vista. Tolerante: sin la migración, se queda la heurística.
+    try {
+      final prefRows = await _client
+          .from('inventory_items')
+          .select('id, preferred_supplier_id, suppliers(name)')
+          .eq('business_id', businessId)
+          .not('preferred_supplier_id', 'is', null);
+      final preferred = <String, ({String id, String? name})>{};
+      for (final row in List<Map<String, dynamic>>.from(prefRows)) {
+        final itemId = row['id']?.toString();
+        final supId = row['preferred_supplier_id']?.toString();
+        if (itemId == null || supId == null) continue;
+        final sup = row['suppliers'];
+        preferred[itemId] = (
+          id: supId,
+          name: sup is Map<String, dynamic> ? sup['name']?.toString() : null,
+        );
+      }
+      for (var i = 0; i < suggestions.length; i++) {
+        final p = preferred[suggestions[i].itemId];
+        if (p == null) continue;
+        final s = suggestions[i];
+        suggestions[i] = ReorderSuggestion(
+          itemId: s.itemId,
+          name: s.name,
+          unit: s.unit,
+          sku: s.sku,
+          currentStock: s.currentStock,
+          minStock: s.minStock,
+          suggestedQty: s.suggestedQty,
+          cost: s.cost,
+          lastUnitCost: s.lastUnitCost,
+          supplierId: p.id,
+          supplierName: p.name ?? s.supplierName,
+        );
+      }
+    } catch (_) {/* heurística de última compra */}
+
+    return suggestions;
   }
 
   /// "En orden" de UN artículo desglosado por bodega destino (ficha C.3).

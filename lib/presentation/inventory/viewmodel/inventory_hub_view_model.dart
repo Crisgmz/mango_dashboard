@@ -20,6 +20,8 @@ class InventoryHubState {
     this.activeSuppliers,
     this.suggestionsCount,
     this.pendingTransfers,
+    this.lastCountAccuracy,
+    this.rotation90d,
   });
 
   /// Σ stock × costo promedio (valor a costo, sucursal activa).
@@ -43,6 +45,13 @@ class InventoryHubState {
   /// Transferencias por aprobar o en tránsito.
   final int? pendingTransfers;
 
+  /// % de líneas sin diferencia del último conteo COMPLETADO (0-100).
+  final double? lastCountAccuracy;
+
+  /// Rotación 90 días: salidas valoradas / valor actual del inventario.
+  /// Null (oculta) sin salidas o sin valor — regla A.1 del PRD.
+  final double? rotation90d;
+
   InventoryHubState copyWith({
     double? stockValue,
     int? itemCount,
@@ -55,6 +64,8 @@ class InventoryHubState {
     int? activeSuppliers,
     int? suggestionsCount,
     int? pendingTransfers,
+    double? lastCountAccuracy,
+    double? rotation90d,
   }) {
     return InventoryHubState(
       stockValue: stockValue ?? this.stockValue,
@@ -68,6 +79,8 @@ class InventoryHubState {
       activeSuppliers: activeSuppliers ?? this.activeSuppliers,
       suggestionsCount: suggestionsCount ?? this.suggestionsCount,
       pendingTransfers: pendingTransfers ?? this.pendingTransfers,
+      lastCountAccuracy: lastCountAccuracy ?? this.lastCountAccuracy,
+      rotation90d: rotation90d ?? this.rotation90d,
     );
   }
 }
@@ -86,6 +99,7 @@ class InventoryHubViewModel extends StateNotifier<InventoryHubState> {
       _loadSuppliers(businessId),
       _loadSuggestions(businessId),
       _loadTransfers(businessId),
+      _loadRotation(businessId),
     ]);
   }
 
@@ -149,6 +163,19 @@ class InventoryHubViewModel extends StateNotifier<InventoryHubState> {
         lastCountAt: last.startedAt,
         lastCountStatus: last.status,
       );
+      // % de exactitud: líneas contadas sin diferencia del último completado.
+      final lastCompleted =
+          sessions.where((c) => c.status == 'completed').firstOrNull;
+      if (lastCompleted == null) return;
+      final lines = await _ref
+          .read(physicalCountServiceProvider)
+          .loadLines(lastCompleted.id);
+      final counted = lines.where((l) => l.isCounted).toList();
+      if (counted.isEmpty || !mounted) return;
+      final exact = counted.where((l) => (l.variance ?? 0) == 0).length;
+      state = state.copyWith(
+        lastCountAccuracy: exact / counted.length * 100,
+      );
     } catch (_) {/* fila sin contador */}
   }
 
@@ -186,6 +213,28 @@ class InventoryHubViewModel extends StateNotifier<InventoryHubState> {
             .length,
       );
     } catch (_) {/* fila sin contador */}
+  }
+
+  Future<void> _loadRotation(String businessId) async {
+    try {
+      final service = _ref.read(inventoryDataServiceProvider);
+      final results = await Future.wait([
+        service.loadValuationSummary(businessId),
+        service.loadRotationAnalysis(businessId, daysBack: 90),
+      ]);
+      final valuation = results[0] as List;
+      final rotation = results[1] as List;
+      double value = 0;
+      for (final v in valuation) {
+        value += (v as dynamic).totalValue as double;
+      }
+      double outflow = 0;
+      for (final r in rotation) {
+        outflow += (r as dynamic).outflowValue as double;
+      }
+      if (!mounted || value <= 0 || outflow <= 0) return;
+      state = state.copyWith(rotation90d: outflow / value);
+    } catch (_) {/* píldora oculta */}
   }
 }
 

@@ -20,11 +20,17 @@ class ScanFeedback {
 /// vía [onCode]; esta pantalla solo captura, evita lecturas duplicadas
 /// seguidas y muestra el feedback flotante.
 class ReceptionScannerPage extends StatefulWidget {
-  const ReceptionScannerPage({super.key, required this.onCode});
+  const ReceptionScannerPage({super.key, this.onCode, this.captureOnce = false})
+      : assert(captureOnce || onCode != null,
+            'onCode es requerido salvo en modo captureOnce');
 
   /// Recibe el código leído; devuelve el feedback a mostrar (o null para
-  /// ignorar la lectura en silencio).
-  final ScanFeedback? Function(String code) onCode;
+  /// ignorar la lectura en silencio). Ignorado en modo [captureOnce].
+  final ScanFeedback? Function(String code)? onCode;
+
+  /// Modo captura: la primera lectura cierra la pantalla devolviendo el
+  /// código crudo (`Navigator.pop(code)`) — para llenar campos de formulario.
+  final bool captureOnce;
 
   @override
   State<ReceptionScannerPage> createState() => _ReceptionScannerPageState();
@@ -61,6 +67,13 @@ class _ReceptionScannerPageState extends State<ReceptionScannerPage> {
         : null;
     if (raw == null || raw.isEmpty) return;
 
+    // Modo captura: primera lectura → cerrar devolviendo el código.
+    if (widget.captureOnce) {
+      HapticFeedback.mediumImpact();
+      if (mounted) Navigator.of(context).pop(raw);
+      return;
+    }
+
     // Anti-rebote: la cámara lee el mismo código muchas veces por segundo.
     final now = DateTime.now();
     if (raw == _lastCode &&
@@ -70,7 +83,7 @@ class _ReceptionScannerPageState extends State<ReceptionScannerPage> {
     _lastCode = raw;
     _lastAt = now;
 
-    final feedback = widget.onCode(raw);
+    final feedback = widget.onCode!(raw);
     if (feedback == null) return;
     if (feedback.matched) {
       HapticFeedback.mediumImpact();

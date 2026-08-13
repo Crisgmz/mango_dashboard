@@ -98,21 +98,51 @@ class InventoryDataService {
   }
 
   /// Campos extra de la ficha de artículo que el snapshot de lista no trae.
-  Future<({String? barcode, String? purchaseUnit, double packSize})>
-      loadItemExtras(String itemId) async {
-    final row = await _client
-        .from('inventory_items')
-        .select('barcode, purchase_unit, pack_size')
-        .eq('id', itemId)
-        .single();
+  Future<
+      ({
+        String? barcode,
+        String? purchaseUnit,
+        double packSize,
+        String? preferredSupplierId,
+        String? preferredSupplierName,
+      })> loadItemExtras(String itemId) async {
+    Map<String, dynamic> row;
+    try {
+      row = Map<String, dynamic>.from(await _client
+          .from('inventory_items')
+          .select(
+              'barcode, purchase_unit, pack_size, preferred_supplier_id, suppliers(name)')
+          .eq('id', itemId)
+          .single());
+    } on PostgrestException {
+      // Backend sin la migración de suplidor preferido (20260813_0001).
+      row = Map<String, dynamic>.from(await _client
+          .from('inventory_items')
+          .select('barcode, purchase_unit, pack_size')
+          .eq('id', itemId)
+          .single());
+    }
     final rawPack = row['pack_size'];
+    final supplier = row['suppliers'];
     return (
       barcode: row['barcode']?.toString(),
       purchaseUnit: row['purchase_unit']?.toString(),
       packSize: rawPack is num
           ? rawPack.toDouble()
           : double.tryParse(rawPack?.toString() ?? '') ?? 1,
+      preferredSupplierId: row['preferred_supplier_id']?.toString(),
+      preferredSupplierName: supplier is Map<String, dynamic>
+          ? supplier['name']?.toString()
+          : null,
     );
+  }
+
+  /// Suplidor preferido del insumo (manda sobre la heurística de última
+  /// compra en "Qué comprar hoy"). Null lo limpia.
+  Future<void> setPreferredSupplier(String itemId, String? supplierId) async {
+    await _client
+        .from('inventory_items')
+        .update({'preferred_supplier_id': supplierId}).eq('id', itemId);
   }
 
   /// Kardex del artículo (vista `v_inventory_movements_with_balance`), del

@@ -194,7 +194,17 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                         value: hub.lowCount?.toString() ?? '—',
                       ),
                     ),
-                    // ROTACIÓN: oculta hasta tener costo de venta de 90 días.
+                    // ROTACIÓN: solo con datos suficientes (regla A.1).
+                    if (hub.rotation90d != null) ...[
+                      SizedBox(width: dpi.space(8)),
+                      Expanded(
+                        child: _HeaderPill(
+                          label: 'ROTACIÓN 90D',
+                          value:
+                              '${hub.rotation90d!.toStringAsFixed(1)}×',
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ],
@@ -230,6 +240,7 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                   subtitle: hub.lastCountAt != null
                       ? 'Último ${MangoFormatters.date(hub.lastCountAt!)}'
                           '${hub.lastCountStatus == 'in_progress' ? ' · en curso' : ''}'
+                          '${hub.lastCountAccuracy != null ? ' · ${hub.lastCountAccuracy!.toStringAsFixed(0)}% exacto' : ''}'
                       : 'Audita tu stock físico',
                   onTap: () => _push(const CountsView()),
                 ),

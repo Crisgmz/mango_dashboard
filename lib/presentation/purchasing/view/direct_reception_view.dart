@@ -11,6 +11,7 @@ import '../../../domain/inventory/inventory_models.dart';
 import '../../../domain/purchasing/supplier.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../../widgets/soft_item_picker_sheet.dart';
 import 'reception_scanner_page.dart';
 
 /// "Recibir stock" sin orden de compra (estilo Square): escanea o busca
@@ -180,10 +181,13 @@ class _DirectReceptionViewState extends ConsumerState<DirectReceptionView> {
   }
 
   Future<void> _addBySearch() async {
-    final item = await showModalBottomSheet<InventoryItemSnapshot>(
+    final item = await showSoftItemPicker(
       context: context,
-      isScrollControlled: true,
-      builder: (_) => _PickerSheet(items: _inventory),
+      items: _inventory,
+      subtitleOf: (i) => [
+        if (i.sku != null && i.sku!.isNotEmpty) i.sku!,
+        'Stock: ${MangoFormatters.number(i.totalQuantity)} ${i.unit}',
+      ].join(' · '),
     );
     if (item == null || !mounted) return;
     final existing =
@@ -568,73 +572,6 @@ class _DirectReceptionViewState extends ConsumerState<DirectReceptionView> {
                 SizedBox(height: dpi.space(24)),
               ],
             ),
-    );
-  }
-}
-
-class _PickerSheet extends StatefulWidget {
-  const _PickerSheet({required this.items});
-
-  final List<InventoryItemSnapshot> items;
-
-  @override
-  State<_PickerSheet> createState() => _PickerSheetState();
-}
-
-class _PickerSheetState extends State<_PickerSheet> {
-  String _query = '';
-
-  @override
-  Widget build(BuildContext context) {
-    final dpi = DpiScale.of(context);
-    final filtered = _query.isEmpty
-        ? widget.items
-        : widget.items
-            .where((i) =>
-                i.name.toLowerCase().contains(_query.toLowerCase()) ||
-                (i.sku?.toLowerCase().contains(_query.toLowerCase()) ?? false))
-            .toList(growable: false);
-    return SafeArea(
-      child: Padding(
-        padding:
-            EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        child: SizedBox(
-          height: MediaQuery.of(context).size.height * 0.7,
-          child: Column(
-            children: [
-              Padding(
-                padding: EdgeInsets.all(dpi.space(14)),
-                child: TextField(
-                  autofocus: true,
-                  onChanged: (v) => setState(() => _query = v),
-                  decoration: const InputDecoration(
-                    hintText: 'Buscar insumo…',
-                    prefixIcon: Icon(Icons.search_rounded),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: filtered.length,
-                  itemBuilder: (context, index) {
-                    final item = filtered[index];
-                    return ListTile(
-                      title: Text(item.name),
-                      subtitle: Text(
-                        [
-                          if (item.sku != null) item.sku!,
-                          'Stock: ${MangoFormatters.number(item.totalQuantity)} ${item.unit}',
-                        ].join(' · '),
-                      ),
-                      onTap: () => Navigator.of(context).pop(item),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }

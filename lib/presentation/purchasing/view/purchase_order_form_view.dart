@@ -8,7 +8,9 @@ import '../../../domain/inventory/inventory_models.dart';
 import '../../../domain/purchasing/purchase_order.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../../widgets/soft_item_picker_sheet.dart';
 import '../viewmodel/purchase_orders_view_model.dart';
+import 'reception_scanner_page.dart';
 
 /// Formulario de nueva orden de compra: suplidor, bodega destino, fecha
 /// esperada y líneas tomadas del inventario (cantidad y costo en unidad base,
@@ -41,6 +43,7 @@ class _PurchaseOrderFormViewState extends ConsumerState<PurchaseOrderFormView> {
   final List<PurchaseOrderLineDraft> _lines = [];
 
   List<InventoryItemSnapshot> _inventory = const [];
+  Map<String, String> _codeToItem = const {};
   bool _inventoryLoading = true;
 
   @override
@@ -79,9 +82,74 @@ class _PurchaseOrderFormViewState extends ConsumerState<PurchaseOrderFormView> {
           _inventoryLoading = false;
         });
       }
+      // Códigos de barra/SKU → escaneo directo de líneas.
+      try {
+        final codes = await ref
+            .read(purchasingDataServiceProvider)
+            .loadItemCodes(items.map((i) => i.itemId).toList(growable: false));
+        if (mounted) setState(() => _codeToItem = codes);
+      } catch (_) {/* escáner deshabilitado */}
     } catch (_) {
       if (mounted) setState(() => _inventoryLoading = false);
     }
+  }
+
+  /// Cada escaneo suma 1 a la línea del insumo (o la crea con cantidad 1 y
+  /// costo maestro prellenado) — mismo flujo que la recepción directa.
+  ScanFeedback? _handleScan(String code) {
+    final itemId = _codeToItem[code];
+    if (itemId == null) {
+      return const ScanFeedback(
+          matched: false, message: 'Código no registrado en inventario');
+    }
+    final item = _inventory.where((i) => i.itemId == itemId).firstOrNull;
+    if (item == null) {
+      return const ScanFeedback(matched: false, message: 'Insumo no encontrado');
+    }
+    final existing = _lines
+        .where((l) => l.inventoryItemId == itemId)
+        .firstOrNull;
+    final double qty;
+    if (existing != null) {
+      qty = existing.quantity + 1;
+      _lines[_lines.indexOf(existing)] = PurchaseOrderLineDraft(
+        inventoryItemId: existing.inventoryItemId,
+        description: existing.description,
+        quantity: qty,
+        unitCost: existing.unitCost,
+        taxRate: existing.taxRate,
+        unit: existing.unit,
+      );
+    } else {
+      qty = 1;
+      _lines.add(PurchaseOrderLineDraft(
+        inventoryItemId: item.itemId,
+        description: item.name,
+        quantity: 1,
+        unitCost: item.cost ?? 0,
+        taxRate: 18,
+        unit: item.unit,
+      ));
+    }
+    setState(() {});
+    return ScanFeedback(
+      matched: true,
+      message:
+          '${item.name} · ${MangoFormatters.number(qty)} ${item.unit}',
+    );
+  }
+
+  Future<void> _openScanner() async {
+    if (_codeToItem.isEmpty) {
+      _snack('Ningún insumo tiene código de barras ni SKU registrado.');
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ReceptionScannerPage(onCode: _handleScan),
+      ),
+    );
+    if (mounted) setState(() {});
   }
 
   void _snack(String msg) =>
@@ -110,10 +178,14 @@ class _PurchaseOrderFormViewState extends ConsumerState<PurchaseOrderFormView> {
       _snack('No hay insumos en el inventario para agregar.');
       return;
     }
-    final item = await showModalBottomSheet<InventoryItemSnapshot>(
+    final item = await showSoftItemPicker(
       context: context,
-      isScrollControlled: true,
-      builder: (_) => _ItemPickerSheet(items: _inventory),
+      items: _inventory,
+      subtitleOf: (i) => [
+        if (i.sku != null && i.sku!.isNotEmpty) i.sku!,
+        'Stock: ${MangoFormatters.number(i.totalQuantity)} ${i.unit}',
+        if (i.cost != null) 'Costo: ${MangoFormatters.currency(i.cost!)}',
+      ].join(' · '),
     );
     if (item == null || !mounted) return;
 
@@ -301,6 +373,11 @@ class _PurchaseOrderFormViewState extends ConsumerState<PurchaseOrderFormView> {
                 ),
               ),
               TextButton.icon(
+                onPressed: _openScanner,
+                icon: const Icon(Icons.qr_code_scanner_rounded, size: 16),
+                label: const Text('Escanear'),
+              ),
+              TextButton.icon(
                 onPressed: _addLine,
                 icon: const Icon(Icons.add_rounded, size: 18),
                 label: const Text('Agregar'),
@@ -373,76 +450,6 @@ class _PurchaseOrderFormViewState extends ConsumerState<PurchaseOrderFormView> {
 
           SizedBox(height: dpi.space(24)),
         ],
-      ),
-    );
-  }
-}
-
-/// Selector de insumo con búsqueda, sobre el inventario ya cargado.
-class _ItemPickerSheet extends StatefulWidget {
-  const _ItemPickerSheet({required this.items});
-
-  final List<InventoryItemSnapshot> items;
-
-  @override
-  State<_ItemPickerSheet> createState() => _ItemPickerSheetState();
-}
-
-class _ItemPickerSheetState extends State<_ItemPickerSheet> {
-  String _query = '';
-
-  @override
-  Widget build(BuildContext context) {
-    final dpi = DpiScale.of(context);
-    final filtered = _query.isEmpty
-        ? widget.items
-        : widget.items
-            .where((i) =>
-                i.name.toLowerCase().contains(_query.toLowerCase()) ||
-                (i.sku?.toLowerCase().contains(_query.toLowerCase()) ?? false))
-            .toList(growable: false);
-    return SafeArea(
-      child: Padding(
-        padding:
-            EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        child: SizedBox(
-          height: MediaQuery.of(context).size.height * 0.7,
-          child: Column(
-            children: [
-              Padding(
-                padding: EdgeInsets.all(dpi.space(14)),
-                child: TextField(
-                  autofocus: true,
-                  onChanged: (v) => setState(() => _query = v),
-                  decoration: const InputDecoration(
-                    hintText: 'Buscar insumo…',
-                    prefixIcon: Icon(Icons.search_rounded),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: filtered.length,
-                  itemBuilder: (context, index) {
-                    final item = filtered[index];
-                    return ListTile(
-                      title: Text(item.name),
-                      subtitle: Text(
-                        [
-                          if (item.sku != null) item.sku!,
-                          'Stock: ${MangoFormatters.number(item.totalQuantity)} ${item.unit}',
-                          if (item.cost != null)
-                            'Costo: ${MangoFormatters.currency(item.cost!)}',
-                        ].join(' · '),
-                      ),
-                      onTap: () => Navigator.of(context).pop(item),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

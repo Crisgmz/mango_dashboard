@@ -38,6 +38,7 @@ import '../widgets/customers_card.dart';
 import '../widgets/modifiers_card.dart';
 import '../widgets/waiter_performance_card.dart';
 import '../../inventory/view/inventory_hub_view.dart';
+import '../../widgets/marquee_text.dart';
 import '../../billing/view/billing_view.dart';
 import '../../notifications/view/notification_settings_view.dart';
 import '../../catalog/view/products_admin_view.dart';
@@ -656,9 +657,15 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
     final dpi = DpiScale.of(context);
     final profile = widget.profile;
     final greeting = _greetingByTime();
-    final businessName = profile.branchName?.trim().isNotEmpty == true
-        ? profile.branchName!
-        : (profile.businessName ?? 'Sin nombre');
+    // "Negocio - Sucursal" en una línea (con marquee si no cabe) — antes solo
+    // salía la sucursal y el nombre del negocio quedaba invisible.
+    final joined = [
+      if (profile.businessName?.trim().isNotEmpty == true)
+        profile.businessName!.trim(),
+      if (profile.branchName?.trim().isNotEmpty == true)
+        profile.branchName!.trim(),
+    ].join(' - ');
+    final businessLine = joined.isEmpty ? 'Sin nombre' : joined;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -742,14 +749,12 @@ class _HomeHeaderState extends ConsumerState<_HomeHeader> {
                   ],
                 ),
                 SizedBox(height: dpi.space(2)),
-                Text(
-                  businessName,
+                MarqueeText(
+                  businessLine,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         letterSpacing: 0.5,
                         color: MangoThemeFactory.mutedText(context),
                       ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),

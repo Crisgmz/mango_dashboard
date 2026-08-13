@@ -8,6 +8,7 @@ import '../../../domain/inventory/inventory_models.dart';
 import '../../../domain/inventory/stock_transfer_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../../widgets/soft_item_picker_sheet.dart';
 
 /// Transferencias entre bodegas (PRD 6.2): lista con estado, creación
 /// (origen → destino + líneas del inventario) y recepción en destino con
@@ -719,11 +720,11 @@ class _TransferFormViewState extends ConsumerState<_TransferFormView> {
       _snack('La bodega origen no tiene stock disponible.');
       return;
     }
-    final item = await showModalBottomSheet<InventoryItemSnapshot>(
+    final item = await showSoftItemPicker(
       context: context,
-      isScrollControlled: true,
-      builder: (_) => _TransferItemPicker(
-          items: available, stockOf: _stockInFrom),
+      items: available,
+      subtitleOf: (i) =>
+          'En origen: ${MangoFormatters.number(_stockInFrom(i))} ${i.unit}',
     );
     if (item == null || !mounted) return;
     if (_lines.any((l) => l.item.itemId == item.itemId)) return;
@@ -939,71 +940,6 @@ class _TransferFormViewState extends ConsumerState<_TransferFormView> {
           ),
           SizedBox(height: dpi.space(24)),
         ],
-      ),
-    );
-  }
-}
-
-class _TransferItemPicker extends StatefulWidget {
-  const _TransferItemPicker({required this.items, required this.stockOf});
-
-  final List<InventoryItemSnapshot> items;
-  final double Function(InventoryItemSnapshot) stockOf;
-
-  @override
-  State<_TransferItemPicker> createState() => _TransferItemPickerState();
-}
-
-class _TransferItemPickerState extends State<_TransferItemPicker> {
-  String _query = '';
-
-  @override
-  Widget build(BuildContext context) {
-    final dpi = DpiScale.of(context);
-    final filtered = _query.isEmpty
-        ? widget.items
-        : widget.items
-            .where((i) =>
-                i.name.toLowerCase().contains(_query.toLowerCase()) ||
-                (i.sku?.toLowerCase().contains(_query.toLowerCase()) ??
-                    false))
-            .toList(growable: false);
-    return SafeArea(
-      child: Padding(
-        padding:
-            EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        child: SizedBox(
-          height: MediaQuery.of(context).size.height * 0.7,
-          child: Column(
-            children: [
-              Padding(
-                padding: EdgeInsets.all(dpi.space(14)),
-                child: TextField(
-                  autofocus: true,
-                  onChanged: (v) => setState(() => _query = v),
-                  decoration: const InputDecoration(
-                    hintText: 'Buscar artículo…',
-                    prefixIcon: Icon(Icons.search_rounded),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: filtered.length,
-                  itemBuilder: (context, index) {
-                    final item = filtered[index];
-                    return ListTile(
-                      title: Text(item.name),
-                      subtitle: Text(
-                          'En origen: ${MangoFormatters.number(widget.stockOf(item))} ${item.unit}'),
-                      onTap: () => Navigator.of(context).pop(item),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

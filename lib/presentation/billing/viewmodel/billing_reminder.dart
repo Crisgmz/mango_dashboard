@@ -102,7 +102,8 @@ BillingReminder? computeBillingReminder(
     case BillingStatus.active:
       final days = state.daysUntilNextBilling;
       if (days == null || days < 0 || days > thresholdDays) return null;
-      final price = state.plan?.priceMonthly;
+      // Precio efectivo (precio especial incluido), igual que el cobro.
+      final price = state.effectivePriceMonthly;
       final amount = price != null ? ' de ${MangoFormatters.currency(price)}' : '';
       return BillingReminder(
         severity: hasVerifiedCard

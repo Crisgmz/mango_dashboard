@@ -206,7 +206,7 @@ class ReportsHubView extends ConsumerWidget {
                   icon: Icons.swap_vert_rounded,
                   accent: MangoThemeFactory.success,
                   title: 'Ingresos y egresos',
-                  subtitle: 'Depósitos, retiros y gastos de caja con sus notas',
+                  subtitle: 'Ingresos, retiros y gastos de caja con sus notas',
                   onTap: () {
                     final start = summary.periodStart ??
                         DateTime.now().subtract(const Duration(days: 30));

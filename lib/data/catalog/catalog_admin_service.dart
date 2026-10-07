@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart' show TimeOfDay;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/ids/uuid_v4.dart';
 import '../../domain/catalog/admin_product.dart';
 import '../../domain/catalog/catalog_options.dart';
 import '../../domain/catalog/product_category.dart';
@@ -95,15 +96,130 @@ class CatalogAdminService {
         .toList(growable: false);
   }
 
-  Future<List<ProductCategory>> loadCategories(String businessId) async {
+  Future<List<ProductCategory>> loadCategories(String businessId) async =>
+      (await loadCategoriesForAdmin(businessId)).categories;
+
+  /// Categorías en el orden del POS (`position`, luego nombre), activas e
+  /// inactivas. `categories.color` lo usa el POS pero no está en las
+  /// migraciones: si la columna no existe se lee sin ella y
+  /// [supportsColor] queda en false (la pantalla oculta el selector).
+  Future<({List<ProductCategory> categories, bool supportsColor})>
+      loadCategoriesForAdmin(String businessId) async {
+    List<dynamic> rows;
+    var supportsColor = true;
+    try {
+      rows = await _client
+          .from('categories')
+          .select('id, name, position, is_active, color')
+          .eq('business_id', businessId)
+          .order('position')
+          .order('name');
+    } on PostgrestException {
+      supportsColor = false;
+      rows = await _client
+          .from('categories')
+          .select('id, name, position, is_active')
+          .eq('business_id', businessId)
+          .order('position')
+          .order('name');
+    }
+    return (
+      categories: List<Map<String, dynamic>>.from(rows)
+          .map(ProductCategory.fromJson)
+          .toList(growable: false),
+      supportsColor: supportsColor,
+    );
+  }
+
+  /// Cuántos productos tiene cada categoría (`category_id → n`).
+  Future<Map<String, int>> loadCategoryProductCounts(String businessId) async {
     final rows = await _client
-        .from('categories')
-        .select('id, name')
-        .eq('business_id', businessId)
-        .order('name');
-    return List<Map<String, dynamic>>.from(rows)
-        .map(ProductCategory.fromJson)
-        .toList(growable: false);
+        .from('menu_items')
+        .select('category_id')
+        .eq('business_id', businessId);
+    final counts = <String, int>{};
+    for (final row in List<Map<String, dynamic>>.from(rows)) {
+      final id = row['category_id']?.toString();
+      if (id != null && id.isNotEmpty) counts[id] = (counts[id] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  /// Crea una categoría. Espejo de `CategoryRepository.create` del POS:
+  /// `categories.id` no tiene default en la base, el cliente genera el uuid.
+  Future<void> createCategory({
+    required String businessId,
+    required String name,
+    required int position,
+    String? color,
+  }) async {
+    await _client.from('categories').insert({
+      'id': uuidV4(),
+      'business_id': businessId,
+      'name': name,
+      'position': position,
+      'is_active': true,
+      'color': ?color,
+    });
+  }
+
+  /// Edita una categoría. [color] solo se envía si [writeColor] (la columna
+  /// puede no existir); null limpia el color.
+  Future<void> updateCategory({
+    required String id,
+    required String name,
+    required bool isActive,
+    String? color,
+    bool writeColor = false,
+  }) async {
+    await _client.from('categories').update({
+      'name': name,
+      'is_active': isActive,
+      if (writeColor) 'color': color,
+    }).eq('id', id);
+  }
+
+  Future<void> setCategoryActive(String id, bool isActive) async {
+    await _client.from('categories').update({'is_active': isActive}).eq('id', id);
+  }
+
+  /// Elimina una categoría vacía. Con productos no se borra (la FK de
+  /// `menu_items.category_id` lo impediría y el POS los dejaría sin grupo):
+  /// hay que moverlos a otra categoría o desactivarla.
+  Future<void> deleteCategory(String id) async {
+    final used = await _client
+        .from('menu_items')
+        .select('id')
+        .eq('category_id', id)
+        .limit(1);
+    if ((used as List).isNotEmpty) {
+      throw const CatalogException(
+        'La categoría tiene productos. Muévelos a otra categoría o desactívala en su lugar.',
+      );
+    }
+    try {
+      await _client.from('categories').delete().eq('id', id);
+    } on PostgrestException catch (e) {
+      if (e.code == '23503') {
+        throw const CatalogException(
+          'No se puede eliminar: la categoría está en uso. Desactívala en su lugar.',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// Guarda el orden nuevo en `position` (pasos de 10, como el POS). Solo
+  /// escribe las que cambiaron.
+  Future<void> reorderCategories(List<ProductCategory> ordered) async {
+    for (var i = 0; i < ordered.length; i++) {
+      final newPos = (i + 1) * 10;
+      if (ordered[i].position == newPos) continue;
+      await _client
+          .from('categories')
+          .update({'position': newPos})
+          .eq('id', ordered[i].id);
+    }
   }
 
   /// Activa/desactiva un producto (igual que el POS: `is_active`).

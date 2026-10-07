@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../domain/billing/billing_charge.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
 import '../viewmodel/billing_view_model.dart';
@@ -111,6 +113,7 @@ class _BillingViewState extends ConsumerState<BillingView>
       children: [
         _cardFlowBanner(context, vm, businessId),
         SubscriptionStatusCard(state: vm.state),
+        _refundNotice(context, vm),
         if (vm.hasVerifiedCard && vm.state?.canAttemptCharge == true) ...[
           SizedBox(height: dpi.space(14)),
           PayNowButton(businessId: businessId, state: vm.state!),
@@ -212,6 +215,28 @@ class _BillingViewState extends ConsumerState<BillingView>
       case BillingCardFlow.launching:
         return const SizedBox.shrink();
     }
+  }
+
+  /// Aviso de reembolso reciente (últimos 30 días). Sin esto el cliente solo
+  /// ve "Aprobado" por el monto completo y no sabe que se le devolvió dinero.
+  Widget _refundNotice(BuildContext context, BillingScreenState vm) {
+    final recent = latestRecentRefund(vm.charges ?? const []);
+    if (recent == null) return const SizedBox.shrink();
+    final dpi = DpiScale.of(context);
+    final refundedAt = recent.refund.refundedAt;
+    final chargedAt = recent.charge.completedAt ?? recent.charge.attemptedAt;
+    return Padding(
+      padding: EdgeInsets.only(top: dpi.space(14)),
+      child: BillingNotice(
+        color: MangoThemeFactory.success,
+        icon: Icons.currency_exchange_rounded,
+        message: 'Se te hizo un reembolso de '
+            '${MangoFormatters.currency(recent.refund.amount)} a tu tarjeta'
+            '${refundedAt != null ? ' el ${MangoFormatters.date(refundedAt)}' : ''}'
+            '${chargedAt != null ? ', del cobro del ${MangoFormatters.date(chargedAt)}' : ''}. '
+            'Puede tardar unos días en reflejarse en tu estado de cuenta.',
+      ),
+    );
   }
 
   Widget _errorState(BuildContext context, String message, String businessId) {

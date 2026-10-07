@@ -14,6 +14,7 @@ import '../../../core/auth/role_mapper.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../viewmodel/cash_register_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../widgets/cash_movement_dialog.dart';
 import '../widgets/growth_chip.dart';
 import '../widgets/period_filter_bar.dart';
 
@@ -44,7 +45,8 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
   @override
   void initState() {
     super.initState();
-    _start = widget.summary.periodStart ??
+    _start =
+        widget.summary.periodStart ??
         DateTime.now().subtract(const Duration(days: 1));
     _end = widget.summary.periodEnd ?? DateTime.now();
     _periodLabel = periodLabelFor(widget.summary.filter);
@@ -85,7 +87,8 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
     if (period == DetailPeriod.initial) {
       setState(() {
         _period = DetailPeriod.initial;
-        _start = widget.summary.periodStart ??
+        _start =
+            widget.summary.periodStart ??
             DateTime.now().subtract(const Duration(days: 1));
         _end = widget.summary.periodEnd ?? DateTime.now();
         _periodLabel = periodLabelFor(widget.summary.filter);
@@ -93,7 +96,11 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
       _reload();
       return;
     }
-    final range = rangeForDetailPeriod(period, DateTime.now(), cutoffHour: _cutoffHour);
+    final range = rangeForDetailPeriod(
+      period,
+      DateTime.now(),
+      cutoffHour: _cutoffHour,
+    );
     if (range == null) return;
     setState(() {
       _period = period;
@@ -108,7 +115,10 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
   void _applyCutoff(int hour) {
     setState(() => _cutoffHour = hour);
     if (_period == DetailPeriod.custom && _customRange != null) {
-      final range = operativeRangeForPickedDays(_customRange!, cutoffHour: hour);
+      final range = operativeRangeForPickedDays(
+        _customRange!,
+        cutoffHour: hour,
+      );
       setState(() {
         _start = range.start;
         _end = range.end;
@@ -138,8 +148,10 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
       initialDateRange: seed,
     );
     if (picked == null || !mounted) return;
-    final pickedRange =
-        operativeRangeForPickedDays(picked, cutoffHour: _cutoffHour);
+    final pickedRange = operativeRangeForPickedDays(
+      picked,
+      cutoffHour: _cutoffHour,
+    );
     final start = pickedRange.start;
     final end = pickedRange.end;
     setState(() {
@@ -147,7 +159,10 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
       _customRange = picked;
       _start = start;
       _end = end;
-      _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
+      _periodLabel = labelForDetailPeriod(
+        DetailPeriod.custom,
+        customRange: picked,
+      );
     });
     _reload();
   }
@@ -156,20 +171,24 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return _tickets;
     return _tickets
-        .where((t) =>
-            t.orderId.toLowerCase().contains(q) ||
-            (t.paymentMethodCode ?? '').toLowerCase().contains(q))
+        .where(
+          (t) =>
+              t.orderId.toLowerCase().contains(q) ||
+              (t.paymentMethodCode ?? '').toLowerCase().contains(q),
+        )
         .toList();
   }
 
   List<List<String>> _rowsForExport() {
     return _filteredTickets
-        .map((t) => [
-              t.orderId,
-              _formatDateTime(t.createdAt),
-              t.paymentMethodCode ?? '',
-              t.amount.toStringAsFixed(2),
-            ])
+        .map(
+          (t) => [
+            t.orderId,
+            _formatDateTime(t.createdAt),
+            t.paymentMethodCode ?? '',
+            t.amount.toStringAsFixed(2),
+          ],
+        )
         .toList();
   }
 
@@ -186,7 +205,8 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
     await ReportExportService.exportPdf(
       filename: 'ventas_${_periodLabel.replaceAll(' ', '_')}',
       title: 'Ventas',
-      subtitle: 'Periodo: $_periodLabel · Total: '
+      subtitle:
+          'Periodo: $_periodLabel · Total: '
           '${MangoFormatters.currency(_totalSales)}',
       headers: const ['Orden', 'Fecha', 'Método', 'Monto'],
       rows: _rowsForExport(),
@@ -213,7 +233,11 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
         children: [
           Padding(
             padding: EdgeInsets.fromLTRB(
-                dpi.space(16), dpi.space(16), dpi.space(16), 0),
+              dpi.space(16),
+              dpi.space(16),
+              dpi.space(16),
+              0,
+            ),
             child: _SalesSummaryHeader(
               totalSales: _totalSales,
               totalTickets: tickets.length,
@@ -241,49 +265,57 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
                 prefixIcon: const Icon(Icons.search_rounded),
                 isDense: true,
                 contentPadding: EdgeInsets.symmetric(
-                    horizontal: dpi.space(12), vertical: dpi.space(12)),
+                  horizontal: dpi.space(12),
+                  vertical: dpi.space(12),
+                ),
                 border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(dpi.radius(12))),
+                  borderRadius: BorderRadius.circular(dpi.radius(12)),
+                ),
               ),
             ),
           ),
           SizedBox(height: dpi.space(10)),
           Expanded(
-            child: Builder(builder: (context) {
-              if (_loading) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (_error != null) {
-                return Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(dpi.space(20)),
-                    child: Text(_error!,
+            child: Builder(
+              builder: (context) {
+                if (_loading) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (_error != null) {
+                  return Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(dpi.space(20)),
+                      child: Text(
+                        _error!,
                         style: TextStyle(color: MangoThemeFactory.danger),
-                        textAlign: TextAlign.center),
-                  ),
-                );
-              }
-              if (tickets.isEmpty) {
-                return Center(
-                  child: Text(
-                    _query.isEmpty
-                        ? 'No hay ventas en este periodo.'
-                        : 'Sin resultados para "$_query".',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                );
-              }
-              return ListView.builder(
-                padding: EdgeInsets.fromLTRB(
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  );
+                }
+                if (tickets.isEmpty) {
+                  return Center(
+                    child: Text(
+                      _query.isEmpty
+                          ? 'No hay ventas en este periodo.'
+                          : 'Sin resultados para "$_query".',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  );
+                }
+                return ListView.builder(
+                  padding: EdgeInsets.fromLTRB(
                     dpi.space(16),
                     0,
                     dpi.space(16),
-                    dpi.space(16) + MediaQuery.of(context).padding.bottom),
-                itemCount: tickets.length,
-                itemBuilder: (context, index) =>
-                    _TicketCard(ticket: tickets[index], index: index + 1),
-              );
-            }),
+                    dpi.space(16) + MediaQuery.of(context).padding.bottom,
+                  ),
+                  itemCount: tickets.length,
+                  itemBuilder: (context, index) =>
+                      _TicketCard(ticket: tickets[index], index: index + 1),
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -327,7 +359,11 @@ class _SalesSummaryHeader extends StatelessWidget {
               children: [
                 Text(
                   'Ventas · $periodLabel',
-                  style: TextStyle(color: Colors.white70, fontSize: dpi.font(12), fontWeight: FontWeight.w500),
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: dpi.font(12),
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
                 SizedBox(height: dpi.space(4)),
                 FittedBox(
@@ -335,7 +371,11 @@ class _SalesSummaryHeader extends StatelessWidget {
                   alignment: Alignment.centerLeft,
                   child: Text(
                     MangoFormatters.currency(totalSales),
-                    style: TextStyle(color: Colors.white, fontSize: dpi.font(26), fontWeight: FontWeight.w800),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: dpi.font(26),
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
               ],
@@ -347,7 +387,11 @@ class _SalesSummaryHeader extends StatelessWidget {
             children: [
               Text(
                 '$totalTickets',
-                style: TextStyle(color: Colors.white, fontSize: dpi.font(22), fontWeight: FontWeight.w800),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: dpi.font(22),
+                  fontWeight: FontWeight.w800,
+                ),
               ),
               Text(
                 'tickets',
@@ -386,7 +430,8 @@ class _TicketCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     final time = ticket.createdAt.toLocal();
-    final hour = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    final hour =
+        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
     final pmCode = ticket.paymentMethodCode;
     final pmColor = _methodColors[pmCode] ?? MangoThemeFactory.success;
     final pmIcon = _methodIcons[pmCode] ?? Icons.receipt_rounded;
@@ -426,15 +471,24 @@ class _TicketCard extends StatelessWidget {
               children: [
                 Text(
                   'Ticket #$index',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 SizedBox(height: dpi.space(2)),
-                Text(parts.join(' · '), style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  parts.join(' · '),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
                 if (pmCode != null) ...[
                   SizedBox(height: dpi.space(2)),
                   Text(
                     _methodLabels[pmCode] ?? 'Otro',
-                    style: TextStyle(fontSize: dpi.font(10), fontWeight: FontWeight.w600, color: pmColor),
+                    style: TextStyle(
+                      fontSize: dpi.font(10),
+                      fontWeight: FontWeight.w600,
+                      color: pmColor,
+                    ),
                   ),
                 ],
               ],
@@ -487,14 +541,14 @@ class _OrdersDetailViewState extends State<OrdersDetailView> {
     }
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Órdenes'),
-        centerTitle: false,
-      ),
+      appBar: AppBar(title: const Text('Órdenes'), centerTitle: false),
       body: Column(
         children: [
           Padding(
-            padding: EdgeInsets.symmetric(horizontal: dpi.space(16), vertical: dpi.space(8)),
+            padding: EdgeInsets.symmetric(
+              horizontal: dpi.space(16),
+              vertical: dpi.space(8),
+            ),
             child: _OrderFilterTabs(
               selectedIndex: _filterIndex,
               onChanged: (index) => setState(() => _filterIndex = index),
@@ -507,16 +561,22 @@ class _OrdersDetailViewState extends State<OrdersDetailView> {
                       _filterIndex == 1
                           ? 'No hay órdenes activas.'
                           : _filterIndex == 2
-                              ? 'No hay órdenes cerradas.'
-                              : _filterIndex == 3
-                                  ? 'No hay órdenes canceladas en el período.'
-                                  : 'No hay órdenes registradas.',
+                          ? 'No hay órdenes cerradas.'
+                          : _filterIndex == 3
+                          ? 'No hay órdenes canceladas en el período.'
+                          : 'No hay órdenes registradas.',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   )
                 : ListView.builder(
-                    padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(10), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
-                    itemCount: displayedOrders.length + (_filterIndex == 0 ? 1 : 0),
+                    padding: EdgeInsets.fromLTRB(
+                      dpi.space(16),
+                      dpi.space(10),
+                      dpi.space(16),
+                      dpi.space(16) + MediaQuery.of(context).padding.bottom,
+                    ),
+                    itemCount:
+                        displayedOrders.length + (_filterIndex == 0 ? 1 : 0),
                     itemBuilder: (context, index) {
                       if (_filterIndex == 0 && index == 0) {
                         return _OrdersSummaryHeader(
@@ -524,44 +584,58 @@ class _OrdersDetailViewState extends State<OrdersDetailView> {
                           active: widget.summary.activeOrders,
                         );
                       }
-                      
+
                       final orderIndex = _filterIndex == 0 ? index - 1 : index;
                       final order = displayedOrders[orderIndex];
 
                       // Section headers if "Todas" is selected
                       if (_filterIndex == 0) {
-                         if (orderIndex == 0 && widget.summary.liveOrders.isNotEmpty) {
-                           return Column(
-                             crossAxisAlignment: CrossAxisAlignment.start,
-                             children: [
-                               _SectionHeader(title: 'ACTIVAS', count: widget.summary.liveOrders.length, color: MangoThemeFactory.mango),
-                               _OrderDetailCard(order: order),
-                             ],
-                           );
-                         }
-                         if (orderIndex == widget.summary.liveOrders.length && widget.summary.closedOrders.isNotEmpty) {
-                           return Column(
-                             crossAxisAlignment: CrossAxisAlignment.start,
-                             children: [
-                               SizedBox(height: dpi.space(16)),
-                               _SectionHeader(title: 'CERRADAS', count: widget.summary.closedOrders.length, color: MangoThemeFactory.neutral),
-                               _OrderDetailCard(order: order),
-                             ],
-                           );
-                         }
-                         if (orderIndex ==
-                                 widget.summary.liveOrders.length +
-                                     widget.summary.closedOrders.length &&
-                             widget.summary.cancelledOrders.isNotEmpty) {
-                           return Column(
-                             crossAxisAlignment: CrossAxisAlignment.start,
-                             children: [
-                               SizedBox(height: dpi.space(16)),
-                               _SectionHeader(title: 'CANCELADAS', count: widget.summary.cancelledOrders.length, color: MangoThemeFactory.danger),
-                               _OrderDetailCard(order: order),
-                             ],
-                           );
-                         }
+                        if (orderIndex == 0 &&
+                            widget.summary.liveOrders.isNotEmpty) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _SectionHeader(
+                                title: 'ACTIVAS',
+                                count: widget.summary.liveOrders.length,
+                                color: MangoThemeFactory.mango,
+                              ),
+                              _OrderDetailCard(order: order),
+                            ],
+                          );
+                        }
+                        if (orderIndex == widget.summary.liveOrders.length &&
+                            widget.summary.closedOrders.isNotEmpty) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(height: dpi.space(16)),
+                              _SectionHeader(
+                                title: 'CERRADAS',
+                                count: widget.summary.closedOrders.length,
+                                color: MangoThemeFactory.neutral,
+                              ),
+                              _OrderDetailCard(order: order),
+                            ],
+                          );
+                        }
+                        if (orderIndex ==
+                                widget.summary.liveOrders.length +
+                                    widget.summary.closedOrders.length &&
+                            widget.summary.cancelledOrders.isNotEmpty) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(height: dpi.space(16)),
+                              _SectionHeader(
+                                title: 'CANCELADAS',
+                                count: widget.summary.cancelledOrders.length,
+                                color: MangoThemeFactory.danger,
+                              ),
+                              _OrderDetailCard(order: order),
+                            ],
+                          );
+                        }
                       }
 
                       return _OrderDetailCard(order: order);
@@ -575,7 +649,11 @@ class _OrdersDetailViewState extends State<OrdersDetailView> {
 }
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.title, required this.count, required this.color});
+  const _SectionHeader({
+    required this.title,
+    required this.count,
+    required this.color,
+  });
   final String title;
   final int count;
   final Color color;
@@ -598,14 +676,21 @@ class _SectionHeader extends StatelessWidget {
           ),
           SizedBox(width: dpi.space(8)),
           Container(
-            padding: EdgeInsets.symmetric(horizontal: dpi.space(6), vertical: dpi.space(2)),
+            padding: EdgeInsets.symmetric(
+              horizontal: dpi.space(6),
+              vertical: dpi.space(2),
+            ),
             decoration: BoxDecoration(
               color: color.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(dpi.radius(6)),
             ),
             child: Text(
               '$count',
-              style: TextStyle(fontSize: dpi.font(10), fontWeight: FontWeight.w700, color: color),
+              style: TextStyle(
+                fontSize: dpi.font(10),
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
             ),
           ),
         ],
@@ -615,7 +700,10 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _OrderFilterTabs extends StatelessWidget {
-  const _OrderFilterTabs({required this.selectedIndex, required this.onChanged});
+  const _OrderFilterTabs({
+    required this.selectedIndex,
+    required this.onChanged,
+  });
   final int selectedIndex;
   final ValueChanged<int> onChanged;
 
@@ -632,10 +720,26 @@ class _OrderFilterTabs extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _TabItem(label: 'Todas', isSelected: selectedIndex == 0, onTap: () => onChanged(0)),
-          _TabItem(label: 'Activas', isSelected: selectedIndex == 1, onTap: () => onChanged(1)),
-          _TabItem(label: 'Cerradas', isSelected: selectedIndex == 2, onTap: () => onChanged(2)),
-          _TabItem(label: 'Canceladas', isSelected: selectedIndex == 3, onTap: () => onChanged(3)),
+          _TabItem(
+            label: 'Todas',
+            isSelected: selectedIndex == 0,
+            onTap: () => onChanged(0),
+          ),
+          _TabItem(
+            label: 'Activas',
+            isSelected: selectedIndex == 1,
+            onTap: () => onChanged(1),
+          ),
+          _TabItem(
+            label: 'Cerradas',
+            isSelected: selectedIndex == 2,
+            onTap: () => onChanged(2),
+          ),
+          _TabItem(
+            label: 'Canceladas',
+            isSelected: selectedIndex == 3,
+            onTap: () => onChanged(3),
+          ),
         ],
       ),
     );
@@ -643,7 +747,11 @@ class _OrderFilterTabs extends StatelessWidget {
 }
 
 class _TabItem extends StatelessWidget {
-  const _TabItem({required this.label, required this.isSelected, required this.onTap});
+  const _TabItem({
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
   final String label;
   final bool isSelected;
   final VoidCallback onTap;
@@ -665,7 +773,9 @@ class _TabItem extends StatelessWidget {
             style: TextStyle(
               fontSize: dpi.font(12),
               fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-              color: isSelected ? Colors.white : MangoThemeFactory.textColor(context).withValues(alpha: 0.6),
+              color: isSelected
+                  ? Colors.white
+                  : MangoThemeFactory.textColor(context).withValues(alpha: 0.6),
             ),
           ),
         ),
@@ -687,7 +797,10 @@ class _OrdersSummaryHeader extends StatelessWidget {
       padding: EdgeInsets.all(dpi.space(18)),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [MangoThemeFactory.mango, MangoThemeFactory.mango.withValues(alpha: 0.8)],
+          colors: [
+            MangoThemeFactory.mango,
+            MangoThemeFactory.mango.withValues(alpha: 0.8),
+          ],
         ),
         borderRadius: BorderRadius.circular(dpi.radius(20)),
       ),
@@ -697,17 +810,40 @@ class _OrdersSummaryHeader extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Total órdenes', style: TextStyle(color: Colors.white70, fontSize: dpi.font(12))),
+                Text(
+                  'Total órdenes',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: dpi.font(12),
+                  ),
+                ),
                 SizedBox(height: dpi.space(4)),
-                Text('$total', style: TextStyle(color: Colors.white, fontSize: dpi.font(26), fontWeight: FontWeight.w800)),
+                Text(
+                  '$total',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: dpi.font(26),
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               ],
             ),
           ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text('$active', style: TextStyle(color: Colors.white, fontSize: dpi.font(22), fontWeight: FontWeight.w800)),
-              Text('activas', style: TextStyle(color: Colors.white70, fontSize: dpi.font(11))),
+              Text(
+                '$active',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: dpi.font(22),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              Text(
+                'activas',
+                style: TextStyle(color: Colors.white70, fontSize: dpi.font(11)),
+              ),
             ],
           ),
         ],
@@ -728,9 +864,11 @@ class _OrderDetailCard extends StatelessWidget {
     final accent = cancelled
         ? MangoThemeFactory.danger
         : isDone
-            ? MangoThemeFactory.neutral
-            : MangoThemeFactory.mango;
-    final notes = cancelled ? order.cancellationNotes : const <CancellationNote>[];
+        ? MangoThemeFactory.neutral
+        : MangoThemeFactory.mango;
+    final notes = cancelled
+        ? order.cancellationNotes
+        : const <CancellationNote>[];
     return Container(
       margin: EdgeInsets.only(bottom: dpi.space(10)),
       padding: EdgeInsets.all(dpi.space(14)),
@@ -755,8 +893,8 @@ class _OrderDetailCard extends StatelessWidget {
                   cancelled
                       ? Icons.remove_shopping_cart_rounded
                       : isDone
-                          ? Icons.check_circle_outline_rounded
-                          : Icons.restaurant_rounded,
+                      ? Icons.check_circle_outline_rounded
+                      : Icons.restaurant_rounded,
                   color: accent,
                   size: dpi.icon(18),
                 ),
@@ -766,7 +904,12 @@ class _OrderDetailCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(order.title, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                    Text(
+                      order.title,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                     SizedBox(height: dpi.space(2)),
                     Text(
                       cancelled ? 'CANCELADA' : order.subtitle,
@@ -803,32 +946,44 @@ class _OrderDetailCard extends StatelessWidget {
                 ),
               )
             else
-              ...notes.map((n) => Padding(
-                    padding: EdgeInsets.only(bottom: dpi.space(3)),
-                    child: Text(
-                      n.at != null
-                          ? '${n.reason} — ${n.author} · ${MangoFormatters.dateTime(n.at!)}'
-                          : '${n.reason} — ${n.author}',
-                      style: TextStyle(
-                        fontSize: dpi.font(11.5),
-                        color: MangoThemeFactory.textColor(context),
-                      ),
+              ...notes.map(
+                (n) => Padding(
+                  padding: EdgeInsets.only(bottom: dpi.space(3)),
+                  child: Text(
+                    n.at != null
+                        ? '${n.reason} — ${n.author} · ${MangoFormatters.dateTime(n.at!)}'
+                        : '${n.reason} — ${n.author}',
+                    style: TextStyle(
+                      fontSize: dpi.font(11.5),
+                      color: MangoThemeFactory.textColor(context),
                     ),
-                  )),
+                  ),
+                ),
+              ),
           ],
           if (order.items.isNotEmpty) ...[
             SizedBox(height: dpi.space(12)),
-            ...order.items.take(4).map(
-              (item) => Padding(
-                padding: EdgeInsets.only(bottom: dpi.space(6)),
-                child: Row(
-                  children: [
-                    Expanded(child: Text(item.name, style: Theme.of(context).textTheme.bodySmall)),
-                    Text('${item.quantity.toStringAsFixed(0)}x', style: Theme.of(context).textTheme.bodySmall),
-                  ],
+            ...order.items
+                .take(4)
+                .map(
+                  (item) => Padding(
+                    padding: EdgeInsets.only(bottom: dpi.space(6)),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item.name,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                        Text(
+                          '${item.quantity.toStringAsFixed(0)}x',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            ),
           ],
         ],
       ),
@@ -849,16 +1004,29 @@ class PendingDetailView extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Pendiente por cobrar')),
       body: tables.isEmpty
-          ? Center(child: Text('No hay mesas pendientes.', style: Theme.of(context).textTheme.bodySmall))
+          ? Center(
+              child: Text(
+                'No hay mesas pendientes.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            )
           : ListView(
-              padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
+              padding: EdgeInsets.fromLTRB(
+                dpi.space(16),
+                dpi.space(16),
+                dpi.space(16),
+                dpi.space(16) + MediaQuery.of(context).padding.bottom,
+              ),
               children: [
                 Container(
                   margin: EdgeInsets.only(bottom: dpi.space(16)),
                   padding: EdgeInsets.all(dpi.space(18)),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [MangoThemeFactory.warning, MangoThemeFactory.warning.withValues(alpha: 0.8)],
+                      colors: [
+                        MangoThemeFactory.warning,
+                        MangoThemeFactory.warning.withValues(alpha: 0.8),
+                      ],
                     ),
                     borderRadius: BorderRadius.circular(dpi.radius(20)),
                   ),
@@ -868,18 +1036,32 @@ class PendingDetailView extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Pendiente total', style: TextStyle(color: Colors.white70, fontSize: dpi.font(12))),
+                            Text(
+                              'Pendiente total',
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: dpi.font(12),
+                              ),
+                            ),
                             SizedBox(height: dpi.space(4)),
                             Text(
                               MangoFormatters.currency(summary.pendingAmount),
-                              style: TextStyle(color: Colors.white, fontSize: dpi.font(26), fontWeight: FontWeight.w800),
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: dpi.font(26),
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ],
                         ),
                       ),
                       Text(
                         '${tables.length} mesas',
-                        style: TextStyle(color: Colors.white, fontSize: dpi.font(14), fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: dpi.font(14),
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ],
                   ),
@@ -915,14 +1097,23 @@ class _PendingTableCard extends StatelessWidget {
               color: MangoThemeFactory.warning.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(dpi.radius(10)),
             ),
-            child: Icon(Icons.table_restaurant_rounded, color: MangoThemeFactory.warning, size: dpi.icon(18)),
+            child: Icon(
+              Icons.table_restaurant_rounded,
+              color: MangoThemeFactory.warning,
+              size: dpi.icon(18),
+            ),
           ),
           SizedBox(width: dpi.space(12)),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(table.tableName, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                Text(
+                  table.tableName,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
                 SizedBox(height: dpi.space(2)),
                 Text(
                   '${table.customerName} · ${table.itemCount} items',
@@ -960,25 +1151,43 @@ class AverageTicketDetailView extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Ticket Promedio')),
       body: ListView(
-        padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
+        padding: EdgeInsets.fromLTRB(
+          dpi.space(16),
+          dpi.space(16),
+          dpi.space(16),
+          dpi.space(16) + MediaQuery.of(context).padding.bottom,
+        ),
         children: [
           Container(
             margin: EdgeInsets.only(bottom: dpi.space(16)),
             padding: EdgeInsets.all(dpi.space(18)),
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [MangoThemeFactory.info, MangoThemeFactory.info.withValues(alpha: 0.8)],
+                colors: [
+                  MangoThemeFactory.info,
+                  MangoThemeFactory.info.withValues(alpha: 0.8),
+                ],
               ),
               borderRadius: BorderRadius.circular(dpi.radius(20)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Promedio por ticket', style: TextStyle(color: Colors.white70, fontSize: dpi.font(12))),
+                Text(
+                  'Promedio por ticket',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: dpi.font(12),
+                  ),
+                ),
                 SizedBox(height: dpi.space(4)),
                 Text(
                   MangoFormatters.currency(avg),
-                  style: TextStyle(color: Colors.white, fontSize: dpi.font(28), fontWeight: FontWeight.w800),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: dpi.font(28),
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ],
             ),
@@ -1007,15 +1216,28 @@ class AverageTicketDetailView extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Rangos estimados', style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'Rangos estimados',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 SizedBox(height: dpi.space(12)),
-                _RangeBar(label: 'Bajo (< RD\$500)', count: summary.tickets.where((t) => t.amount < 500).length, total: tickets),
                 _RangeBar(
-                  label: 'Medio (RD\$500 - RD\$1500)',
-                  count: summary.tickets.where((t) => t.amount >= 500 && t.amount < 1500).length,
+                  label: 'Bajo (< RD\$500)',
+                  count: summary.tickets.where((t) => t.amount < 500).length,
                   total: tickets,
                 ),
-                _RangeBar(label: 'Alto (> RD\$1500)', count: summary.tickets.where((t) => t.amount >= 1500).length, total: tickets),
+                _RangeBar(
+                  label: 'Medio (RD\$500 - RD\$1500)',
+                  count: summary.tickets
+                      .where((t) => t.amount >= 500 && t.amount < 1500)
+                      .length,
+                  total: tickets,
+                ),
+                _RangeBar(
+                  label: 'Alto (> RD\$1500)',
+                  count: summary.tickets.where((t) => t.amount >= 1500).length,
+                  total: tickets,
+                ),
               ],
             ),
           ),
@@ -1041,22 +1263,39 @@ class CashRegisterDetailView extends ConsumerWidget {
     final err = state.error ?? error;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cierres de Caja'),
-        centerTitle: false,
-      ),
+      appBar: AppBar(title: const Text('Cierres de Caja'), centerTitle: false),
       body: err != null
-          ? Center(child: Text(err, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: MangoThemeFactory.danger)))
+          ? Center(
+              child: Text(
+                err,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: MangoThemeFactory.danger,
+                ),
+              ),
+            )
           : data == null
-          ? Center(child: Text('Cargando cajas...', style: Theme.of(context).textTheme.bodySmall))
+          ? Center(
+              child: Text(
+                'Cargando cajas...',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            )
           : ListView(
-              padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
+              padding: EdgeInsets.fromLTRB(
+                dpi.space(16),
+                dpi.space(16),
+                dpi.space(16),
+                dpi.space(16) + MediaQuery.of(context).padding.bottom,
+              ),
               children: [
                 Container(
                   padding: EdgeInsets.all(dpi.space(18)),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [MangoThemeFactory.info, MangoThemeFactory.info.withValues(alpha: 0.8)],
+                      colors: [
+                        MangoThemeFactory.info,
+                        MangoThemeFactory.info.withValues(alpha: 0.8),
+                      ],
                     ),
                     borderRadius: BorderRadius.circular(dpi.radius(20)),
                   ),
@@ -1068,12 +1307,20 @@ class CashRegisterDetailView extends ConsumerWidget {
                           children: [
                             Text(
                               'Cierres de caja',
-                              style: TextStyle(color: Colors.white70, fontSize: dpi.font(12), fontWeight: FontWeight.w500),
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: dpi.font(12),
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
                             SizedBox(height: dpi.space(4)),
                             Text(
                               '${data.openRegistersCount} abiertas · ${data.closings.length} cierres',
-                              style: TextStyle(color: Colors.white, fontSize: dpi.font(24), fontWeight: FontWeight.w800),
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: dpi.font(24),
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ],
                         ),
@@ -1085,16 +1332,25 @@ class CashRegisterDetailView extends ConsumerWidget {
                           color: Colors.white.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(dpi.radius(14)),
                         ),
-                        child: Icon(Icons.point_of_sale_rounded, color: Colors.white, size: dpi.icon(24)),
+                        child: Icon(
+                          Icons.point_of_sale_rounded,
+                          color: Colors.white,
+                          size: dpi.icon(24),
+                        ),
                       ),
                     ],
                   ),
                 ),
                 SizedBox(height: dpi.space(16)),
                 if (data.openRegisters.isNotEmpty) ...[
-                  Text('Cajas abiertas', style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    'Cajas abiertas',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   SizedBox(height: dpi.space(10)),
-                  ...data.openRegisters.map((session) => _OpenRegisterCard(session: session)),
+                  ...data.openRegisters.map(
+                    (session) => _OpenRegisterCard(session: session),
+                  ),
                   SizedBox(height: dpi.space(18)),
                 ],
                 if (data.closings.isEmpty)
@@ -1104,7 +1360,9 @@ class CashRegisterDetailView extends ConsumerWidget {
                     decoration: BoxDecoration(
                       color: MangoThemeFactory.cardColor(context),
                       borderRadius: BorderRadius.circular(dpi.radius(20)),
-                      border: Border.all(color: MangoThemeFactory.borderColor(context)),
+                      border: Border.all(
+                        color: MangoThemeFactory.borderColor(context),
+                      ),
                     ),
                     child: Column(
                       children: [
@@ -1112,15 +1370,22 @@ class CashRegisterDetailView extends ConsumerWidget {
                           width: dpi.scale(56),
                           height: dpi.scale(56),
                           decoration: BoxDecoration(
-                            color: MangoThemeFactory.mango.withValues(alpha: 0.1),
+                            color: MangoThemeFactory.mango.withValues(
+                              alpha: 0.1,
+                            ),
                             borderRadius: BorderRadius.circular(dpi.radius(16)),
                           ),
-                          child: Icon(Icons.inbox_rounded, color: MangoThemeFactory.mango, size: dpi.icon(28)),
+                          child: Icon(
+                            Icons.inbox_rounded,
+                            color: MangoThemeFactory.mango,
+                            size: dpi.icon(28),
+                          ),
                         ),
                         SizedBox(height: dpi.space(14)),
                         Text(
                           'Sin cierres registrados',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
                         ),
                         SizedBox(height: dpi.space(6)),
                         Text(
@@ -1132,9 +1397,14 @@ class CashRegisterDetailView extends ConsumerWidget {
                     ),
                   )
                 else ...[
-                  Text('Historial de cierres', style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    'Historial de cierres',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   SizedBox(height: dpi.space(10)),
-                  ...data.closings.map((closing) => _ClosingCard(closing: closing)),
+                  ...data.closings.map(
+                    (closing) => _ClosingCard(closing: closing),
+                  ),
                 ],
                 SizedBox(height: dpi.space(30)),
               ],
@@ -1160,59 +1430,100 @@ class _OpenRegisterCard extends StatelessWidget {
         builder: (_) => _OpenRegisterDetailSheet(session: session),
       ),
       child: Container(
-      margin: EdgeInsets.only(bottom: dpi.space(10)),
-      padding: EdgeInsets.all(dpi.space(14)),
-      decoration: BoxDecoration(
-        color: MangoThemeFactory.cardColor(context),
-        borderRadius: BorderRadius.circular(dpi.radius(16)),
-        border: Border.all(color: MangoThemeFactory.borderColor(context)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: dpi.scale(40),
-            height: dpi.scale(40),
-            decoration: BoxDecoration(
-              color: MangoThemeFactory.success.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(dpi.radius(12)),
+        margin: EdgeInsets.only(bottom: dpi.space(10)),
+        padding: EdgeInsets.all(dpi.space(14)),
+        decoration: BoxDecoration(
+          color: MangoThemeFactory.cardColor(context),
+          borderRadius: BorderRadius.circular(dpi.radius(16)),
+          border: Border.all(color: MangoThemeFactory.borderColor(context)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: dpi.scale(40),
+              height: dpi.scale(40),
+              decoration: BoxDecoration(
+                color: MangoThemeFactory.success.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(dpi.radius(12)),
+              ),
+              child: Icon(
+                Icons.point_of_sale_rounded,
+                color: MangoThemeFactory.success,
+                size: dpi.icon(20),
+              ),
             ),
-            child: Icon(Icons.point_of_sale_rounded, color: MangoThemeFactory.success, size: dpi.icon(20)),
-          ),
-          SizedBox(width: dpi.space(12)),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(session.registerName, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-                SizedBox(height: dpi.space(2)),
-                Text('Abierta por ${session.openedByName}', style: Theme.of(context).textTheme.bodySmall),
-                Text('Apertura: ${MangoFormatters.currency(session.openingAmount)}', style: Theme.of(context).textTheme.bodySmall),
-                if (session.deviceName != null && session.deviceName!.trim().isNotEmpty)
-                  Text(session.deviceName!, style: Theme.of(context).textTheme.bodySmall),
-                SizedBox(height: dpi.space(6)),
-                Wrap(
-                  spacing: dpi.space(10),
-                  runSpacing: dpi.space(4),
-                  children: [
-                    if (session.cashSales > 0)
-                      _PayMethodChip(icon: Icons.payments_rounded, label: MangoFormatters.currency(session.cashSales), color: MangoThemeFactory.success),
-                    if (session.cardSales > 0)
-                      _PayMethodChip(icon: Icons.credit_card_rounded, label: MangoFormatters.currency(session.cardSales), color: MangoThemeFactory.payCard),
-                    if (session.transferSales > 0)
-                      _PayMethodChip(icon: Icons.swap_horiz_rounded, label: MangoFormatters.currency(session.transferSales), color: MangoThemeFactory.payTransfer),
-                    if (session.otherSales > 0)
-                      _PayMethodChip(icon: Icons.more_horiz_rounded, label: MangoFormatters.currency(session.otherSales), color: MangoThemeFactory.neutral),
-                  ],
-                ),
-              ],
+            SizedBox(width: dpi.space(12)),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    session.registerName,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  SizedBox(height: dpi.space(2)),
+                  Text(
+                    'Abierta por ${session.openedByName}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  Text(
+                    'Apertura: ${MangoFormatters.currency(session.openingAmount)}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (session.deviceName != null &&
+                      session.deviceName!.trim().isNotEmpty)
+                    Text(
+                      session.deviceName!,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  SizedBox(height: dpi.space(6)),
+                  Wrap(
+                    spacing: dpi.space(10),
+                    runSpacing: dpi.space(4),
+                    children: [
+                      if (session.cashSales > 0)
+                        _PayMethodChip(
+                          icon: Icons.payments_rounded,
+                          label: MangoFormatters.currency(session.cashSales),
+                          color: MangoThemeFactory.success,
+                        ),
+                      if (session.cardSales > 0)
+                        _PayMethodChip(
+                          icon: Icons.credit_card_rounded,
+                          label: MangoFormatters.currency(session.cardSales),
+                          color: MangoThemeFactory.payCard,
+                        ),
+                      if (session.transferSales > 0)
+                        _PayMethodChip(
+                          icon: Icons.swap_horiz_rounded,
+                          label: MangoFormatters.currency(
+                            session.transferSales,
+                          ),
+                          color: MangoThemeFactory.payTransfer,
+                        ),
+                      if (session.otherSales > 0)
+                        _PayMethodChip(
+                          icon: Icons.more_horiz_rounded,
+                          label: MangoFormatters.currency(session.otherSales),
+                          color: MangoThemeFactory.neutral,
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-          Text(
-            MangoFormatters.currency(session.totalSales),
-            style: TextStyle(fontSize: dpi.font(14), fontWeight: FontWeight.w800, color: MangoThemeFactory.textColor(context)),
-          ),
-        ],
-      ),
+            Text(
+              MangoFormatters.currency(session.totalSales),
+              style: TextStyle(
+                fontSize: dpi.font(14),
+                fontWeight: FontWeight.w800,
+                color: MangoThemeFactory.textColor(context),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1246,7 +1557,11 @@ class _OpenRegisterDetailSheetState
   }
 
   Future<void> _openTransactions(
-      String type, String title, IconData icon, Color color) async {
+    String type,
+    String title,
+    IconData icon,
+    Color color,
+  ) async {
     List<CashTransactionEntry> all;
     try {
       all = await _transactionsFuture;
@@ -1265,7 +1580,12 @@ class _OpenRegisterDetailSheetState
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _TransactionListSheet(
-          title: title, icon: icon, color: color, total: total, entries: entries),
+        title: title,
+        icon: icon,
+        color: color,
+        total: total,
+        entries: entries,
+      ),
     );
   }
 
@@ -1276,14 +1596,20 @@ class _OpenRegisterDetailSheetState
     return SafeArea(
       top: false,
       child: Container(
-        constraints:
-            BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.85,
+        ),
         padding: EdgeInsets.fromLTRB(
-            dpi.space(20), dpi.space(16), dpi.space(20), dpi.space(20)),
+          dpi.space(20),
+          dpi.space(16),
+          dpi.space(20),
+          dpi.space(20),
+        ),
         decoration: BoxDecoration(
           color: Theme.of(context).scaffoldBackgroundColor,
-          borderRadius:
-              BorderRadius.vertical(top: Radius.circular(dpi.radius(24))),
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(dpi.radius(24)),
+          ),
         ),
         child: ListView(
           shrinkWrap: true,
@@ -1294,28 +1620,36 @@ class _OpenRegisterDetailSheetState
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(s.registerName,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleLarge
-                              ?.copyWith(fontWeight: FontWeight.w800)),
-                      Text('Abierta por ${s.openedByName}',
-                          style: Theme.of(context).textTheme.bodySmall),
+                      Text(
+                        s.registerName,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      Text(
+                        'Abierta por ${s.openedByName}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     ],
                   ),
                 ),
                 Container(
                   padding: EdgeInsets.symmetric(
-                      horizontal: dpi.space(10), vertical: dpi.space(4)),
+                    horizontal: dpi.space(10),
+                    vertical: dpi.space(4),
+                  ),
                   decoration: BoxDecoration(
                     color: MangoThemeFactory.success.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(dpi.radius(8)),
                   ),
-                  child: Text('ABIERTA',
-                      style: TextStyle(
-                          fontSize: dpi.font(10),
-                          fontWeight: FontWeight.w800,
-                          color: MangoThemeFactory.success)),
+                  child: Text(
+                    'ABIERTA',
+                    style: TextStyle(
+                      fontSize: dpi.font(10),
+                      fontWeight: FontWeight.w800,
+                      color: MangoThemeFactory.success,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -1329,15 +1663,39 @@ class _OpenRegisterDetailSheetState
             SizedBox(height: dpi.space(14)),
             _title(context, 'Movimientos de caja'),
             _row(context, 'Apertura', s.openingAmount),
-            _row(context, '+ Depósitos', s.totalDeposits,
-                onTap: () => _openTransactions('deposit', 'Depósitos',
-                    Icons.add_circle_outline_rounded, MangoThemeFactory.success)),
-            _row(context, '− Retiros', s.totalWithdrawals,
-                onTap: () => _openTransactions('withdrawal', 'Retiros',
-                    Icons.remove_circle_outline_rounded, MangoThemeFactory.warning)),
-            _row(context, '− Gastos', s.totalExpenses,
-                onTap: () => _openTransactions('expense', 'Gastos',
-                    Icons.receipt_long_rounded, MangoThemeFactory.danger)),
+            _row(
+              context,
+              '+ Depósitos',
+              s.totalDeposits,
+              onTap: () => _openTransactions(
+                'deposit',
+                'Depósitos',
+                Icons.add_circle_outline_rounded,
+                MangoThemeFactory.success,
+              ),
+            ),
+            _row(
+              context,
+              '− Retiros',
+              s.totalWithdrawals,
+              onTap: () => _openTransactions(
+                'withdrawal',
+                'Retiros',
+                Icons.remove_circle_outline_rounded,
+                MangoThemeFactory.warning,
+              ),
+            ),
+            _row(
+              context,
+              '− Gastos',
+              s.totalExpenses,
+              onTap: () => _openTransactions(
+                'expense',
+                'Gastos',
+                Icons.receipt_long_rounded,
+                MangoThemeFactory.danger,
+              ),
+            ),
             Padding(
               padding: const EdgeInsets.only(top: 2),
               child: Text(
@@ -1356,16 +1714,37 @@ class _OpenRegisterDetailSheetState
             _row(context, 'Esperado transferencia', s.expectedTransfer),
             _row(context, 'Total esperado', s.expectedTotal, bold: true),
             SizedBox(height: dpi.space(20)),
+            if (isOwnerOrAdminRole(
+              ref.read(authGateViewModelProvider).profile?.normalizedRole,
+            )) ...[
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _closing ? null : _registerMovement,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: MangoThemeFactory.mango,
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(vertical: dpi.space(14)),
+                  ),
+                  icon: const Icon(Icons.swap_vert_rounded),
+                  label: const Text('Registrar movimiento'),
+                ),
+              ),
+              SizedBox(height: dpi.space(10)),
+            ],
             // Forzar cierre: acción sensible, solo owner/admin (manager ve la
             // caja pero no puede cerrarla a la fuerza).
             if (isOwnerOrAdminRole(
-                ref.read(authGateViewModelProvider).profile?.normalizedRole))
+              ref.read(authGateViewModelProvider).profile?.normalizedRole,
+            ))
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
                   onPressed: _closing ? null : _confirmForceClose,
                   style: FilledButton.styleFrom(
-                    backgroundColor: MangoThemeFactory.warning,
+                    // Destructivo: rojo, no ámbar.
+                    backgroundColor: MangoThemeFactory.danger,
+                    foregroundColor: Colors.white,
                     padding: EdgeInsets.symmetric(vertical: dpi.space(14)),
                   ),
                   icon: _closing
@@ -1373,7 +1752,10 @@ class _OpenRegisterDetailSheetState
                           width: dpi.icon(16),
                           height: dpi.icon(16),
                           child: const CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
                       : const Icon(Icons.lock_clock_rounded),
                   label: Text(_closing ? 'Cerrando…' : 'Forzar cierre de caja'),
                 ),
@@ -1385,34 +1767,50 @@ class _OpenRegisterDetailSheetState
   }
 
   Widget _title(BuildContext context, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Text(text.toUpperCase(),
-            style: TextStyle(
-                fontSize: DpiScale.of(context).font(10),
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.6,
-                color: MangoThemeFactory.mutedText(context))),
-      );
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        fontSize: DpiScale.of(context).font(10),
+        fontWeight: FontWeight.w800,
+        letterSpacing: 0.6,
+        color: MangoThemeFactory.mutedText(context),
+      ),
+    ),
+  );
 
-  Widget _row(BuildContext context, String label, double value,
-      {bool bold = false, VoidCallback? onTap}) {
+  Widget _row(
+    BuildContext context,
+    String label,
+    double value, {
+    bool bold = false,
+    VoidCallback? onTap,
+  }) {
     final row = Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label,
-            style:
-                TextStyle(fontWeight: bold ? FontWeight.w800 : FontWeight.w400)),
+        Text(
+          label,
+          style: TextStyle(
+            fontWeight: bold ? FontWeight.w800 : FontWeight.w400,
+          ),
+        ),
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(MangoFormatters.currency(value),
-                style: TextStyle(
-                    fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
+            Text(
+              MangoFormatters.currency(value),
+              style: TextStyle(
+                fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
             if (onTap != null) ...[
               const SizedBox(width: 4),
-              Icon(Icons.chevron_right_rounded,
-                  size: DpiScale.of(context).icon(16),
-                  color: MangoThemeFactory.mutedText(context)),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: DpiScale.of(context).icon(16),
+                color: MangoThemeFactory.mutedText(context),
+              ),
             ],
           ],
         ),
@@ -1420,12 +1818,42 @@ class _OpenRegisterDetailSheetState
     );
     if (onTap == null) {
       return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3), child: row);
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: row,
+      );
     }
     return InkWell(
       onTap: onTap,
       child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3), child: row),
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: row,
+      ),
+    );
+  }
+
+  /// Movimiento manual (ingreso, retiro o gasto) sobre ESTA caja. Al
+  /// registrarlo se cierra el sheet: sus totales y la lista de movimientos se
+  /// cargaron una sola vez al abrirlo, y el card de atrás ya quedó al día con
+  /// el resumen recargado.
+  Future<void> _registerMovement() async {
+    final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
+    if (businessId == null) return;
+    final registered = await showCashMovementDialog(
+      context: context,
+      businessId: businessId,
+      session: widget.session,
+    );
+    if (registered == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    Navigator.of(context).pop();
+    final label = cashMovementTypeLabel(registered);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          '${label[0].toUpperCase()}${label.substring(1)} '
+          'registrado en "${widget.session.registerName}".',
+        ),
+      ),
     );
   }
 
@@ -1437,19 +1865,23 @@ class _OpenRegisterDetailSheetState
     );
     if (result == null || !mounted) return;
     setState(() => _closing = true);
-    final err =
-        await ref.read(cashRegisterViewModelProvider.notifier).forceClose(
-              sessionId: widget.session.id,
-              reason: result.reason,
-              endAmount: result.countedCash,
-            );
+    final err = await ref
+        .read(cashRegisterViewModelProvider.notifier)
+        .forceClose(
+          sessionId: widget.session.id,
+          reason: result.reason,
+          endAmount: result.countedCash,
+        );
     if (!mounted) return;
     setState(() => _closing = false);
     final messenger = ScaffoldMessenger.of(context);
     if (err == null) {
       Navigator.of(context).pop();
-      messenger.showSnackBar(SnackBar(
-          content: Text('Caja "${widget.session.registerName}" cerrada.')));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Caja "${widget.session.registerName}" cerrada.'),
+        ),
+      );
     } else {
       messenger.showSnackBar(SnackBar(content: Text(err)));
     }
@@ -1527,6 +1959,10 @@ class _ForceCloseDialogState extends State<_ForceCloseDialog> {
           child: const Text('Cancelar'),
         ),
         FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: MangoThemeFactory.danger,
+            foregroundColor: Colors.white,
+          ),
           onPressed: () {
             setState(() => _submitted = true);
             if (_reason.text.trim().isEmpty) return;
@@ -1579,16 +2015,28 @@ class _ClosingCard extends StatelessWidget {
                   color: MangoThemeFactory.info.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(dpi.radius(12)),
                 ),
-                child: Icon(Icons.receipt_long_rounded, color: MangoThemeFactory.info, size: dpi.icon(20)),
+                child: Icon(
+                  Icons.receipt_long_rounded,
+                  color: MangoThemeFactory.info,
+                  size: dpi.icon(20),
+                ),
               ),
               SizedBox(width: dpi.space(12)),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(closing.registerName, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                    Text(
+                      closing.registerName,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                     SizedBox(height: dpi.space(2)),
-                    Text('Cerrada por ${closing.closedByName} · ${MangoFormatters.fullDate(closing.closedAt)}', style: Theme.of(context).textTheme.bodySmall),
+                    Text(
+                      'Cerrada por ${closing.closedByName} · ${MangoFormatters.fullDate(closing.closedAt)}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                     if (closing.netDifference != 0) ...[
                       SizedBox(height: dpi.space(4)),
                       Text(
@@ -1596,9 +2044,9 @@ class _ClosingCard extends StatelessWidget {
                         '${closing.netDifference > 0 ? 'Sobrante' : 'Faltante'}: ${_signedCurrency(closing.netDifference)}'
                         '${closing.hasReportedBreakdown ? '' : ' (efectivo)'}',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              color: _diffColor(context, closing.netDifference),
-                            ),
+                          fontWeight: FontWeight.w700,
+                          color: _diffColor(context, closing.netDifference),
+                        ),
                       ),
                     ],
                   ],
@@ -1609,7 +2057,11 @@ class _ClosingCard extends StatelessWidget {
                 children: [
                   Text(
                     MangoFormatters.currency(closing.totalSales),
-                    style: TextStyle(fontSize: dpi.font(14), fontWeight: FontWeight.w800, color: MangoThemeFactory.textColor(context)),
+                    style: TextStyle(
+                      fontSize: dpi.font(14),
+                      fontWeight: FontWeight.w800,
+                      color: MangoThemeFactory.textColor(context),
+                    ),
                   ),
                   Text('ventas', style: Theme.of(context).textTheme.bodySmall),
                 ],
@@ -1628,7 +2080,8 @@ class _ClosingDetailSheet extends ConsumerStatefulWidget {
   final RegisterClosing closing;
 
   @override
-  ConsumerState<_ClosingDetailSheet> createState() => _ClosingDetailSheetState();
+  ConsumerState<_ClosingDetailSheet> createState() =>
+      _ClosingDetailSheetState();
 }
 
 class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
@@ -1646,8 +2099,9 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
 
   Future<void> _load() async {
     try {
-      final detail =
-          await ref.read(cashRegisterDataServiceProvider).loadCloseDetail(closing);
+      final detail = await ref
+          .read(cashRegisterDataServiceProvider)
+          .loadCloseDetail(closing);
       if (!mounted) return;
       setState(() {
         _detail = detail;
@@ -1673,11 +2127,18 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
         return Container(
           decoration: BoxDecoration(
             color: MangoThemeFactory.cardColor(context),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(dpi.radius(24))),
+            borderRadius: BorderRadius.vertical(
+              top: Radius.circular(dpi.radius(24)),
+            ),
           ),
           child: ListView(
             controller: controller,
-            padding: EdgeInsets.fromLTRB(dpi.space(18), dpi.space(18), dpi.space(18), dpi.space(18) + MediaQuery.of(context).padding.bottom),
+            padding: EdgeInsets.fromLTRB(
+              dpi.space(18),
+              dpi.space(18),
+              dpi.space(18),
+              dpi.space(18) + MediaQuery.of(context).padding.bottom,
+            ),
             children: [
               Center(
                 child: Container(
@@ -1690,12 +2151,22 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
                 ),
               ),
               SizedBox(height: dpi.space(18)),
-              Text(closing.registerName, style: Theme.of(context).textTheme.titleLarge),
+              Text(
+                closing.registerName,
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
               SizedBox(height: dpi.space(4)),
-              Text('Cierre realizado por ${closing.closedByName} · ${MangoFormatters.dateTime(closing.closedAt)}', style: Theme.of(context).textTheme.bodySmall),
-              if (closing.deviceName != null && closing.deviceName!.trim().isNotEmpty) ...[
+              Text(
+                'Cierre realizado por ${closing.closedByName} · ${MangoFormatters.dateTime(closing.closedAt)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              if (closing.deviceName != null &&
+                  closing.deviceName!.trim().isNotEmpty) ...[
                 SizedBox(height: dpi.space(2)),
-                Text('Dispositivo: ${closing.deviceName}', style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  'Dispositivo: ${closing.deviceName}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
               ],
               SizedBox(height: dpi.space(14)),
               SizedBox(
@@ -1704,16 +2175,22 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
                   onPressed: () {
                     Navigator.of(context).pop();
                     Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => ReporteZView(closing: closing)),
+                      MaterialPageRoute(
+                        builder: (_) => ReporteZView(closing: closing),
+                      ),
                     );
                   },
                   icon: const Icon(Icons.receipt_long_rounded),
                   label: const Text('Ver reporte de cierre'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: MangoThemeFactory.mango,
-                    side: BorderSide(color: MangoThemeFactory.mango.withValues(alpha: 0.5)),
+                    side: BorderSide(
+                      color: MangoThemeFactory.mango.withValues(alpha: 0.5),
+                    ),
                     padding: EdgeInsets.symmetric(vertical: dpi.space(12)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(dpi.radius(12))),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(dpi.radius(12)),
+                    ),
                   ),
                 ),
               ),
@@ -1729,7 +2206,9 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
                   child: Center(
                     child: Text(
                       'No se pudo cargar el detalle del cierre.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: MangoThemeFactory.danger),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: MangoThemeFactory.danger,
+                      ),
                     ),
                   ),
                 )
@@ -1742,17 +2221,28 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
     );
   }
 
-  List<Widget> _buildReconciled(BuildContext context, DpiScale dpi, CashCloseDetail d) {
+  List<Widget> _buildReconciled(
+    BuildContext context,
+    DpiScale dpi,
+    CashCloseDetail d,
+  ) {
     final muted = MangoThemeFactory.mutedText(context);
     final reportedTotal = d.reportedTotal;
     final net = d.netDifference;
     final netColor = _diffColor(context, net);
-    final netLabel = net == 0 ? 'Cuadrado' : (net > 0 ? 'Sobrante' : 'Faltante');
+    final netLabel = net == 0
+        ? 'Cuadrado'
+        : (net > 0 ? 'Sobrante' : 'Faltante');
 
     return [
       _sectionTitle(context, 'Cómo abrió'),
       SizedBox(height: dpi.space(10)),
-      _MetricCard(icon: Icons.lock_open_rounded, color: MangoThemeFactory.mango, label: 'Monto apertura', value: MangoFormatters.currency(d.startAmount)),
+      _MetricCard(
+        icon: Icons.lock_open_rounded,
+        color: MangoThemeFactory.mango,
+        label: 'Monto apertura',
+        value: MangoFormatters.currency(d.startAmount),
+      ),
 
       SizedBox(height: dpi.space(18)),
       _sectionTitle(context, 'Qué hubo en la caja'),
@@ -1773,11 +2263,23 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
           runSpacing: dpi.space(6),
           children: [
             if (d.cashSales > 0)
-              _PayMethodChip(icon: Icons.payments_rounded, label: MangoFormatters.currency(d.cashSales), color: MangoThemeFactory.success),
+              _PayMethodChip(
+                icon: Icons.payments_rounded,
+                label: MangoFormatters.currency(d.cashSales),
+                color: MangoThemeFactory.success,
+              ),
             if (d.cardSales > 0)
-              _PayMethodChip(icon: Icons.credit_card_rounded, label: MangoFormatters.currency(d.cardSales), color: MangoThemeFactory.payCard),
+              _PayMethodChip(
+                icon: Icons.credit_card_rounded,
+                label: MangoFormatters.currency(d.cardSales),
+                color: MangoThemeFactory.payCard,
+              ),
             if (d.transferSales > 0)
-              _PayMethodChip(icon: Icons.swap_horiz_rounded, label: MangoFormatters.currency(d.transferSales), color: MangoThemeFactory.payTransfer),
+              _PayMethodChip(
+                icon: Icons.swap_horiz_rounded,
+                label: MangoFormatters.currency(d.transferSales),
+                color: MangoThemeFactory.payTransfer,
+              ),
           ],
         ),
       ),
@@ -1788,7 +2290,13 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
         label: 'Depósitos',
         value: MangoFormatters.currency(d.totalDeposits),
         count: d.transactions.where((t) => t.type == 'deposit').length,
-        onTap: () => _openTransactions(d, 'deposit', 'Depósitos', Icons.add_circle_outline_rounded, MangoThemeFactory.info),
+        onTap: () => _openTransactions(
+          d,
+          'deposit',
+          'Depósitos',
+          Icons.add_circle_outline_rounded,
+          MangoThemeFactory.info,
+        ),
       ),
       SizedBox(height: dpi.space(10)),
       _MetricCard(
@@ -1797,7 +2305,13 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
         label: 'Retiros',
         value: MangoFormatters.currency(d.totalWithdrawals),
         count: d.transactions.where((t) => t.type == 'withdrawal').length,
-        onTap: () => _openTransactions(d, 'withdrawal', 'Retiros', Icons.remove_circle_outline_rounded, MangoThemeFactory.warning),
+        onTap: () => _openTransactions(
+          d,
+          'withdrawal',
+          'Retiros',
+          Icons.remove_circle_outline_rounded,
+          MangoThemeFactory.warning,
+        ),
       ),
       SizedBox(height: dpi.space(10)),
       _MetricCard(
@@ -1806,7 +2320,13 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
         label: 'Gastos',
         value: MangoFormatters.currency(d.totalExpenses),
         count: d.transactions.where((t) => t.type == 'expense').length,
-        onTap: () => _openTransactions(d, 'expense', 'Gastos', Icons.receipt_rounded, MangoThemeFactory.danger),
+        onTap: () => _openTransactions(
+          d,
+          'expense',
+          'Gastos',
+          Icons.receipt_rounded,
+          MangoThemeFactory.danger,
+        ),
       ),
 
       SizedBox(height: dpi.space(18)),
@@ -1814,9 +2334,18 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
       SizedBox(height: dpi.space(10)),
       _BreakdownCard(
         rows: [
-          _BreakdownRow('Esperado efectivo', MangoFormatters.currency(d.expectedCash)),
-          _BreakdownRow('Esperado tarjeta', MangoFormatters.currency(d.expectedCard)),
-          _BreakdownRow('Esperado transferencia', MangoFormatters.currency(d.expectedTransfer)),
+          _BreakdownRow(
+            'Esperado efectivo',
+            MangoFormatters.currency(d.expectedCash),
+          ),
+          _BreakdownRow(
+            'Esperado tarjeta',
+            MangoFormatters.currency(d.expectedCard),
+          ),
+          _BreakdownRow(
+            'Esperado transferencia',
+            MangoFormatters.currency(d.expectedTransfer),
+          ),
         ],
       ),
 
@@ -1825,7 +2354,10 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
       SizedBox(height: dpi.space(10)),
       _BreakdownCard(
         rows: [
-          _BreakdownRow('Total esperado', MangoFormatters.currency(d.expectedTotalResolved)),
+          _BreakdownRow(
+            'Total esperado',
+            MangoFormatters.currency(d.expectedTotalResolved),
+          ),
           _BreakdownRow(
             'Total reportado',
             MangoFormatters.currency(reportedTotal),
@@ -1843,7 +2375,9 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
       _MetricCard(
         icon: net == 0
             ? Icons.check_circle_outline_rounded
-            : (net > 0 ? Icons.trending_up_rounded : Icons.trending_down_rounded),
+            : (net > 0
+                  ? Icons.trending_up_rounded
+                  : Icons.trending_down_rounded),
         color: netColor,
         label: 'Diferencia',
         value: _signedCurrency(net),
@@ -1862,15 +2396,29 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
           padding: EdgeInsets.only(left: dpi.space(4), bottom: dpi.space(8)),
           child: Text(
             'Este cierre no registró el desglose reportado por método. La diferencia mostrada es solo de efectivo (gaveta).',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: muted),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: muted),
           ),
         ),
       ],
       _BreakdownCard(
         rows: [
-          _BreakdownRow('Efectivo', _signedCurrency(d.diffCash), valueColor: _diffColor(context, d.diffCash)),
-          _BreakdownRow('Tarjeta', _signedCurrency(d.diffCard), valueColor: _diffColor(context, d.diffCard)),
-          _BreakdownRow('Transferencia', _signedCurrency(d.diffTransfer), valueColor: _diffColor(context, d.diffTransfer)),
+          _BreakdownRow(
+            'Efectivo',
+            _signedCurrency(d.diffCash),
+            valueColor: _diffColor(context, d.diffCash),
+          ),
+          _BreakdownRow(
+            'Tarjeta',
+            _signedCurrency(d.diffCard),
+            valueColor: _diffColor(context, d.diffCard),
+          ),
+          _BreakdownRow(
+            'Transferencia',
+            _signedCurrency(d.diffTransfer),
+            valueColor: _diffColor(context, d.diffTransfer),
+          ),
         ],
       ),
 
@@ -1881,14 +2429,25 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
           decoration: BoxDecoration(
             color: MangoThemeFactory.warning.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(dpi.radius(12)),
-            border: Border.all(color: MangoThemeFactory.warning.withValues(alpha: 0.4)),
+            border: Border.all(
+              color: MangoThemeFactory.warning.withValues(alpha: 0.4),
+            ),
           ),
           child: Row(
             children: [
-              Icon(Icons.warning_amber_rounded, color: MangoThemeFactory.warning, size: dpi.icon(20)),
+              Icon(
+                Icons.warning_amber_rounded,
+                color: MangoThemeFactory.warning,
+                size: dpi.icon(20),
+              ),
               SizedBox(width: dpi.space(10)),
               Expanded(
-                child: Text(d.forcedCloseNote!, style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600)),
+                child: Text(
+                  d.forcedCloseNote!,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+                ),
               ),
             ],
           ),
@@ -1907,7 +2466,10 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
             borderRadius: BorderRadius.circular(dpi.radius(12)),
             border: Border.all(color: MangoThemeFactory.borderColor(context)),
           ),
-          child: Text(closing.notes!.trim(), style: Theme.of(context).textTheme.bodySmall),
+          child: Text(
+            closing.notes!.trim(),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         ),
       ],
 
@@ -1915,17 +2477,35 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
     ];
   }
 
-  Widget _sectionTitle(BuildContext context, String text) =>
-      Text(text, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800));
+  Widget _sectionTitle(BuildContext context, String text) => Text(
+    text,
+    style: Theme.of(
+      context,
+    ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+  );
 
-  void _openTransactions(CashCloseDetail d, String type, String title, IconData icon, Color color) {
-    final entries = d.transactions.where((t) => t.type == type).toList(growable: false);
+  void _openTransactions(
+    CashCloseDetail d,
+    String type,
+    String title,
+    IconData icon,
+    Color color,
+  ) {
+    final entries = d.transactions
+        .where((t) => t.type == type)
+        .toList(growable: false);
     final total = entries.fold<double>(0, (sum, t) => sum + t.amount);
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _TransactionListSheet(title: title, icon: icon, color: color, total: total, entries: entries),
+      builder: (_) => _TransactionListSheet(
+        title: title,
+        icon: icon,
+        color: color,
+        total: total,
+        entries: entries,
+      ),
     );
   }
 
@@ -1941,10 +2521,19 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
         rows: [
           _BreakdownRow('Efectivo', MangoFormatters.currency(d.cashSales)),
           _BreakdownRow('Tarjeta', MangoFormatters.currency(d.cardSales)),
-          _BreakdownRow('Transferencia', MangoFormatters.currency(d.transferSales)),
-          _BreakdownRow('Total ventas', MangoFormatters.currency(d.totalSales), bold: true),
+          _BreakdownRow(
+            'Transferencia',
+            MangoFormatters.currency(d.transferSales),
+          ),
+          _BreakdownRow(
+            'Total ventas',
+            MangoFormatters.currency(d.totalSales),
+            bold: true,
+          ),
         ],
-        footnote: d.transactionCount > 0 ? '${d.transactionCount} transacciones en el turno.' : null,
+        footnote: d.transactionCount > 0
+            ? '${d.transactionCount} transacciones en el turno.'
+            : null,
       ),
     );
   }
@@ -1959,14 +2548,38 @@ class _ClosingDetailSheetState extends ConsumerState<_ClosingDetailSheet> {
         icon: Icons.compare_arrows_rounded,
         color: _diffColor(ctx, d.netDifference),
         rows: [
-          _BreakdownRow('Total reportado', MangoFormatters.currency(d.reportedTotal)),
-          _BreakdownRow('Total esperado', MangoFormatters.currency(d.expectedTotalResolved)),
-          _BreakdownRow('Diferencia neta', _signedCurrency(d.netDifference), bold: true, valueColor: _diffColor(ctx, d.netDifference)),
-          _BreakdownRow('· Efectivo', _signedCurrency(d.diffCash), valueColor: _diffColor(ctx, d.diffCash)),
-          _BreakdownRow('· Tarjeta', _signedCurrency(d.diffCard), valueColor: _diffColor(ctx, d.diffCard)),
-          _BreakdownRow('· Transferencia', _signedCurrency(d.diffTransfer), valueColor: _diffColor(ctx, d.diffTransfer)),
+          _BreakdownRow(
+            'Total reportado',
+            MangoFormatters.currency(d.reportedTotal),
+          ),
+          _BreakdownRow(
+            'Total esperado',
+            MangoFormatters.currency(d.expectedTotalResolved),
+          ),
+          _BreakdownRow(
+            'Diferencia neta',
+            _signedCurrency(d.netDifference),
+            bold: true,
+            valueColor: _diffColor(ctx, d.netDifference),
+          ),
+          _BreakdownRow(
+            '· Efectivo',
+            _signedCurrency(d.diffCash),
+            valueColor: _diffColor(ctx, d.diffCash),
+          ),
+          _BreakdownRow(
+            '· Tarjeta',
+            _signedCurrency(d.diffCard),
+            valueColor: _diffColor(ctx, d.diffCard),
+          ),
+          _BreakdownRow(
+            '· Transferencia',
+            _signedCurrency(d.diffTransfer),
+            valueColor: _diffColor(ctx, d.diffTransfer),
+          ),
         ],
-        footnote: 'La "Dif. efectivo (gaveta)" solo concilia el efectivo; la diferencia real es la neta entre todos los métodos.',
+        footnote:
+            'La "Dif. efectivo (gaveta)" solo concilia el efectivo; la diferencia real es la neta entre todos los métodos.',
       ),
     );
   }
@@ -1984,7 +2597,13 @@ String _signedCurrency(double v) {
 }
 
 class _BreakdownRow {
-  const _BreakdownRow(this.label, this.value, {this.valueColor, this.bold = false, this.muted = false});
+  const _BreakdownRow(
+    this.label,
+    this.value, {
+    this.valueColor,
+    this.bold = false,
+    this.muted = false,
+  });
   final String label;
   final String value;
   final Color? valueColor;
@@ -2001,7 +2620,10 @@ class _BreakdownCard extends StatelessWidget {
     final dpi = DpiScale.of(context);
     final muted = MangoThemeFactory.mutedText(context);
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: dpi.space(14), vertical: dpi.space(6)),
+      padding: EdgeInsets.symmetric(
+        horizontal: dpi.space(14),
+        vertical: dpi.space(6),
+      ),
       decoration: BoxDecoration(
         color: MangoThemeFactory.cardColor(context),
         borderRadius: BorderRadius.circular(dpi.radius(16)),
@@ -2019,18 +2641,22 @@ class _BreakdownCard extends StatelessWidget {
                     child: Text(
                       row.label,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: row.muted ? muted : null,
-                            fontWeight: row.bold ? FontWeight.w700 : null,
-                          ),
+                        color: row.muted ? muted : null,
+                        fontWeight: row.bold ? FontWeight.w700 : null,
+                      ),
                     ),
                   ),
                   SizedBox(width: dpi.space(10)),
                   Text(
                     row.value,
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: row.bold ? FontWeight.w800 : FontWeight.w700,
-                          color: row.valueColor ?? (row.muted ? muted : MangoThemeFactory.textColor(context)),
-                        ),
+                      fontWeight: row.bold ? FontWeight.w800 : FontWeight.w700,
+                      color:
+                          row.valueColor ??
+                          (row.muted
+                              ? muted
+                              : MangoThemeFactory.textColor(context)),
+                    ),
                   ),
                 ],
               ),
@@ -2070,17 +2696,27 @@ class _TransactionListSheet extends StatelessWidget {
         return Container(
           decoration: BoxDecoration(
             color: MangoThemeFactory.cardColor(context),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(dpi.radius(24))),
+            borderRadius: BorderRadius.vertical(
+              top: Radius.circular(dpi.radius(24)),
+            ),
           ),
           child: ListView(
             controller: controller,
-            padding: EdgeInsets.fromLTRB(dpi.space(18), dpi.space(18), dpi.space(18), dpi.space(18) + MediaQuery.of(context).padding.bottom),
+            padding: EdgeInsets.fromLTRB(
+              dpi.space(18),
+              dpi.space(18),
+              dpi.space(18),
+              dpi.space(18) + MediaQuery.of(context).padding.bottom,
+            ),
             children: [
               Center(
                 child: Container(
                   width: dpi.scale(42),
                   height: dpi.scale(4),
-                  decoration: BoxDecoration(color: MangoThemeFactory.borderColor(context), borderRadius: BorderRadius.circular(999)),
+                  decoration: BoxDecoration(
+                    color: MangoThemeFactory.borderColor(context),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
                 ),
               ),
               SizedBox(height: dpi.space(18)),
@@ -2089,7 +2725,10 @@ class _TransactionListSheet extends StatelessWidget {
                   Container(
                     width: dpi.scale(40),
                     height: dpi.scale(40),
-                    decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(dpi.radius(12))),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(dpi.radius(12)),
+                    ),
                     child: Icon(icon, color: color, size: dpi.icon(20)),
                   ),
                   SizedBox(width: dpi.space(12)),
@@ -2097,12 +2736,25 @@ class _TransactionListSheet extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(title, style: Theme.of(context).textTheme.titleLarge),
-                        Text('${entries.length} movimiento(s)', style: Theme.of(context).textTheme.bodySmall),
+                        Text(
+                          title,
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        Text(
+                          '${entries.length} movimiento(s)',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                       ],
                     ),
                   ),
-                  Text(MangoFormatters.currency(total), style: TextStyle(fontSize: dpi.font(16), fontWeight: FontWeight.w800, color: color)),
+                  Text(
+                    MangoFormatters.currency(total),
+                    style: TextStyle(
+                      fontSize: dpi.font(16),
+                      fontWeight: FontWeight.w800,
+                      color: color,
+                    ),
+                  ),
                 ],
               ),
               SizedBox(height: dpi.space(16)),
@@ -2110,7 +2762,10 @@ class _TransactionListSheet extends StatelessWidget {
                 Padding(
                   padding: EdgeInsets.symmetric(vertical: dpi.space(24)),
                   child: Center(
-                    child: Text('Sin movimientos registrados.', style: Theme.of(context).textTheme.bodySmall),
+                    child: Text(
+                      'Sin movimientos registrados.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ),
                 )
               else
@@ -2121,7 +2776,9 @@ class _TransactionListSheet extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: MangoThemeFactory.altSurface(context),
                       borderRadius: BorderRadius.circular(dpi.radius(12)),
-                      border: Border.all(color: MangoThemeFactory.borderColor(context)),
+                      border: Border.all(
+                        color: MangoThemeFactory.borderColor(context),
+                      ),
                     ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2132,41 +2789,63 @@ class _TransactionListSheet extends StatelessWidget {
                             children: [
                               // Primero la razón estructurada del catálogo; la
                               // descripción libre queda como nota secundaria.
-                              Builder(builder: (context) {
-                                final reason = entry.reasonLabel?.trim() ?? '';
-                                final desc = entry.description?.trim() ?? '';
-                                final title = reason.isNotEmpty
-                                    ? reason
-                                    : (desc.isNotEmpty ? desc : 'Sin descripción');
-                                final showDescBelow =
-                                    reason.isNotEmpty && desc.isNotEmpty && desc != reason;
-                                return Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      title,
-                                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                            fontWeight: FontWeight.w600,
-                                            fontStyle: (reason.isEmpty && desc.isEmpty)
-                                                ? FontStyle.italic
-                                                : null,
-                                          ),
-                                    ),
-                                    if (showDescBelow) ...[
-                                      SizedBox(height: dpi.space(2)),
+                              Builder(
+                                builder: (context) {
+                                  final reason =
+                                      entry.reasonLabel?.trim() ?? '';
+                                  final desc = entry.description?.trim() ?? '';
+                                  final title = reason.isNotEmpty
+                                      ? reason
+                                      : (desc.isNotEmpty
+                                            ? desc
+                                            : 'Sin descripción');
+                                  final showDescBelow =
+                                      reason.isNotEmpty &&
+                                      desc.isNotEmpty &&
+                                      desc != reason;
+                                  return Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
                                       Text(
-                                        desc,
-                                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                              color: MangoThemeFactory.mutedText(context),
+                                        title,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodyMedium
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w600,
+                                              fontStyle:
+                                                  (reason.isEmpty &&
+                                                      desc.isEmpty)
+                                                  ? FontStyle.italic
+                                                  : null,
                                             ),
                                       ),
+                                      if (showDescBelow) ...[
+                                        SizedBox(height: dpi.space(2)),
+                                        Text(
+                                          desc,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(
+                                                color:
+                                                    MangoThemeFactory.mutedText(
+                                                      context,
+                                                    ),
+                                              ),
+                                        ),
+                                      ],
                                     ],
-                                  ],
-                                );
-                              }),
+                                  );
+                                },
+                              ),
                               if (entry.createdAt != null) ...[
                                 SizedBox(height: dpi.space(2)),
-                                Text(MangoFormatters.dateTime(entry.createdAt!), style: Theme.of(context).textTheme.bodySmall),
+                                Text(
+                                  MangoFormatters.dateTime(entry.createdAt!),
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
                               ],
                             ],
                           ),
@@ -2174,7 +2853,11 @@ class _TransactionListSheet extends StatelessWidget {
                         SizedBox(width: dpi.space(10)),
                         Text(
                           MangoFormatters.currency(entry.amount),
-                          style: TextStyle(fontSize: dpi.font(14), fontWeight: FontWeight.w800, color: color),
+                          style: TextStyle(
+                            fontSize: dpi.font(14),
+                            fontWeight: FontWeight.w800,
+                            color: color,
+                          ),
                         ),
                       ],
                     ),
@@ -2212,7 +2895,9 @@ class _InfoSheet extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: MangoThemeFactory.cardColor(context),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(dpi.radius(24))),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(dpi.radius(24)),
+        ),
       ),
       child: SafeArea(
         top: false,
@@ -2226,7 +2911,10 @@ class _InfoSheet extends StatelessWidget {
                 child: Container(
                   width: dpi.scale(42),
                   height: dpi.scale(4),
-                  decoration: BoxDecoration(color: MangoThemeFactory.borderColor(context), borderRadius: BorderRadius.circular(999)),
+                  decoration: BoxDecoration(
+                    color: MangoThemeFactory.borderColor(context),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
                 ),
               ),
               SizedBox(height: dpi.space(18)),
@@ -2235,11 +2923,19 @@ class _InfoSheet extends StatelessWidget {
                   Container(
                     width: dpi.scale(40),
                     height: dpi.scale(40),
-                    decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(dpi.radius(12))),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(dpi.radius(12)),
+                    ),
                     child: Icon(icon, color: color, size: dpi.icon(20)),
                   ),
                   SizedBox(width: dpi.space(12)),
-                  Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
                 ],
               ),
               SizedBox(height: dpi.space(16)),
@@ -2313,9 +3009,9 @@ class _MetricCard extends StatelessWidget {
                 Text(
                   value,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: valueColor,
-                      ),
+                    fontWeight: FontWeight.w800,
+                    color: valueColor,
+                  ),
                 ),
                 if (subtitle != null) ...[
                   SizedBox(height: dpi.space(2)),
@@ -2328,18 +3024,29 @@ class _MetricCard extends StatelessWidget {
             SizedBox(width: dpi.space(8)),
             if (hasCount)
               Container(
-                padding: EdgeInsets.symmetric(horizontal: dpi.space(8), vertical: dpi.space(3)),
+                padding: EdgeInsets.symmetric(
+                  horizontal: dpi.space(8),
+                  vertical: dpi.space(3),
+                ),
                 decoration: BoxDecoration(
                   color: color.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
                   '${count!}',
-                  style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w800, color: color),
+                  style: TextStyle(
+                    fontSize: dpi.font(11),
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
                 ),
               ),
             SizedBox(width: dpi.space(4)),
-            Icon(Icons.chevron_right_rounded, size: dpi.icon(20), color: MangoThemeFactory.mutedText(context)),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: dpi.icon(20),
+              color: MangoThemeFactory.mutedText(context),
+            ),
           ],
         ],
       ),
@@ -2358,7 +3065,11 @@ class _MetricCard extends StatelessWidget {
 }
 
 class _RangeBar extends StatelessWidget {
-  const _RangeBar({required this.label, required this.count, required this.total});
+  const _RangeBar({
+    required this.label,
+    required this.count,
+    required this.total,
+  });
   final String label;
   final int count;
   final int total;
@@ -2376,8 +3087,16 @@ class _RangeBar extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(label, style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600)),
-              Text('$count tickets', style: Theme.of(context).textTheme.bodySmall),
+              Text(
+                label,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+              ),
+              Text(
+                '$count tickets',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ],
           ),
           SizedBox(height: dpi.space(4)),
@@ -2410,7 +3129,11 @@ class _RangeBar extends StatelessWidget {
 }
 
 class _PayMethodChip extends StatelessWidget {
-  const _PayMethodChip({required this.icon, required this.label, required this.color});
+  const _PayMethodChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
   final IconData icon;
   final String label;
   final Color color;
@@ -2419,7 +3142,10 @@ class _PayMethodChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: dpi.space(8), vertical: dpi.space(4)),
+      padding: EdgeInsets.symmetric(
+        horizontal: dpi.space(8),
+        vertical: dpi.space(4),
+      ),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(dpi.radius(8)),
@@ -2429,7 +3155,14 @@ class _PayMethodChip extends StatelessWidget {
         children: [
           Icon(icon, size: dpi.icon(14), color: color),
           SizedBox(width: dpi.space(4)),
-          Text(label, style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w700, color: color)),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: dpi.font(11),
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
         ],
       ),
     );
@@ -2443,7 +3176,8 @@ class TopProductsDetailView extends ConsumerStatefulWidget {
   final DashboardSummary summary;
 
   @override
-  ConsumerState<TopProductsDetailView> createState() => _TopProductsDetailViewState();
+  ConsumerState<TopProductsDetailView> createState() =>
+      _TopProductsDetailViewState();
 }
 
 class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
@@ -2462,7 +3196,8 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
   @override
   void initState() {
     super.initState();
-    _start = widget.summary.periodStart ??
+    _start =
+        widget.summary.periodStart ??
         DateTime.now().subtract(const Duration(days: 1));
     _end = widget.summary.periodEnd ?? DateTime.now();
     _periodLabel = periodLabelFor(widget.summary.filter);
@@ -2500,7 +3235,8 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
     if (period == DetailPeriod.initial) {
       setState(() {
         _period = DetailPeriod.initial;
-        _start = widget.summary.periodStart ??
+        _start =
+            widget.summary.periodStart ??
             DateTime.now().subtract(const Duration(days: 1));
         _end = widget.summary.periodEnd ?? DateTime.now();
         _periodLabel = periodLabelFor(widget.summary.filter);
@@ -2508,7 +3244,11 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
       _reload();
       return;
     }
-    final range = rangeForDetailPeriod(period, DateTime.now(), cutoffHour: _cutoffHour);
+    final range = rangeForDetailPeriod(
+      period,
+      DateTime.now(),
+      cutoffHour: _cutoffHour,
+    );
     if (range == null) return;
     setState(() {
       _period = period;
@@ -2523,7 +3263,10 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
   void _applyCutoff(int hour) {
     setState(() => _cutoffHour = hour);
     if (_period == DetailPeriod.custom && _customRange != null) {
-      final range = operativeRangeForPickedDays(_customRange!, cutoffHour: hour);
+      final range = operativeRangeForPickedDays(
+        _customRange!,
+        cutoffHour: hour,
+      );
       setState(() {
         _start = range.start;
         _end = range.end;
@@ -2553,8 +3296,10 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
       initialDateRange: seed,
     );
     if (picked == null || !mounted) return;
-    final pickedRange =
-        operativeRangeForPickedDays(picked, cutoffHour: _cutoffHour);
+    final pickedRange = operativeRangeForPickedDays(
+      picked,
+      cutoffHour: _cutoffHour,
+    );
     final start = pickedRange.start;
     final end = pickedRange.end;
     setState(() {
@@ -2562,7 +3307,10 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
       _customRange = picked;
       _start = start;
       _end = end;
-      _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
+      _periodLabel = labelForDetailPeriod(
+        DetailPeriod.custom,
+        customRange: picked,
+      );
     });
     _reload();
   }
@@ -2580,8 +3328,9 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
         filtered.sort((a, b) => b.quantity.compareTo(a.quantity));
         break;
       case _SortMode.name:
-        filtered
-            .sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
+        filtered.sort(
+          (a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()),
+        );
         break;
     }
     return filtered;
@@ -2589,11 +3338,15 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
 
   List<List<String>> _rowsForExport() {
     return _applyFilterAndSort(_products)
-        .map((p) => [
-              p.label,
-              p.quantity.toStringAsFixed(p.quantity.truncateToDouble() == p.quantity ? 0 : 2),
-              p.amount.toStringAsFixed(2),
-            ])
+        .map(
+          (p) => [
+            p.label,
+            p.quantity.toStringAsFixed(
+              p.quantity.truncateToDouble() == p.quantity ? 0 : 2,
+            ),
+            p.amount.toStringAsFixed(2),
+          ],
+        )
         .toList();
   }
 
@@ -2659,20 +3412,35 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
           ),
           SizedBox(height: dpi.space(10)),
           Padding(
-            padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16), dpi.space(8)),
+            padding: EdgeInsets.fromLTRB(
+              dpi.space(16),
+              0,
+              dpi.space(16),
+              dpi.space(8),
+            ),
             child: TextField(
               onChanged: (v) => setState(() => _query = v),
               decoration: InputDecoration(
                 hintText: 'Buscar producto…',
                 prefixIcon: const Icon(Icons.search_rounded),
                 isDense: true,
-                contentPadding: EdgeInsets.symmetric(horizontal: dpi.space(12), vertical: dpi.space(12)),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(dpi.radius(12))),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: dpi.space(12),
+                  vertical: dpi.space(12),
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(dpi.radius(12)),
+                ),
               ),
             ),
           ),
           Padding(
-            padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16), dpi.space(8)),
+            padding: EdgeInsets.fromLTRB(
+              dpi.space(16),
+              0,
+              dpi.space(16),
+              dpi.space(8),
+            ),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
@@ -2699,55 +3467,59 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
             ),
           ),
           Expanded(
-            child: Builder(builder: (context) {
-              if (_loading) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (_error != null) {
-                return Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(dpi.space(20)),
-                    child: Text(_error!,
+            child: Builder(
+              builder: (context) {
+                if (_loading) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (_error != null) {
+                  return Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(dpi.space(20)),
+                      child: Text(
+                        _error!,
                         style: TextStyle(color: MangoThemeFactory.danger),
-                        textAlign: TextAlign.center),
-                  ),
-                );
-              }
-              if (filtered.isEmpty) {
-                return Center(
-                  child: Text(
-                    _query.isEmpty
-                        ? 'Sin productos en este periodo.'
-                        : 'Sin resultados para "$_query".',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                );
-              }
-              return ListView.separated(
-                padding: EdgeInsets.fromLTRB(
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  );
+                }
+                if (filtered.isEmpty) {
+                  return Center(
+                    child: Text(
+                      _query.isEmpty
+                          ? 'Sin productos en este periodo.'
+                          : 'Sin resultados para "$_query".',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  );
+                }
+                return ListView.separated(
+                  padding: EdgeInsets.fromLTRB(
                     dpi.space(16),
                     dpi.space(8),
                     dpi.space(16),
-                    dpi.space(16) + MediaQuery.of(context).padding.bottom),
-                itemCount: filtered.length,
-                separatorBuilder: (_, _) => SizedBox(height: dpi.space(10)),
-                itemBuilder: (context, index) {
-                  final p = filtered[index];
-                  return _TopProductCard(
-                    product: p,
-                    rank: _products.indexOf(p) + 1,
-                    maxAmount: maxAmount,
-                    totalAmount: totalAmount,
-                  );
-                },
-              );
-            }),
+                    dpi.space(16) + MediaQuery.of(context).padding.bottom,
+                  ),
+                  itemCount: filtered.length,
+                  separatorBuilder: (_, _) => SizedBox(height: dpi.space(10)),
+                  itemBuilder: (context, index) {
+                    final p = filtered[index];
+                    return _TopProductCard(
+                      product: p,
+                      rank: _products.indexOf(p) + 1,
+                      maxAmount: maxAmount,
+                      totalAmount: totalAmount,
+                    );
+                  },
+                );
+              },
+            ),
           ),
         ],
       ),
     );
   }
-
 }
 
 enum _SortMode { amount, quantity, name }
@@ -2769,11 +3541,19 @@ class _TopProductsHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     return Container(
-      margin: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(12)),
+      margin: EdgeInsets.fromLTRB(
+        dpi.space(16),
+        dpi.space(16),
+        dpi.space(16),
+        dpi.space(12),
+      ),
       padding: EdgeInsets.all(dpi.space(18)),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [MangoThemeFactory.mango, MangoThemeFactory.mango.withValues(alpha: 0.78)],
+          colors: [
+            MangoThemeFactory.mango,
+            MangoThemeFactory.mango.withValues(alpha: 0.78),
+          ],
         ),
         borderRadius: BorderRadius.circular(dpi.radius(20)),
       ),
@@ -2782,11 +3562,19 @@ class _TopProductsHeader extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.local_fire_department_rounded, color: Colors.white, size: dpi.icon(18)),
+              Icon(
+                Icons.local_fire_department_rounded,
+                color: Colors.white,
+                size: dpi.icon(18),
+              ),
               SizedBox(width: dpi.space(6)),
               Text(
                 filterLabel,
-                style: TextStyle(color: Colors.white, fontSize: dpi.font(12), fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: dpi.font(12),
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           ),
@@ -2797,14 +3585,24 @@ class _TopProductsHeader extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Total vendido', style: TextStyle(color: Colors.white70, fontSize: dpi.font(11))),
+                    Text(
+                      'Total vendido',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: dpi.font(11),
+                      ),
+                    ),
                     SizedBox(height: dpi.space(2)),
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.centerLeft,
                       child: Text(
                         MangoFormatters.currency(totalAmount),
-                        style: TextStyle(color: Colors.white, fontSize: dpi.font(22), fontWeight: FontWeight.w800),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: dpi.font(22),
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                   ],
@@ -2814,12 +3612,29 @@ class _TopProductsHeader extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('$totalProducts', style: TextStyle(color: Colors.white, fontSize: dpi.font(20), fontWeight: FontWeight.w800)),
-                  Text('productos', style: TextStyle(color: Colors.white70, fontSize: dpi.font(11))),
+                  Text(
+                    '$totalProducts',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: dpi.font(20),
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    'productos',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: dpi.font(11),
+                    ),
+                  ),
                   SizedBox(height: dpi.space(4)),
                   Text(
                     '${MangoFormatters.number(totalUnits.round())} uds',
-                    style: TextStyle(color: Colors.white, fontSize: dpi.font(12), fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: dpi.font(12),
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ],
               ),
@@ -2832,7 +3647,11 @@ class _TopProductsHeader extends StatelessWidget {
 }
 
 class _SortChip extends StatelessWidget {
-  const _SortChip({required this.label, required this.selected, required this.onTap});
+  const _SortChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
   final String label;
   final bool selected;
   final VoidCallback onTap;
@@ -2877,10 +3696,10 @@ class _TopProductCard extends StatelessWidget {
     final rankColor = rank == 1
         ? MangoThemeFactory.mango
         : rank == 2
-            ? MangoThemeFactory.warning
-            : rank == 3
-                ? MangoThemeFactory.info
-                : MangoThemeFactory.mutedText(context);
+        ? MangoThemeFactory.warning
+        : rank == 3
+        ? MangoThemeFactory.info
+        : MangoThemeFactory.mutedText(context);
 
     return Container(
       padding: EdgeInsets.all(dpi.space(14)),
@@ -2911,7 +3730,11 @@ class _TopProductCard extends StatelessWidget {
                 alignment: Alignment.center,
                 child: Text(
                   '#$rank',
-                  style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w800, color: rankColor),
+                  style: TextStyle(
+                    fontSize: dpi.font(11),
+                    fontWeight: FontWeight.w800,
+                    color: rankColor,
+                  ),
                 ),
               ),
               SizedBox(width: dpi.space(10)),
@@ -2921,7 +3744,9 @@ class _TopProductCard extends StatelessWidget {
                   children: [
                     Text(
                       product.label,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -2963,7 +3788,10 @@ class _TopProductCard extends StatelessWidget {
                   height: dpi.space(6),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [MangoThemeFactory.mango, MangoThemeFactory.mango.withValues(alpha: 0.7)],
+                      colors: [
+                        MangoThemeFactory.mango,
+                        MangoThemeFactory.mango.withValues(alpha: 0.7),
+                      ],
                     ),
                     borderRadius: BorderRadius.circular(dpi.radius(3)),
                   ),
@@ -3013,9 +3841,12 @@ class _ReporteZViewState extends ConsumerState<ReporteZView> {
       return const [];
     }
     try {
-      final list = await ref.read(cashRegisterDataServiceProvider).loadNcfsForSession(
+      final list = await ref
+          .read(cashRegisterDataServiceProvider)
+          .loadNcfsForSession(
             businessId: businessId,
-            openedAt: widget.closing.openedAt ??
+            openedAt:
+                widget.closing.openedAt ??
                 widget.closing.closedAt.subtract(const Duration(hours: 24)),
             closedAt: widget.closing.closedAt,
           );
@@ -3073,7 +3904,8 @@ class _ReporteZViewState extends ConsumerState<ReporteZView> {
 
   String _pdfName() {
     final d = widget.closing.closedAt;
-    final stamp = '${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}_${d.hour.toString().padLeft(2, '0')}${d.minute.toString().padLeft(2, '0')}';
+    final stamp =
+        '${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}_${d.hour.toString().padLeft(2, '0')}${d.minute.toString().padLeft(2, '0')}';
     return 'reporte_z_$stamp';
   }
 
@@ -3111,7 +3943,12 @@ class _ReporteZViewState extends ConsumerState<ReporteZView> {
               future: _ncfsFuture,
               builder: (context, snapshot) {
                 return ListView(
-                  padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
+                  padding: EdgeInsets.fromLTRB(
+                    dpi.space(16),
+                    dpi.space(16),
+                    dpi.space(16),
+                    dpi.space(16) + MediaQuery.of(context).padding.bottom,
+                  ),
                   children: [
                     _ReporteZReceipt(
                       closing: widget.closing,
@@ -3149,8 +3986,15 @@ class _ReporteZReceipt extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     final openedAt = closing.openedAt;
-    final duration = openedAt == null ? null : closing.closedAt.difference(openedAt);
-    final cashExpected = closing.openingAmount + closing.cashSales + closing.totalDeposits - closing.totalWithdrawals - closing.totalExpenses;
+    final duration = openedAt == null
+        ? null
+        : closing.closedAt.difference(openedAt);
+    final cashExpected =
+        closing.openingAmount +
+        closing.cashSales +
+        closing.totalDeposits -
+        closing.totalWithdrawals -
+        closing.totalExpenses;
     final cashDifference = closing.closingAmount - cashExpected;
     final ncfTotalCount = ncfs.fold<int>(0, (s, n) => s + n.count);
     final ncfTotalAmount = ncfs.fold<double>(0, (s, n) => s + n.total);
@@ -3177,13 +4021,22 @@ class _ReporteZReceipt extends StatelessWidget {
               children: [
                 Text(
                   businessName.toUpperCase(),
-                  style: TextStyle(fontSize: dpi.font(15), fontWeight: FontWeight.w900, letterSpacing: 1.2),
+                  style: TextStyle(
+                    fontSize: dpi.font(15),
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.2,
+                  ),
                   textAlign: TextAlign.center,
                 ),
                 SizedBox(height: dpi.space(4)),
                 Text(
                   'REPORTE DE CIERRE DE TURNO',
-                  style: TextStyle(fontSize: dpi.font(11), fontWeight: FontWeight.w700, color: MangoThemeFactory.mutedText(context), letterSpacing: 1.5),
+                  style: TextStyle(
+                    fontSize: dpi.font(11),
+                    fontWeight: FontWeight.w700,
+                    color: MangoThemeFactory.mutedText(context),
+                    letterSpacing: 1.5,
+                  ),
                 ),
               ],
             ),
@@ -3193,21 +4046,40 @@ class _ReporteZReceipt extends StatelessWidget {
           SizedBox(height: dpi.space(10)),
           _ReceiptRow(label: 'Caja', value: closing.registerName),
           _ReceiptRow(label: 'Cajero', value: closing.closedByName),
-          if (closing.deviceName != null && closing.deviceName!.trim().isNotEmpty)
+          if (closing.deviceName != null &&
+              closing.deviceName!.trim().isNotEmpty)
             _ReceiptRow(label: 'Dispositivo', value: closing.deviceName!),
           if (openedAt != null)
-            _ReceiptRow(label: 'Apertura', value: MangoFormatters.dateTime(openedAt)),
-          _ReceiptRow(label: 'Cierre', value: MangoFormatters.dateTime(closing.closedAt)),
+            _ReceiptRow(
+              label: 'Apertura',
+              value: MangoFormatters.dateTime(openedAt),
+            ),
+          _ReceiptRow(
+            label: 'Cierre',
+            value: MangoFormatters.dateTime(closing.closedAt),
+          ),
           if (duration != null)
             _ReceiptRow(label: 'Duración', value: _formatDuration(duration)),
           SizedBox(height: dpi.space(12)),
           const _ReceiptDivider(),
           const _ReceiptSectionTitle('VENTAS'),
-          _ReceiptRow(label: 'Efectivo', value: MangoFormatters.currency(closing.cashSales)),
-          _ReceiptRow(label: 'Tarjeta', value: MangoFormatters.currency(closing.cardSales)),
-          _ReceiptRow(label: 'Transferencia', value: MangoFormatters.currency(closing.transferSales)),
+          _ReceiptRow(
+            label: 'Efectivo',
+            value: MangoFormatters.currency(closing.cashSales),
+          ),
+          _ReceiptRow(
+            label: 'Tarjeta',
+            value: MangoFormatters.currency(closing.cardSales),
+          ),
+          _ReceiptRow(
+            label: 'Transferencia',
+            value: MangoFormatters.currency(closing.transferSales),
+          ),
           if (closing.otherSales > 0)
-            _ReceiptRow(label: 'Otros', value: MangoFormatters.currency(closing.otherSales)),
+            _ReceiptRow(
+              label: 'Otros',
+              value: MangoFormatters.currency(closing.otherSales),
+            ),
           SizedBox(height: dpi.space(4)),
           _ReceiptRow(
             label: 'TOTAL VENTAS',
@@ -3217,56 +4089,105 @@ class _ReporteZReceipt extends StatelessWidget {
           SizedBox(height: dpi.space(12)),
           const _ReceiptDivider(),
           const _ReceiptSectionTitle('CAJA EN EFECTIVO'),
-          _ReceiptRow(label: 'Apertura', value: MangoFormatters.currency(closing.openingAmount)),
-          _ReceiptRow(label: '+ Ventas efectivo', value: MangoFormatters.currency(closing.cashSales)),
-          _ReceiptRow(label: '+ Depósitos', value: MangoFormatters.currency(closing.totalDeposits)),
-          _ReceiptRow(label: '− Retiros', value: MangoFormatters.currency(closing.totalWithdrawals)),
-          _ReceiptRow(label: '− Gastos', value: MangoFormatters.currency(closing.totalExpenses)),
-          SizedBox(height: dpi.space(4)),
-          _ReceiptRow(label: 'Esperado', value: MangoFormatters.currency(cashExpected), emphasis: true),
-          _ReceiptRow(label: 'Contado al cierre', value: MangoFormatters.currency(closing.closingAmount), emphasis: true),
+          _ReceiptRow(
+            label: 'Apertura',
+            value: MangoFormatters.currency(closing.openingAmount),
+          ),
+          _ReceiptRow(
+            label: '+ Ventas efectivo',
+            value: MangoFormatters.currency(closing.cashSales),
+          ),
+          _ReceiptRow(
+            label: '+ Depósitos',
+            value: MangoFormatters.currency(closing.totalDeposits),
+          ),
+          _ReceiptRow(
+            label: '− Retiros',
+            value: MangoFormatters.currency(closing.totalWithdrawals),
+          ),
+          _ReceiptRow(
+            label: '− Gastos',
+            value: MangoFormatters.currency(closing.totalExpenses),
+          ),
           SizedBox(height: dpi.space(4)),
           _ReceiptRow(
-            label: cashDifference == 0 ? 'Dif. efectivo' : (cashDifference > 0 ? 'Sobrante efectivo' : 'Faltante efectivo'),
+            label: 'Esperado',
+            value: MangoFormatters.currency(cashExpected),
+            emphasis: true,
+          ),
+          _ReceiptRow(
+            label: 'Contado al cierre',
+            value: MangoFormatters.currency(closing.closingAmount),
+            emphasis: true,
+          ),
+          SizedBox(height: dpi.space(4)),
+          _ReceiptRow(
+            label: cashDifference == 0
+                ? 'Dif. efectivo'
+                : (cashDifference > 0
+                      ? 'Sobrante efectivo'
+                      : 'Faltante efectivo'),
             value: MangoFormatters.currency(cashDifference.abs()),
             valueColor: cashDifference == 0
                 ? null
                 : cashDifference > 0
-                    ? MangoThemeFactory.success
-                    : MangoThemeFactory.danger,
+                ? MangoThemeFactory.success
+                : MangoThemeFactory.danger,
             emphasis: true,
           ),
           SizedBox(height: dpi.space(12)),
           const _ReceiptDivider(),
           const _ReceiptSectionTitle('RESULTADO DEL CIERRE'),
-          _ReceiptRow(label: 'Total esperado', value: MangoFormatters.currency(closing.expectedTotal)),
-          _ReceiptRow(label: 'Total reportado', value: MangoFormatters.currency(closing.reportedTotal)),
+          _ReceiptRow(
+            label: 'Total esperado',
+            value: MangoFormatters.currency(closing.expectedTotal),
+          ),
+          _ReceiptRow(
+            label: 'Total reportado',
+            value: MangoFormatters.currency(closing.reportedTotal),
+          ),
           SizedBox(height: dpi.space(4)),
           Builder(
             builder: (_) {
               final net = closing.netDifference;
               return _ReceiptRow(
-                label: net == 0 ? 'Diferencia neta' : (net > 0 ? 'Sobrante (neto)' : 'Faltante (neto)'),
+                label: net == 0
+                    ? 'Diferencia neta'
+                    : (net > 0 ? 'Sobrante (neto)' : 'Faltante (neto)'),
                 value: MangoFormatters.currency(net.abs()),
                 valueColor: net == 0
                     ? null
                     : net > 0
-                        ? MangoThemeFactory.success
-                        : MangoThemeFactory.danger,
+                    ? MangoThemeFactory.success
+                    : MangoThemeFactory.danger,
                 emphasis: true,
               );
             },
           ),
           SizedBox(height: dpi.space(4)),
-          _ReceiptRow(label: 'Dif. efectivo', value: _signedCurrency(closing.cashDifference), valueColor: _diffColor(context, closing.cashDifference)),
-          _ReceiptRow(label: 'Dif. tarjeta', value: _signedCurrency(closing.cardDifference), valueColor: _diffColor(context, closing.cardDifference)),
-          _ReceiptRow(label: 'Dif. transferencia', value: _signedCurrency(closing.transferDifference), valueColor: _diffColor(context, closing.transferDifference)),
+          _ReceiptRow(
+            label: 'Dif. efectivo',
+            value: _signedCurrency(closing.cashDifference),
+            valueColor: _diffColor(context, closing.cashDifference),
+          ),
+          _ReceiptRow(
+            label: 'Dif. tarjeta',
+            value: _signedCurrency(closing.cardDifference),
+            valueColor: _diffColor(context, closing.cardDifference),
+          ),
+          _ReceiptRow(
+            label: 'Dif. transferencia',
+            value: _signedCurrency(closing.transferDifference),
+            valueColor: _diffColor(context, closing.transferDifference),
+          ),
           if (!closing.hasReportedBreakdown)
             Padding(
               padding: EdgeInsets.only(top: dpi.space(4)),
               child: Text(
                 'Sin desglose reportado por método; la diferencia neta refleja solo el efectivo.',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: MangoThemeFactory.mutedText(context)),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: MangoThemeFactory.mutedText(context),
+                ),
               ),
             ),
           SizedBox(height: dpi.space(12)),
@@ -3275,14 +4196,22 @@ class _ReporteZReceipt extends StatelessWidget {
           if (ncfsLoading)
             Padding(
               padding: EdgeInsets.symmetric(vertical: dpi.space(10)),
-              child: const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
+              child: const Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
             )
           else if (ncfsError)
             Padding(
               padding: EdgeInsets.symmetric(vertical: dpi.space(8)),
               child: Text(
                 'No se pudo cargar la información fiscal.',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: MangoThemeFactory.danger),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: MangoThemeFactory.danger,
+                ),
               ),
             )
           else if (ncfs.isEmpty)
@@ -3301,54 +4230,80 @@ class _ReporteZReceipt extends StatelessWidget {
               ),
               if (ncf.firstNumber != null && ncf.lastNumber != null)
                 Padding(
-                  padding: EdgeInsets.only(left: dpi.space(8), bottom: dpi.space(4)),
+                  padding: EdgeInsets.only(
+                    left: dpi.space(8),
+                    bottom: dpi.space(4),
+                  ),
                   child: Text(
                     ncf.firstNumber == ncf.lastNumber
                         ? ncf.firstNumber!
                         : '${ncf.firstNumber} → ${ncf.lastNumber}',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          fontFamily: 'monospace',
-                          fontSize: dpi.font(10),
-                          color: MangoThemeFactory.mutedText(context),
-                        ),
+                      fontFamily: 'monospace',
+                      fontSize: dpi.font(10),
+                      color: MangoThemeFactory.mutedText(context),
+                    ),
                   ),
                 ),
             ],
             SizedBox(height: dpi.space(4)),
-            _ReceiptRow(label: 'Total NCFs', value: '$ncfTotalCount comprobantes', emphasis: true),
-            _ReceiptRow(label: 'Total facturado', value: MangoFormatters.currency(ncfTotalAmount), emphasis: true),
+            _ReceiptRow(
+              label: 'Total NCFs',
+              value: '$ncfTotalCount comprobantes',
+              emphasis: true,
+            ),
+            _ReceiptRow(
+              label: 'Total facturado',
+              value: MangoFormatters.currency(ncfTotalAmount),
+              emphasis: true,
+            ),
           ],
           SizedBox(height: dpi.space(16)),
           const _ReceiptDivider(dashed: true),
           SizedBox(height: dpi.space(20)),
           Padding(
             padding: EdgeInsets.symmetric(horizontal: dpi.space(20)),
-            child: Container(height: 1, color: MangoThemeFactory.textColor(context)),
+            child: Container(
+              height: 1,
+              color: MangoThemeFactory.textColor(context),
+            ),
           ),
           SizedBox(height: dpi.space(4)),
           Center(
             child: Text(
               'Firma cajero',
-              style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
+              style: TextStyle(
+                fontSize: dpi.font(11),
+                color: MangoThemeFactory.mutedText(context),
+              ),
             ),
           ),
           SizedBox(height: dpi.space(20)),
           Padding(
             padding: EdgeInsets.symmetric(horizontal: dpi.space(20)),
-            child: Container(height: 1, color: MangoThemeFactory.textColor(context)),
+            child: Container(
+              height: 1,
+              color: MangoThemeFactory.textColor(context),
+            ),
           ),
           SizedBox(height: dpi.space(4)),
           Center(
             child: Text(
               'Firma supervisor',
-              style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
+              style: TextStyle(
+                fontSize: dpi.font(11),
+                color: MangoThemeFactory.mutedText(context),
+              ),
             ),
           ),
           SizedBox(height: dpi.space(16)),
           Center(
             child: Text(
               'Generado: ${MangoFormatters.dateTime(DateTime.now())}',
-              style: TextStyle(fontSize: dpi.font(9), color: MangoThemeFactory.mutedText(context)),
+              style: TextStyle(
+                fontSize: dpi.font(9),
+                color: MangoThemeFactory.mutedText(context),
+              ),
             ),
           ),
         ],
@@ -3389,7 +4344,14 @@ class _ReceiptRow extends StatelessWidget {
       padding: EdgeInsets.symmetric(vertical: dpi.space(2)),
       child: Row(
         children: [
-          Expanded(child: Text(label, style: style.copyWith(fontWeight: emphasis ? FontWeight.w700 : FontWeight.w500))),
+          Expanded(
+            child: Text(
+              label,
+              style: style.copyWith(
+                fontWeight: emphasis ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ),
           Text(value, style: style.copyWith(color: valueColor ?? style.color)),
         ],
       ),
@@ -3428,20 +4390,28 @@ class _ReceiptDivider extends StatelessWidget {
     final dpi = DpiScale.of(context);
     final color = MangoThemeFactory.borderColor(context);
     if (!dashed) {
-      return Container(height: 1, color: color, margin: EdgeInsets.symmetric(vertical: dpi.space(2)));
+      return Container(
+        height: 1,
+        color: color,
+        margin: EdgeInsets.symmetric(vertical: dpi.space(2)),
+      );
     }
     return LayoutBuilder(
       builder: (context, constraints) {
         const dashWidth = 4.0;
         const dashSpace = 4.0;
-        final dashCount = (constraints.maxWidth / (dashWidth + dashSpace)).floor();
+        final dashCount = (constraints.maxWidth / (dashWidth + dashSpace))
+            .floor();
         return Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: List.generate(dashCount, (_) => SizedBox(
-            width: dashWidth,
-            height: 1,
-            child: DecoratedBox(decoration: BoxDecoration(color: color)),
-          )),
+          children: List.generate(
+            dashCount,
+            (_) => SizedBox(
+              width: dashWidth,
+              height: 1,
+              child: DecoratedBox(decoration: BoxDecoration(color: color)),
+            ),
+          ),
         );
       },
     );

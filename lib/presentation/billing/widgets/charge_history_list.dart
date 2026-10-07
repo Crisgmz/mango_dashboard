@@ -80,7 +80,11 @@ class _ChargeRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
-    final color = _statusColor(charge.status);
+    // Reembolsado completo: el badge lo dice; "Aprobado" engañaría.
+    final color = charge.isFullyRefunded
+        ? MangoThemeFactory.info
+        : _statusColor(charge.status);
+    final label = charge.isFullyRefunded ? 'Reembolsado' : charge.status.label;
     final date = charge.completedAt ?? charge.attemptedAt;
 
     return Row(
@@ -106,6 +110,21 @@ class _ChargeRow extends StatelessWidget {
                   color: MangoThemeFactory.mutedText(context),
                 ),
               ),
+              if (charge.hasRefund)
+                Padding(
+                  padding: EdgeInsets.only(top: dpi.space(3)),
+                  child: Text(
+                    charge.isFullyRefunded
+                        ? 'Reembolsado completo${_refundDate()}'
+                        : 'Reembolsado ${MangoFormatters.currency(charge.refunded)}${_refundDate()}'
+                            ' · pagaste ${MangoFormatters.currency(charge.netAmount)}',
+                    style: TextStyle(
+                      fontSize: dpi.font(11.5),
+                      fontWeight: FontWeight.w600,
+                      color: MangoThemeFactory.success,
+                    ),
+                  ),
+                ),
               if (charge.attemptNumber > 1 || (charge.responseMessage?.isNotEmpty ?? false))
                 Padding(
                   padding: EdgeInsets.only(top: dpi.space(3)),
@@ -126,9 +145,18 @@ class _ChargeRow extends StatelessWidget {
           ),
         ),
         SizedBox(width: dpi.space(8)),
-        BillingStatusBadge(label: charge.status.label, color: color),
+        BillingStatusBadge(label: label, color: color),
       ],
     );
+  }
+
+  /// " el 17/09/2026" del reembolso más reciente de este cobro.
+  String _refundDate() {
+    final at = charge.refunds
+        .map((r) => r.refundedAt)
+        .whereType<DateTime>()
+        .fold<DateTime?>(null, (a, b) => a == null || b.isAfter(a) ? b : a);
+    return at == null ? '' : ' el ${MangoFormatters.date(at)}';
   }
 
   Color _statusColor(ChargeStatus status) {

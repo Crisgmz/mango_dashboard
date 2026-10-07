@@ -45,9 +45,10 @@ class PayNowButton extends ConsumerWidget {
     final isCharging = ref.watch(
       billingViewModelProvider.select((s) => s.isCharging),
     );
-    final amount = state.plan != null
-        ? MangoFormatters.currency(state.plan!.priceMonthly)
-        : null;
+    // Precio efectivo, no el de lista: con precio especial el botón y el
+    // diálogo pedirían más de lo que el servidor va a cobrar.
+    final effective = state.effectivePriceMonthly;
+    final amount = effective != null ? MangoFormatters.currency(effective) : null;
 
     return SizedBox(
       width: double.infinity,

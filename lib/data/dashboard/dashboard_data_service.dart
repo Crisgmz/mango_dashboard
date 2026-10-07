@@ -9,6 +9,7 @@ import 'menu_engineering_aggregator.dart';
 import 'operations_aggregator.dart';
 import 'sales_trend_aggregator.dart';
 import 'tax_lines_aggregator.dart';
+import 'waiter_attribution_aggregator.dart';
 
 class DashboardDataService {
   DashboardDataService(this._client);
@@ -1349,6 +1350,66 @@ class DashboardDataService {
           );
         })
         .toList(growable: false);
+  }
+
+  /// Mesero attributed to each comanda of [orderIds], resolved from the PIN
+  /// typed on the account rather than from the user logged into the device.
+  /// See `aggregateWaiterAttribution` for the priority chain.
+  ///
+  /// Keyed by `orderId` and by `orderId::checkId` for split bills. Lazy on
+  /// purpose: only the comandas screen pays for these queries.
+  Future<Map<String, List<TicketWaiter>>> loadWaitersForOrders({
+    required String businessId,
+    required List<String> orderIds,
+  }) async {
+    final ids =
+        orderIds.where((id) => id.isNotEmpty).toSet().toList(growable: false);
+    if (ids.isEmpty) return const {};
+
+    final orderRowsFuture = _batchedInFilter(
+      table: 'orders',
+      select:
+          'id, table_sessions!inner(id, opened_by_employee_id, waiter_user_id, opened_by)',
+      filterColumn: 'id',
+      values: ids,
+    );
+    final itemRowsFuture = _batchedInFilter(
+      table: 'order_items',
+      select:
+          'order_id, check_id, status, subtotal, tax, discounts, created_by_employee_id',
+      filterColumn: 'order_id',
+      values: ids,
+    );
+    // Roster of the business: `employees.id` → name, and the
+    // `user_id → employee` bridge the auth-user fallback needs. Tolerated as
+    // empty if RLS ever blocks it — names then degrade, attribution doesn't.
+    final rosterFuture = () async {
+      try {
+        final rows = await _client
+            .from('employees')
+            .select('id, first_name, last_name, user_id')
+            .eq('business_id', businessId);
+        return List<Map<String, dynamic>>.from(rows as List);
+      } catch (_) {
+        return const <Map<String, dynamic>>[];
+      }
+    }();
+
+    final orderRows = await orderRowsFuture;
+    final itemRows = await itemRowsFuture;
+    final employeeRows = await rosterFuture;
+
+    final userNames = await _resolveUserNames(
+      waiterUserIdsToResolve(orderRows: orderRows, employeeRows: employeeRows)
+          .toList(growable: false),
+    );
+
+    return aggregateWaiterAttribution(
+      orderRows: orderRows,
+      itemRows: itemRows,
+      employeeRows: employeeRows,
+      userNames: userNames,
+    );
   }
 
   /// Loads the audit breakdown for a period: voided items, cancelled

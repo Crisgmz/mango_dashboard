@@ -5,10 +5,17 @@ import 'dashboard_notification.dart';
 /// push-notify Edge Function. Used by the settings screen (toggles) and the
 /// in-app [NotificationService] (gating).
 enum NotificationEventType {
+  // Clave histórica 'item_voided': se conserva para no perder las preferencias
+  // ya guardadas. Los borradores (no enviados a cocina) nunca avisan.
   itemVoided(
     'item_voided',
-    'Producto anulado',
-    'Cuando se anula un producto de una orden.',
+    'Producto eliminado',
+    'Cuando se quita de una cuenta un producto ya enviado a cocina.',
+  ),
+  orderVoided(
+    'order_voided',
+    'Orden o venta anulada',
+    'Cuando se anula una orden con productos en cocina o una venta cobrada.',
   ),
   cashClosed(
     'cash_closed',
@@ -24,6 +31,11 @@ enum NotificationEventType {
     'table_opened',
     'Nueva cuenta abierta',
     'Cuando se abre una mesa o cuenta (solo dentro de la app).',
+  ),
+  stockLow(
+    'stock_low',
+    'Stock bajo',
+    'Resumen diario en la mañana cuando hay artículos bajo mínimo.',
   );
 
   const NotificationEventType(this.key, this.label, this.description);
@@ -50,6 +62,8 @@ enum NotificationEventType {
     switch (type) {
       case NotificationType.itemVoided:
         return itemVoided.key;
+      case NotificationType.orderVoided:
+        return orderVoided.key;
       case NotificationType.cashClosed:
         return cashClosed.key;
       case NotificationType.tableOpened:

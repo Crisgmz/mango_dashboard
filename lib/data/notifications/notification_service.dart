@@ -9,10 +9,19 @@ import '../../domain/notifications/notification_event_type.dart';
 class NotificationService {
   NotificationService(this._client);
 
+  /// El POS anota el motivo, el operador y el aprobador justo DESPUÉS de
+  /// quitar/anular, y lo que se quita de la misma orden en 5 s se suma al
+  /// mismo aviso (fn_notif_add_removed_items). Se espera a que eso termine
+  /// antes de pedir el texto final; push-notify espera 6 s.
+  static const _eventTextDelay = Duration(seconds: 7);
+
   final SupabaseClient _client;
   final _channels = <RealtimeChannel>[];
   final _controller = StreamController<DashboardNotification>.broadcast();
   final _seenIds = <String>{};
+  // Sube en cada subscribe: un aviso que estaba esperando su texto cuando se
+  // cambió de negocio se descarta en vez de caer en la lista del nuevo.
+  int _generation = 0;
   // Caché user_id -> nombre para no resolver el mismo mesero en cada apertura.
   final _nameCache = <String, String>{};
   // Claves de evento que el usuario apagó para el negocio activo. Los emits con
@@ -24,6 +33,7 @@ class NotificationService {
 
   void subscribe(String businessId) {
     _dispose();
+    _generation++;
     _seenIds.clear();
     _disabledTypes.clear();
     unawaited(_loadDisabledPrefs(businessId));
@@ -40,31 +50,28 @@ class NotificationService {
 
     dev.log('[NotificationService] Subscribing for business: $businessId');
 
-    // 1. order_items voided
-    final itemsCh = _client.channel('notif_items_$businessId');
-    itemsCh.onPostgresChanges(
-      event: PostgresChangeEvent.update,
+    // 1. Productos quitados después de cocina y anulaciones. La base decide
+    //    qué avisa (triggers de notification_events, migración
+    //    20261007_0001): los borradores y las mesas vacías no llegan aquí.
+    final eventsCh = _client.channel('notif_events_$businessId');
+    eventsCh.onPostgresChanges(
+      event: PostgresChangeEvent.insert,
       schema: 'public',
-      table: 'order_items',
+      table: 'notification_events',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'business_id',
+        value: businessId,
+      ),
       callback: (payload) {
-        dev.log('[NotificationService] order_items UPDATE received');
-        final rec = payload.newRecord;
-        if (rec['status']?.toString() != 'void') return;
-        final id = rec['id']?.toString() ?? '';
-        if (!_seenIds.add('${id}_void')) return;
-        _emit(DashboardNotification(
-          id: '${id}_void_${DateTime.now().millisecondsSinceEpoch}',
-          type: NotificationType.itemVoided,
-          title: 'Producto eliminado',
-          message: '${rec['qty'] ?? rec['quantity'] ?? 1} x ${rec['product_name'] ?? 'Producto'} fue eliminado.',
-          createdAt: DateTime.now(),
-        ));
+        dev.log('[NotificationService] notification_events INSERT received');
+        unawaited(_onNotificationEvent(payload.newRecord, _generation));
       },
     );
-    itemsCh.subscribe((status, [err]) {
-      dev.log('[NotificationService] items channel status: $status, error: $err');
+    eventsCh.subscribe((status, [err]) {
+      dev.log('[NotificationService] events channel status: $status, error: $err');
     });
-    _channels.add(itemsCh);
+    _channels.add(eventsCh);
 
     // 2. cash_register_sessions closed
     final cashCh = _client.channel('notif_cash_$businessId');
@@ -133,6 +140,59 @@ class NotificationService {
       dev.log('[NotificationService] tables channel status: $status, error: $err');
     });
     _channels.add(tablesCh);
+  }
+
+  /// Espera a que el POS termine de anotar motivo/operador y pide el texto
+  /// final a `fn_notification_event_refresh` (el mismo que usa el push). Si el
+  /// RPC falla, muestra el texto con el que se insertó la fila.
+  Future<void> _onNotificationEvent(
+    Map<String, dynamic> rec,
+    int generation,
+  ) async {
+    final id = rec['id']?.toString() ?? '';
+    final type = _typeForEventKey(rec['event_type']?.toString());
+    if (id.isEmpty || type == null) return;
+    if (!_seenIds.add(DashboardNotification.eventKey(id))) return;
+
+    await Future<void>.delayed(_eventTextDelay);
+    if (generation != _generation) return;
+
+    var title = rec['title']?.toString() ?? '';
+    var body = rec['body']?.toString() ?? '';
+    try {
+      final rows = await _client.rpc(
+        'fn_notification_event_refresh',
+        params: {'p_event_id': id},
+      );
+      final list = List<Map<String, dynamic>>.from(rows as List);
+      if (list.isNotEmpty) {
+        title = list.first['title']?.toString() ?? title;
+        body = list.first['body']?.toString() ?? body;
+      }
+    } catch (e) {
+      dev.log('[NotificationService] refresh event skipped: $e');
+    }
+    if (generation != _generation || title.isEmpty) return;
+
+    _emit(DashboardNotification(
+      id: DashboardNotification.eventKey(id),
+      type: type,
+      title: title,
+      message: body,
+      createdAt:
+          DateTime.tryParse(rec['created_at']?.toString() ?? '') ?? DateTime.now(),
+    ));
+  }
+
+  static NotificationType? _typeForEventKey(String? key) {
+    switch (NotificationEventType.fromKey(key ?? '')) {
+      case NotificationEventType.itemVoided:
+        return NotificationType.itemVoided;
+      case NotificationEventType.orderVoided:
+        return NotificationType.orderVoided;
+      default:
+        return null;
+    }
   }
 
   void _emit(DashboardNotification n) {

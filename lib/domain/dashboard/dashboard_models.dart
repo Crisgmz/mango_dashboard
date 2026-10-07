@@ -205,6 +205,19 @@ class TicketItem {
   final String? checkId;
 }
 
+/// Mesero atribuido a una comanda. En modo multimesero el mesero se identifica
+/// con su PIN al digitar en la cuenta, así que [id] es el `employees.id` de ese
+/// empleado — no el usuario que abrió el sistema en el dispositivo. Cuando el
+/// negocio no usa PIN y solo se pudo resolver el usuario de la sesión, [id]
+/// viene prefijado con `user:`.
+@immutable
+class TicketWaiter {
+  const TicketWaiter({required this.id, required this.name});
+
+  final String id;
+  final String name;
+}
+
 @immutable
 class PendingTable {
   const PendingTable({
@@ -1017,8 +1030,10 @@ class CashMovement {
 
   String get typeLabel {
     switch (type) {
+      // Las mismas palabras del POS en su pantalla de movimientos manuales:
+      // ingreso / retiro / gasto (el desglose del cierre sí dice "depósitos").
       case 'deposit':
-        return 'Depósito';
+        return 'Ingreso';
       case 'withdrawal':
         return 'Retiro';
       case 'expense':
@@ -1027,6 +1042,30 @@ class CashMovement {
         return type;
     }
   }
+}
+
+/// Razón del catálogo `cash_transaction_reasons` con la que se clasifica un
+/// movimiento manual de caja. El RPC la exige: sin razón no hay movimiento.
+@immutable
+class CashMovementReason {
+  const CashMovementReason({
+    required this.code,
+    required this.label,
+    this.appliesTo,
+    this.requiresPin = false,
+  });
+
+  final String code;
+  final String label;
+
+  /// `deposit | withdrawal | expense`, o null si sirve para cualquier tipo.
+  final String? appliesTo;
+
+  /// La razón siempre exige aprobación de supervisor, sin importar el monto.
+  final bool requiresPin;
+
+  /// "Otro (especificar)" — la nota deja de ser opcional.
+  bool get needsNote => code == 'other';
 }
 
 /// Fully reconciled view of a cash closing — the dashboard equivalent of the

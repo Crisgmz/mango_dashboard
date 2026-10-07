@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -35,6 +36,25 @@ class ReportExportService {
       bytes: bytes,
       filename: '${sanitizeExportFilename(filename)}.csv',
       mimeType: 'text/csv',
+      subject: subject,
+    );
+  }
+
+  /// Shares [content] as a plain-text `<filename>.txt`. Used by the DGII
+  /// formats (606/607/608), which the prevalidador reads as pipe-delimited
+  /// text — not CSV, so it can't go through [exportCsv].
+  ///
+  /// No BOM here on purpose: the prevalidador chokes on it.
+  static Future<void> exportTxt({
+    required String filename,
+    required String content,
+    String? subject,
+  }) async {
+    final bytes = Uint8List.fromList(utf8.encode(content));
+    await _share(
+      bytes: bytes,
+      filename: '${sanitizeExportFilename(filename)}.txt',
+      mimeType: 'text/plain',
       subject: subject,
     );
   }

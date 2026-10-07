@@ -1,9 +1,10 @@
 # Push notifications (FCM) — setup
 
 The Flutter client (FcmService) registers each device's FCM token in
-`device_tokens`. This Edge Function, triggered by Database Webhooks, sends a
-push to a business's devices when an event happens. Events: producto anulado,
-cierre de caja, caja descuadrada.
+`device_tokens`. This Edge Function sends a push to a business's devices when
+an event happens. Events: producto eliminado después de cocina, orden/venta
+anulada (via `notification_events`, see section 7), cierre de caja, caja
+descuadrada.
 
 ## 1. Firebase project + app config
 - Create (or reuse) a Firebase project.
@@ -35,14 +36,16 @@ cierre de caja, caja descuadrada.
   - `supabase secrets set FCM_SERVICE_ACCOUNT='<service-account-json>'`
     (Firebase Console → Project Settings → Service accounts → Generate new
     private key → paste the whole JSON.)
-- Database Webhooks (Dashboard → Database → Webhooks), both as HTTP POST to the
+- Database Webhook (Dashboard → Database → Webhooks) as HTTP POST to the
   `push-notify` function, default Supabase payload:
-  - table `order_items`, events: UPDATE
   - table `cash_register_sessions`, events: UPDATE
+  - (NO webhook on `order_items` any more — anulaciones go through
+    `notification_events`, section 7. The function ignores order_items
+    payloads; delete that webhook if it still exists.)
 
 ## 5. Test
-With the app fully closed, void an item or close a cash session → the push
-should arrive on the phone.
+With the app fully closed, remove a product that was already sent to the
+kitchen, void an order, or close a cash session → the push should arrive.
 
 ## 6. Billing reminders (push de cobro próximo)
 
@@ -73,3 +76,38 @@ Además de los eventos por webhook, un job diario empuja recordatorios de cobro
   (o ver a quién avisaría hoy: `select * from public.fn_billing_reminders_due();`).
 - Offsets: cobro/fin de prueba avisan 5 y 1 días antes; `past_due`/`suspended`
   avisan cada día. Cambiar el umbral con el parámetro `p_days`.
+
+## 7. Anulaciones y productos quitados (`notification_events`)
+
+Migración `supabase/migrations/20261007_0001_notification_events.sql` (idéntica
+en `mangospos`; prueba local `mangospos/supabase/tests/notification_events_local_test.sh`).
+
+- Regla: si el producto salió a cocina, quitarlo o bajarle la cantidad AVISA,
+  sin importar quién ni por dónde (mesa, subcuenta, caja cliente del Hub, cola
+  offline, otra app, Studio). Lo que nunca salió a cocina no avisa.
+- Triggers en la base deciden qué avisa y escriben una fila en
+  `notification_events`:
+  - `order_items` DELETE (por sentencia) y bajada de `qty`/`quantity` de un
+    ítem enviado. Se mira `order_items` directamente (no `order_item_removals`,
+    que no ve las reducciones sin etiqueta del Hub/cola offline); ese registro
+    solo aporta motivo, operador y quién autorizó. Lo de la misma orden y la
+    misma cuenta en 5 s se junta en un aviso. Solo se excluyen las RPC que
+    redistribuyen cantidades (dividir cuenta, mover a subcuenta, transferir
+    mesa): `private.fn_notif_is_rewrite`.
+  - orden anulada con algo en cocina → "Orden anulada"; venta cobrada anulada
+    → "Venta anulada" (uno por orden). Mesa vacía liberada → sin aviso.
+  - anulación parcial (una subcuenta / un NCF) → "Venta anulada".
+- El INSERT llama a esta función por `pg_net` con
+  `{"kind":"notification_event","event_id":…}` y el bearer service_role de
+  `private.dashboard_cron_config` (sección 6; sin esa config no hay push, pero
+  el aviso dentro de la app sí funciona y la migración lo advierte).
+- La función espera 6 s, reserva el evento (`pushed_at`, nunca sale dos veces),
+  pide el texto final a `fn_notification_event_refresh` y envía con
+  `data.event_id` para que la app no muestre el mismo aviso dos veces.
+- Reintento: el cron `notification_events_push_retry` (cada 2 min) manda
+  `{"kind":"notification_event_sweep"}` si hay avisos de más de 1 minuto sin
+  `pushed_at` (llamada perdida, función reiniciando).
+- Preferencias: `item_voided` (producto eliminado) y `order_voided` (orden o
+  venta anulada).
+- La migración elimina el trigger viejo `push_order_item_void` (un push por
+  cada ítem en 'void').

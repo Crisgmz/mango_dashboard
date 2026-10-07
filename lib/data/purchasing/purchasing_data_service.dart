@@ -128,18 +128,36 @@ class PurchasingDataService {
         .toList(growable: false);
   }
 
+  /// Cabecera y líneas en dos lecturas, igual que
+  /// `purchases_repository.getOrderDetail` del POS: si la orden no es visible
+  /// se dice eso, en vez del error genérico de `.single()`.
   Future<PurchaseOrder> loadPurchaseOrderDetail(String orderId) async {
     final row = await _client
         .from('purchase_orders')
         .select(
             'id, order_number, status, subtotal, tax, total, supplier_id, '
             'warehouse_id, expected_date, received_date, created_at, notes, '
-            'suppliers(name, whatsapp, phone), '
-            'purchase_order_items(id, inventory_item_id, description, '
-            'quantity_ordered, quantity_received, unit_cost, tax_rate, total)')
+            'suppliers(name, whatsapp, phone)')
         .eq('id', orderId)
-        .single();
-    return PurchaseOrder.fromJson(Map<String, dynamic>.from(row));
+        .maybeSingle();
+    if (row == null) {
+      throw const PurchasingException(
+          'La orden ya no existe o no tienes acceso a ella.');
+    }
+
+    final lines = await _client
+        .from('purchase_order_items')
+        .select(
+            'id, inventory_item_id, description, quantity_ordered, '
+            'quantity_received, unit_cost, tax_rate, total, '
+            'inventory_items(name, unit)')
+        .eq('purchase_order_id', orderId)
+        .order('id');
+
+    return PurchaseOrder.fromJson({
+      ...Map<String, dynamic>.from(row),
+      'purchase_order_items': lines,
+    });
   }
 
   Future<List<WarehouseInfo>> loadWarehouses(String businessId) async {

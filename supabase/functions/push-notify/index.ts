@@ -1,12 +1,17 @@
 // Supabase Edge Function: push-notify
 //
-// Two entry paths (same fan-out to a business's device tokens via FCM HTTP v1):
-//   1. Database Webhooks on `order_items` (UPDATE) and `cash_register_sessions`
-//      (UPDATE) → resolves the event → business → push (producto anulado,
-//      cierre de caja, caja descuadrada).
-//   2. Daily billing-reminder sweep, invoked by pg_cron with the service-role
-//      bearer and body {"kind":"billing_reminder_sweep"}. Calls the SQL RPC
-//      `fn_billing_reminders_due` (who + message) and pushes each reminder.
+// Three entry paths (same fan-out to a business's device tokens via FCM HTTP v1):
+//   1. Database trigger/webhook on `cash_register_sessions` (UPDATE) → resolves
+//      the event → business → push (cierre de caja, caja descuadrada).
+//   2. {"kind":"notification_event","event_id":…} from the AFTER INSERT trigger
+//      on `notification_events` (migration 20261007_0001), service-role bearer:
+//      producto quitado después de cocina, orden anulada, venta anulada. SQL
+//      already decided whether and to whom; we wait for the reason to land,
+//      take the final text from `fn_notification_event_refresh` and send once.
+//   3. Daily sweeps invoked by pg_cron with the service-role bearer:
+//      {"kind":"billing_reminder_sweep"} → RPC `fn_billing_reminders_due`
+//      {"kind":"low_stock_sweep"}        → RPC `fn_low_stock_alerts_due`
+//      The RPC decides who + message; we fan out to each business's devices.
 //
 // Required secrets (supabase secrets set ...):
 //   SUPABASE_URL                 (provided automatically)
@@ -14,8 +19,8 @@
 //   FCM_PROJECT_ID               your Firebase project id
 //   FCM_SERVICE_ACCOUNT          the full service-account JSON (one line)
 //
-// Events pushed: producto anulado (order_items.status -> void),
-// cierre de caja, and caja descuadrada (cash close with a non-zero difference).
+// `order_items` webhooks (the old per-item "producto anulado") are ignored:
+// they pushed once per item and missed deleted items and voided open orders.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -83,31 +88,19 @@ async function importKey(pem: string): Promise<CryptoKey> {
 
 // ── Event resolution: webhook payload → Notif | null ──
 // eventType keys match the notification_preferences table + Dart NotificationEventType.
-type Notif = { businessId: string; eventType: string; title: string; body: string };
+// `data` travels as the FCM data payload (string values only); the app uses
+// `event_id` to avoid showing the same notification_event twice.
+type Notif = {
+  businessId: string;
+  eventType: string;
+  title: string;
+  body: string;
+  data?: Record<string, string>;
+};
 
 async function buildEvent(payload: any): Promise<Notif | null> {
   const { table, type, record, old_record } = payload ?? {};
   if (type !== "UPDATE" || !record) return null;
-
-  if (table === "order_items") {
-    if (record.status !== "void" || old_record?.status === "void") return null;
-    // orders has no business_id; it lives on table_sessions (orders.session_id → table_sessions).
-    const { data } = await admin
-      .from("orders")
-      .select("table_sessions!inner(business_id)")
-      .eq("id", record.order_id)
-      .maybeSingle();
-    const businessId = (data as any)?.table_sessions?.business_id;
-    console.log(`[push-notify] order_items void order_id=${record.order_id} -> business=${businessId ?? "NULL"}`);
-    if (!businessId) return null;
-    const qty = record.qty ?? record.quantity ?? 1;
-    return {
-      businessId,
-      eventType: "item_voided",
-      title: "Producto anulado",
-      body: `${qty} x ${record.product_name ?? "Producto"} fue anulado.`,
-    };
-  }
 
   if (table === "cash_register_sessions") {
     const justClosed = record.closed_at && !old_record?.closed_at;
@@ -206,6 +199,7 @@ async function sendToBusiness(
           message: {
             token,
             notification: { title: n.title, body: n.body },
+            ...(n.data ? { data: n.data } : {}),
             android: { priority: "high" },
             // Be explicit for iOS so a terminated app still shows the banner +
             // sound (don't rely on FCM auto-filling aps.alert).
@@ -239,11 +233,12 @@ async function sendToBusiness(
   return { sent, pruned: stale.length, results };
 }
 
-// ── Billing reminder sweep (invoked daily by pg_cron) ──
-// SQL decides who to notify today + the message (fn_billing_reminders_due);
-// we just fan out to each business's device tokens. Service-role only.
-async function runBillingReminderSweep(): Promise<unknown> {
-  const { data, error } = await admin.rpc("fn_billing_reminders_due");
+// ── Cron sweeps (invoked daily by pg_cron) ──
+// SQL decides who to notify today + the message (the RPC); we just fan out to
+// each business's device tokens. Service-role only. Same shape for billing
+// reminders and low-stock alerts.
+async function runSweep(kind: string, rpc: string, eventType: string): Promise<unknown> {
+  const { data, error } = await admin.rpc(rpc);
   if (error) throw error;
   const rows = (data ?? []) as Array<{ business_id: string; title: string; body: string }>;
   let businesses = 0;
@@ -252,14 +247,69 @@ async function runBillingReminderSweep(): Promise<unknown> {
     if (!row.business_id) continue;
     const r = await sendToBusiness({
       businessId: row.business_id,
-      eventType: "billing_reminder",
+      eventType,
       title: row.title,
       body: row.body,
     });
     businesses++;
     sent += r.sent;
   }
-  return { kind: "billing_reminder_sweep", businesses, sent };
+  return { kind, businesses, sent };
+}
+
+// ── notification_events (anulaciones / productos quitados) ──
+// The POS writes the reason, the operator (PIN) and the approver right AFTER
+// deleting/voiding, and removals made within 5 s are appended to the same
+// event while it is unclaimed (fn_notif_add_removed_items). Wait past that
+// window, claim, then let SQL rebuild the final text. The Dart side waits a bit
+// longer (NotificationService._eventTextDelay).
+const EVENT_TEXT_DELAY_MS = 6000;
+
+type EventRow = {
+  id: string;
+  business_id: string;
+  event_type: string;
+  title: string;
+  body: string;
+};
+
+async function runNotificationEvent(eventId: string, wait = true): Promise<unknown> {
+  if (wait) await new Promise((resolve) => setTimeout(resolve, EVENT_TEXT_DELAY_MS));
+
+  // Claim first: a retried request never pushes the same event twice, and no
+  // more removals get appended to it after this point.
+  const { data: claimed, error: claimError } = await admin
+    .from("notification_events")
+    .update({ pushed_at: new Date().toISOString() })
+    .eq("id", eventId)
+    .is("pushed_at", null)
+    .select("id, business_id, event_type, title, body");
+  if (claimError) throw claimError;
+  const stored = ((claimed ?? []) as EventRow[])[0];
+  if (!stored) return { skipped: "already_pushed_or_missing" };
+
+  // Final text (reason/approver); falls back to the stored text.
+  let row: EventRow = stored;
+  const { data, error } = await admin.rpc("fn_notification_event_refresh", {
+    p_event_id: eventId,
+  });
+  if (error) {
+    console.log(`[push-notify] refresh failed event=${eventId}: ${error.message}`);
+  } else {
+    row = ((data ?? []) as EventRow[])[0] ?? stored;
+  }
+
+  return await sendToBusiness({
+    businessId: row.business_id,
+    eventType: row.event_type,
+    title: row.title,
+    body: row.body,
+    data: {
+      event_id: String(row.id),
+      event_type: String(row.event_type),
+      business_id: String(row.business_id),
+    },
+  });
 }
 
 Deno.serve(async (req) => {
@@ -269,14 +319,53 @@ Deno.serve(async (req) => {
       `[push-notify] req table=${payload?.table ?? "-"} type=${payload?.type ?? "-"} kind=${payload?.kind ?? "-"}`,
     );
 
-    // Cron-driven billing reminders: gated to the service role (the cron sends
-    // the service_role key as the bearer). Checked before any DB read.
-    if (payload?.kind === "billing_reminder_sweep") {
-      const auth = req.headers.get("Authorization") ?? "";
-      if (auth !== `Bearer ${SERVICE_ROLE}`) {
+    // Cron-driven sweeps: gated to the service role (the cron sends the
+    // service_role key as the bearer). Checked before any DB read.
+    const sweeps: Record<string, { rpc: string; eventType: string }> = {
+      billing_reminder_sweep: { rpc: "fn_billing_reminders_due", eventType: "billing_reminder" },
+      low_stock_sweep: { rpc: "fn_low_stock_alerts_due", eventType: "stock_low" },
+    };
+    const sweep = sweeps[payload?.kind as string];
+    const isServiceRole = (req.headers.get("Authorization") ?? "") === `Bearer ${SERVICE_ROLE}`;
+    if (sweep) {
+      if (!isServiceRole) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
-      return Response.json(await runBillingReminderSweep());
+      return Response.json(await runSweep(payload.kind, sweep.rpc, sweep.eventType));
+    }
+
+    // notification_events trigger (pg_net, service-role bearer).
+    if (payload?.kind === "notification_event") {
+      if (!isServiceRole) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      if (!payload?.event_id) {
+        return Response.json({ error: "event_id required" }, { status: 400 });
+      }
+      return Response.json(await runNotificationEvent(String(payload.event_id)));
+    }
+
+    // Retry cron (private.fn_run_notification_event_sweep): events older than
+    // a minute that never got pushed (lost call, function restarting…).
+    if (payload?.kind === "notification_event_sweep") {
+      if (!isServiceRole) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      const now = Date.now();
+      const { data: pending, error } = await admin
+        .from("notification_events")
+        .select("id")
+        .is("pushed_at", null)
+        .lt("created_at", new Date(now - 60_000).toISOString())
+        .gt("created_at", new Date(now - 2 * 3600_000).toISOString())
+        .order("created_at")
+        .limit(50);
+      if (error) throw error;
+      const results = [];
+      for (const { id } of (pending ?? []) as Array<{ id: string }>) {
+        results.push(await runNotificationEvent(String(id), false));
+      }
+      return Response.json({ kind: payload.kind, retried: results.length, results });
     }
 
     // Debug helper: send a test push straight to a business's devices without
@@ -295,7 +384,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Default path: Database Webhook events (order_items / cash_register_sessions).
+    // Default path: Database Webhook events (cash_register_sessions; the old
+    // order_items webhook is skipped — see the header).
     const event = await buildEvent(payload);
     if (!event) return Response.json({ skipped: true });
     return Response.json(await sendToBusiness(event));

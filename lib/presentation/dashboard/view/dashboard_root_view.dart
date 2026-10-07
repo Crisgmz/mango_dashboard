@@ -37,12 +37,14 @@ import '../widgets/commands_card.dart';
 import '../widgets/customers_card.dart';
 import '../widgets/modifiers_card.dart';
 import '../widgets/waiter_performance_card.dart';
+import '../../accounting/view/accounting_hub_view.dart';
 import '../../inventory/view/inventory_hub_view.dart';
 import '../../widgets/marquee_text.dart';
 import '../../billing/view/billing_view.dart';
 import '../../notifications/view/notification_settings_view.dart';
 import '../../catalog/view/products_admin_view.dart';
 import '../../catalog/view/offers_admin_view.dart';
+import '../../floor/view/floor_admin_view.dart';
 import '../../billing/viewmodel/billing_reminder.dart';
 import '../../billing/widgets/billing_reminder_banner.dart';
 import '../../../data/billing/billing_reminder_prefs.dart';
@@ -885,11 +887,13 @@ class _NotificationsSheet extends ConsumerWidget {
 
   static const _typeIcons = <NotificationType, IconData>{
     NotificationType.itemVoided: Icons.remove_circle_rounded,
+    NotificationType.orderVoided: Icons.block_rounded,
     NotificationType.cashClosed: Icons.point_of_sale_rounded,
     NotificationType.tableOpened: Icons.table_restaurant_rounded,
   };
   static const _typeColors = <NotificationType, Color>{
-    NotificationType.itemVoided: MangoThemeFactory.danger,
+    NotificationType.itemVoided: MangoThemeFactory.warning,
+    NotificationType.orderVoided: MangoThemeFactory.danger,
     NotificationType.cashClosed: MangoThemeFactory.payCard,
     NotificationType.tableOpened: MangoThemeFactory.success,
   };
@@ -4378,11 +4382,23 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                       icon: Icons.restaurant_menu_rounded,
                       accent: MangoThemeFactory.info,
                       label: 'Productos',
-                      subtitle: 'Crear, editar y eliminar productos',
+                      subtitle: 'Productos y categorías del menú',
                       onTap: () {
                         Navigator.of(context).pop();
                         Navigator.of(context).push(
                           MaterialPageRoute(builder: (_) => const ProductsAdminView()),
+                        );
+                      },
+                    ),
+                    _DrawerTile(
+                      icon: Icons.table_restaurant_rounded,
+                      accent: MangoThemeFactory.mango,
+                      label: 'Salón',
+                      subtitle: 'Zonas y mesas del POS',
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const FloorAdminView()),
                         );
                       },
                     ),
@@ -4395,6 +4411,20 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                         Navigator.of(context).pop();
                         Navigator.of(context).push(
                           MaterialPageRoute(builder: (_) => const OffersAdminView()),
+                        );
+                      },
+                    ),
+                    // Contabilidad: la Edge Function del e-CF solo acepta
+                    // owner/admin, y declarar a la DGII es cosa del dueño.
+                    _DrawerTile(
+                      icon: Icons.account_balance_rounded,
+                      accent: MangoThemeFactory.payTransfer,
+                      label: 'Contabilidad',
+                      subtitle: 'Facturación electrónica · 606, 607 y 608',
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const AccountingHubView()),
                         );
                       },
                     ),

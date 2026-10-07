@@ -10,6 +10,10 @@ class LocalNotificationHelper {
   static final _plugin = FlutterLocalNotificationsPlugin();
   static int _idCounter = 0;
   static bool _initialized = false;
+  // Llaves ya mostradas (las más recientes). Un mismo aviso puede llegar por
+  // Realtime y por FCM con la app abierta: sale un solo banner.
+  static final _shownKeys = <String>[];
+  static const _maxShownKeys = 100;
 
   /// The Android channel id. Must match `default_notification_channel_id` in
   /// AndroidManifest.xml so OS-built pushes (app killed/background) use it too.
@@ -49,11 +53,18 @@ class LocalNotificationHelper {
     _initialized = true;
   }
 
+  /// [dedupeKey]: si ya se mostró un banner con esa llave, no se repite.
   static Future<void> show({
     required String title,
     required String body,
+    String? dedupeKey,
   }) async {
     if (!_initialized) return;
+    if (dedupeKey != null) {
+      if (_shownKeys.contains(dedupeKey)) return;
+      _shownKeys.add(dedupeKey);
+      if (_shownKeys.length > _maxShownKeys) _shownKeys.removeAt(0);
+    }
     try {
       final androidDetails = AndroidNotificationDetails(
         'mango_dashboard',

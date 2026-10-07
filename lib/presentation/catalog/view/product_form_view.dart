@@ -8,6 +8,7 @@ import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../purchasing/view/reception_scanner_page.dart';
 import '../../theme/theme_data_factory.dart';
 import '../viewmodel/products_admin_view_model.dart';
+import 'categories_admin_view.dart';
 
 /// Formulario para crear o editar un producto (`menu_items`). Espejo del
 /// diálogo "Elemento de Menú" del POS: mismos campos, mismas tablas
@@ -89,6 +90,18 @@ class _ProductFormViewState extends ConsumerState<ProductFormView> {
   }
 
   String? get _businessId => ref.read(authGateViewModelProvider).profile?.businessId;
+
+  /// Crear/editar categorías sin salir del formulario; al volver se recarga
+  /// la lista (lo que ya se escribió en el formulario se conserva).
+  Future<void> _openCategories() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const CategoriesAdminView()),
+    );
+    final businessId = _businessId;
+    if (businessId != null && mounted) {
+      await ref.read(productsAdminViewModelProvider.notifier).refresh(businessId);
+    }
+  }
 
   void _snack(String msg) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -269,7 +282,17 @@ class _ProductFormViewState extends ConsumerState<ProductFormView> {
             ],
             onChanged: (v) => setState(() => _categoryId = v),
           ),
-          SizedBox(height: dpi.space(20)),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _openCategories,
+              icon: Icon(Icons.category_outlined, size: dpi.icon(16)),
+              label: Text(vm.categories.isEmpty
+                  ? 'Crear categorías'
+                  : 'Administrar categorías'),
+            ),
+          ),
+          SizedBox(height: dpi.space(12)),
 
           _sectionLabel(context, 'PRECIO Y REFERENCIAS'),
           TextField(

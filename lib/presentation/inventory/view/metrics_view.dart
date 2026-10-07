@@ -21,6 +21,7 @@ class MetricsView extends ConsumerStatefulWidget {
 class _MetricsViewState extends ConsumerState<MetricsView> {
   List<ValuationItem> _valuation = const [];
   List<RotationItem> _rotation = const [];
+  List<WasteEntry> _waste = const [];
   bool _loading = true;
 
   String? get _businessId =>
@@ -45,6 +46,10 @@ class _MetricsViewState extends ConsumerState<MetricsView> {
       final rotation = await service.loadRotationAnalysis(businessId);
       if (mounted) setState(() => _rotation = rotation);
     } catch (_) {}
+    try {
+      final waste = await service.loadWasteMovements(businessId);
+      if (mounted) setState(() => _waste = waste);
+    } catch (_) {}
     if (mounted) setState(() => _loading = false);
   }
 
@@ -62,7 +67,7 @@ class _MetricsViewState extends ConsumerState<MetricsView> {
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Métricas'),
@@ -70,10 +75,13 @@ class _MetricsViewState extends ConsumerState<MetricsView> {
           bottom: const TabBar(
             indicatorColor: MangoThemeFactory.mango,
             labelColor: MangoThemeFactory.mango,
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
             tabs: [
               Tab(text: 'Valor ABC'),
               Tab(text: 'Rotación'),
               Tab(text: 'Envejecido'),
+              Tab(text: 'Merma'),
             ],
           ),
         ),
@@ -157,6 +165,7 @@ class _MetricsViewState extends ConsumerState<MetricsView> {
                         _abcTab(context, dpi),
                         _rotationTab(context, dpi),
                         _dormantTab(context, dpi),
+                        _wasteTab(context, dpi),
                       ],
                     ),
                   ),
@@ -458,6 +467,194 @@ class _MetricsViewState extends ConsumerState<MetricsView> {
               ),
             );
           }),
+        ],
+      ),
+    );
+  }
+
+  Color _wasteColor(String reason) {
+    switch (reason) {
+      case 'expiration':
+        return MangoThemeFactory.danger;
+      case 'breakage':
+        return MangoThemeFactory.warning;
+      case 'theft':
+        return MangoThemeFactory.mangoDeep;
+      default: // donation
+        return MangoThemeFactory.info;
+    }
+  }
+
+  Widget _wasteTab(BuildContext context, DpiScale dpi) {
+    if (_waste.isEmpty) {
+      return _empty(context,
+          'Sin merma en los últimos 30 días. Los ajustes por rotura, vencimiento, robo o donación aparecen aquí con su costo.');
+    }
+    final total = _waste.fold<double>(0, (sum, w) => sum + w.value);
+
+    // Totales por motivo, para las chips del resumen.
+    final byReason = <String, double>{};
+    for (final w in _waste) {
+      byReason[w.reasonCode] = (byReason[w.reasonCode] ?? 0) + w.value;
+    }
+    final reasons = byReason.entries.toList(growable: false)
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    // Agregado por artículo+motivo, ordenado por lo que más duele.
+    final grouped = <String, WasteEntry>{};
+    for (final w in _waste) {
+      final key = '${w.itemId}|${w.reasonCode}';
+      final prev = grouped[key];
+      grouped[key] = prev == null
+          ? w
+          : WasteEntry(
+              itemId: w.itemId,
+              name: w.name,
+              unit: w.unit,
+              reasonCode: w.reasonCode,
+              quantity: prev.quantity + w.quantity,
+              value: prev.value + w.value,
+              createdAt: prev.createdAt,
+            );
+    }
+    final rows = grouped.values.toList(growable: false)
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(
+            parent: BouncingScrollPhysics()),
+        padding: EdgeInsets.fromLTRB(
+            dpi.space(16), dpi.space(8), dpi.space(16), dpi.space(24)),
+        children: [
+          // ── Resumen: total perdido + desglose por motivo ──
+          Container(
+            margin: EdgeInsets.only(bottom: dpi.space(10)),
+            padding: EdgeInsets.all(dpi.space(14)),
+            decoration: BoxDecoration(
+              color: MangoThemeFactory.cardColor(context),
+              borderRadius: BorderRadius.circular(dpi.radius(14)),
+              border:
+                  Border.all(color: MangoThemeFactory.borderColor(context)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('MERMA ÚLTIMOS 30 DÍAS',
+                    style: TextStyle(
+                      fontSize: dpi.font(9.5),
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.6,
+                      color: MangoThemeFactory.mutedText(context),
+                    )),
+                SizedBox(height: dpi.space(2)),
+                Text(
+                  MangoFormatters.currency(total),
+                  style: TextStyle(
+                    fontSize: dpi.font(22),
+                    fontWeight: FontWeight.w800,
+                    color: MangoThemeFactory.danger,
+                  ),
+                ),
+                SizedBox(height: dpi.space(10)),
+                Wrap(
+                  spacing: dpi.space(6),
+                  runSpacing: dpi.space(6),
+                  children: [
+                    for (final r in reasons)
+                      Container(
+                        padding: EdgeInsets.symmetric(
+                            horizontal: dpi.space(9),
+                            vertical: dpi.space(5)),
+                        decoration: BoxDecoration(
+                          color: _wasteColor(r.key).withValues(alpha: 0.1),
+                          borderRadius:
+                              BorderRadius.circular(dpi.radius(8)),
+                        ),
+                        child: Text(
+                          '${WasteEntry.reasonLabel(r.key)} · ${MangoFormatters.currency(r.value)}',
+                          style: TextStyle(
+                            fontSize: dpi.font(10.5),
+                            fontWeight: FontWeight.w700,
+                            color: _wasteColor(r.key),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          // ── Detalle por artículo y motivo ──
+          for (final w in rows)
+            Container(
+              margin: EdgeInsets.only(bottom: dpi.space(6)),
+              padding: EdgeInsets.symmetric(
+                  horizontal: dpi.space(12), vertical: dpi.space(10)),
+              decoration: BoxDecoration(
+                color: MangoThemeFactory.cardColor(context),
+                borderRadius: BorderRadius.circular(dpi.radius(12)),
+                border:
+                    Border.all(color: MangoThemeFactory.borderColor(context)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(w.name,
+                                  style: TextStyle(
+                                      fontSize: dpi.font(13),
+                                      fontWeight: FontWeight.w600),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis),
+                            ),
+                            SizedBox(width: dpi.space(6)),
+                            Container(
+                              padding: EdgeInsets.symmetric(
+                                  horizontal: dpi.space(6),
+                                  vertical: dpi.space(1)),
+                              decoration: BoxDecoration(
+                                color: _wasteColor(w.reasonCode)
+                                    .withValues(alpha: 0.12),
+                                borderRadius:
+                                    BorderRadius.circular(dpi.radius(5)),
+                              ),
+                              child: Text(
+                                WasteEntry.reasonLabel(w.reasonCode)
+                                    .toUpperCase(),
+                                style: TextStyle(
+                                    fontSize: dpi.font(8.5),
+                                    fontWeight: FontWeight.w800,
+                                    color: _wasteColor(w.reasonCode)),
+                              ),
+                            ),
+                          ],
+                        ),
+                        Text(
+                          '${MangoFormatters.number(w.quantity)} ${w.unit} perdida(s)',
+                          style: TextStyle(
+                              fontSize: dpi.font(10.5),
+                              color: MangoThemeFactory.mutedText(context)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Text(
+                    MangoFormatters.currency(w.value),
+                    style: TextStyle(
+                        fontSize: dpi.font(13),
+                        fontWeight: FontWeight.w800,
+                        color: MangoThemeFactory.danger),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );

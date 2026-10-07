@@ -107,3 +107,61 @@ class RotationItem {
     );
   }
 }
+
+/// Un movimiento de merma (kardex con motivo de pérdida): salida por rotura,
+/// vencimiento, robo/pérdida o donación, valorada a costo.
+@immutable
+class WasteEntry {
+  const WasteEntry({
+    required this.itemId,
+    required this.name,
+    required this.unit,
+    required this.reasonCode,
+    required this.quantity,
+    required this.value,
+    this.createdAt,
+  });
+
+  final String itemId;
+  final String name;
+  final String unit;
+
+  /// 'breakage' | 'expiration' | 'theft' | 'donation'.
+  final String reasonCode;
+
+  /// Unidades perdidas (absoluto, siempre positivo).
+  final double quantity;
+
+  /// Costo de lo perdido: |cantidad| × costo del movimiento.
+  final double value;
+  final DateTime? createdAt;
+
+  static String reasonLabel(String code) {
+    switch (code) {
+      case 'breakage':
+        return 'Rotura';
+      case 'expiration':
+        return 'Vencido';
+      case 'theft':
+        return 'Robo / pérdida';
+      case 'donation':
+        return 'Donación';
+      default:
+        return 'Otro';
+    }
+  }
+
+  factory WasteEntry.fromJson(Map<String, dynamic> json) {
+    double toD(dynamic v) =>
+        v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '') ?? 0;
+    return WasteEntry(
+      itemId: json['item_id']?.toString() ?? '',
+      name: json['item_name']?.toString() ?? 'Artículo',
+      unit: json['item_unit']?.toString() ?? 'unidad',
+      reasonCode: json['reason_code']?.toString() ?? 'other',
+      quantity: toD(json['quantity']).abs(),
+      value: toD(json['total_value']),
+      createdAt: DateTime.tryParse(json['created_at']?.toString() ?? ''),
+    );
+  }
+}

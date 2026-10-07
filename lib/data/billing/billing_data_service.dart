@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../domain/billing/billing_charge.dart';
 import '../../domain/billing/billing_enums.dart';
 import '../../domain/billing/billing_payment_method.dart';
+import '../../domain/billing/billing_refund.dart';
 import '../../domain/billing/billing_state.dart';
 import '../../domain/billing/tokenization_session.dart';
 
@@ -18,6 +19,7 @@ class BillingDataService {
 
   /// Estado de suscripción de la fila ancla (`is_billing_anchor = true`).
   /// Une el plan (`plans`) y los últimos cargos OK/fallido vía la vista pública.
+  /// Trae el precio especial (`price_override_*`) para mostrar el monto real.
   /// Devuelve null si el comercio aún no tiene fila de billing.
   Future<BillingState?> getBillingState(String businessId) async {
     final row = await _client
@@ -37,6 +39,9 @@ class BillingDataService {
           suspended_at,
           cancelled_at,
           cancellation_reason,
+          price_override_cents,
+          price_override_plan_id,
+          price_override_ends_on,
           plan:plans(*),
           last_successful_charge:azul_charges_public!last_successful_charge_id(*),
           last_failed_charge:azul_charges_public!last_failed_charge_id(*)
@@ -78,20 +83,45 @@ class BillingDataService {
     ).map(BillingPaymentMethod.fromJson).toList(growable: false);
   }
 
-  /// Historial de cobros mensuales (más reciente primero).
+  /// Historial de cobros mensuales (más reciente primero), con sus reembolsos
+  /// aprobados ya repartidos en cada cobro.
   Future<List<BillingCharge>> listCharges(
     String businessId, {
     int limit = 60,
   }) async {
+    // Arranca ya: corre en paralelo con la consulta de cobros.
+    final refundsFuture = listRefunds(businessId);
     final rows = await _client
         .from('azul_charges_public')
         .select()
         .eq('business_id', businessId)
         .order('attempted_at', ascending: false)
         .limit(limit);
-    return List<Map<String, dynamic>>.from(
+    final charges = List<Map<String, dynamic>>.from(
       rows,
     ).map(BillingCharge.fromJson).toList(growable: false);
+    return attachRefunds(charges, await refundsFuture);
+  }
+
+  /// Reembolsos aprobados de la suscripción (RPC
+  /// `fn_business_subscription_refunds`, mangopos_administrador 0047).
+  ///
+  /// Tolerante: si la RPC aún no existe en el servidor o falla, devuelve vacío
+  /// — el historial de cobros tiene que seguir cargando sin ella.
+  Future<List<BillingRefund>> listRefunds(String businessId) async {
+    try {
+      final rows = await _client.rpc(
+        'fn_business_subscription_refunds',
+        params: {'p_business_id': businessId},
+      );
+      if (rows is! List) return const [];
+      return rows
+          .whereType<Map>()
+          .map((r) => BillingRefund.fromJson(Map<String, dynamic>.from(r)))
+          .toList(growable: false);
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// Crea una sesión de la Azul Payment Page para registrar/cambiar tarjeta.

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../data/purchasing/purchasing_data_service.dart';
 import '../../../domain/purchasing/purchase_order.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
@@ -173,12 +175,7 @@ class _PurchaseOrderDetailViewState
             return const Center(child: CircularProgressIndicator());
           }
           if (snapshot.hasError || !snapshot.hasData) {
-            return Center(
-              child: Text(
-                'No se pudo cargar la orden.',
-                style: TextStyle(color: MangoThemeFactory.danger),
-              ),
-            );
+            return _LoadError(error: snapshot.error, onRetry: _reload);
           }
           final order = snapshot.data!;
           final color = statusColor(order.status);
@@ -411,7 +408,7 @@ class _PurchaseOrderDetailViewState
                                 ),
                                 SizedBox(height: dpi.space(2)),
                                 Text(
-                                  '${MangoFormatters.currency(l.unitCost)} c/u'
+                                  '${MangoFormatters.currency(l.unitCost)} ${l.unit != null ? 'por ${l.unit}' : 'c/u'}'
                                   '${l.taxRate > 0 ? ' · ITBIS ${l.taxRate.toStringAsFixed(0)}%' : ''}',
                                   style: TextStyle(
                                     fontSize: dpi.font(11),
@@ -555,6 +552,56 @@ class _PurchaseOrderDetailViewState
                 fontSize: dpi.font(13),
                 fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
       ],
+    );
+  }
+}
+
+/// Falla al abrir la orden: muestra el motivo real (RLS, red, orden borrada)
+/// en vez de un texto genérico, y deja reintentar sin salir de la pantalla.
+class _LoadError extends StatelessWidget {
+  const _LoadError({required this.error, required this.onRetry});
+
+  final Object? error;
+  final VoidCallback onRetry;
+
+  String get _detail {
+    final e = error;
+    if (e is PostgrestException) return e.message;
+    if (e is PurchasingException) return e.message;
+    return e?.toString() ?? 'Sin respuesta del servidor.';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.all(dpi.space(24)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.receipt_long_rounded,
+                size: dpi.icon(42),
+                color: MangoThemeFactory.mutedText(context)
+                    .withValues(alpha: 0.6)),
+            SizedBox(height: dpi.space(10)),
+            Text('No se pudo abrir la orden',
+                style: Theme.of(context).textTheme.titleMedium),
+            SizedBox(height: dpi.space(4)),
+            Text(
+              _detail,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            SizedBox(height: dpi.space(14)),
+            FilledButton.icon(
+              onPressed: onRetry,
+              icon: Icon(Icons.refresh_rounded, size: dpi.icon(18)),
+              label: const Text('Reintentar'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

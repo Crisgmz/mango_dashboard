@@ -108,6 +108,7 @@ class PurchaseOrderLine {
     this.quantityReceived = 0,
     this.taxRate = 0,
     this.total = 0,
+    this.unit,
   });
 
   final String id;
@@ -119,13 +120,25 @@ class PurchaseOrderLine {
   final double taxRate;
   final double total;
 
+  /// Unidad base del insumo (`inventory_items.unit`), si vino embebida.
+  final String? unit;
+
   bool get fullyReceived => quantityReceived >= quantityOrdered;
 
   factory PurchaseOrderLine.fromJson(Map<String, dynamic> json) {
+    // La RPC atómica del POS guarda `nullif(trim(description), '')`: sin
+    // descripción se cae al nombre del insumo en vez de un "Ítem" genérico.
+    final item = json['inventory_items'];
+    final itemName = item is Map ? item['name']?.toString().trim() : null;
+    final description = json['description']?.toString().trim();
+    final unit = item is Map ? item['unit']?.toString().trim() : null;
     return PurchaseOrderLine(
       id: json['id']?.toString() ?? '',
       inventoryItemId: json['inventory_item_id']?.toString(),
-      description: json['description']?.toString() ?? 'Ítem',
+      description: description?.isNotEmpty == true
+          ? description!
+          : (itemName?.isNotEmpty == true ? itemName! : 'Ítem'),
+      unit: unit?.isNotEmpty == true ? unit : null,
       quantityOrdered: PurchaseOrder._toDouble(json['quantity_ordered']),
       quantityReceived: PurchaseOrder._toDouble(json['quantity_received']),
       unitCost: PurchaseOrder._toDouble(json['unit_cost']),

@@ -19,6 +19,23 @@ class MangoFormatters {
   /// (e.g. `1,234.50`). For tables/exports where the `RD$` prefix is redundant.
   static String amount(num value) => _amount.format(value);
 
+  /// Lee un monto escrito a mano en un campo de dinero. Todo lo que el app
+  /// muestra usa formato en_US (miles con coma, centavos con punto), así que
+  /// la coma se descarta como separador de miles: `10,500.50` → `10500.5`.
+  /// Devuelve null si no queda un monto positivo — el llamador decide qué
+  /// decirle al usuario.
+  static double? parsePositiveAmount(String raw) {
+    final cleaned = raw
+        .replaceAll('RD\$', '')
+        .replaceAll(',', '')
+        .replaceAll(' ', '')
+        .trim();
+    if (cleaned.isEmpty) return null;
+    final value = double.tryParse(cleaned);
+    if (value == null || !value.isFinite || value <= 0) return null;
+    return value;
+  }
+
   static String dateTime(DateTime value) => DateFormat('dd/MM/yyyy HH:mm').format(value.toLocal());
 
   /// Solo fecha, sin hora (e.g. `15/07/2026`). Para fechas de cobro/vencimiento.

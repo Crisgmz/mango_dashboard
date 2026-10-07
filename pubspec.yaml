@@ -30,6 +30,10 @@ dependencies:
   firebase_core: ^4.10.0
   firebase_messaging: ^16.3.0
   mobile_scanner: ^7.4.0
+  # Solicitud de facturación electrónica: subir el certificado de firma
+  # digital (.p12) que viaja a Alanube. Se queda en 11.x a propósito: la 12
+  # exige win32 ^6 y chocaría con share_plus ^11 (los exports de reportes).
+  file_picker: ^11.0.3
 
 dev_dependencies:
   flutter_test:

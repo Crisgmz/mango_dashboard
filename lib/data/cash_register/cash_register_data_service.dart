@@ -62,22 +62,34 @@ class CashRegisterDataService {
 
     final txBySession = await _transactionsBySession(allSessionIds);
     final payBySession = await _paymentsBySession(allSessionIds);
-    final usersById = await _profilesByUserId([
-      ...openRows.map((row) => row['user_id']?.toString()),
-      ...closedRows.map((row) => row['user_id']?.toString()),
-    ].whereType<String>().toList(growable: false));
+    final usersById = await _profilesByUserId(
+      [
+        ...openRows.map((row) => row['user_id']?.toString()),
+        ...closedRows.map((row) => row['user_id']?.toString()),
+      ].whereType<String>().toList(growable: false),
+    );
 
     final openRegisters = openRows
         .map((row) {
           final sid = row['id']?.toString() ?? '';
-          return _toSession(row, txBySession[sid] ?? _SessionTx(), payBySession[sid] ?? _SessionPay(), usersById);
+          return _toSession(
+            row,
+            txBySession[sid] ?? _SessionTx(),
+            payBySession[sid] ?? _SessionPay(),
+            usersById,
+          );
         })
         .toList(growable: false);
 
     final closings = closedRows
         .map((row) {
           final sid = row['id']?.toString() ?? '';
-          return _toClosing(row, txBySession[sid] ?? _SessionTx(), payBySession[sid] ?? _SessionPay(), usersById);
+          return _toClosing(
+            row,
+            txBySession[sid] ?? _SessionTx(),
+            payBySession[sid] ?? _SessionPay(),
+            usersById,
+          );
         })
         .toList(growable: false);
 
@@ -87,15 +99,22 @@ class CashRegisterDataService {
         .eq('business_id', businessId);
     final registerRows = List<Map<String, dynamic>>.from(registersRaw);
     final totalRegisters = registerRows.length;
-    final activeRegisters = registerRows.where((row) => row['is_active'] == true).length;
+    final activeRegisters = registerRows
+        .where((row) => row['is_active'] == true)
+        .length;
 
     RegisterSession? topRegister;
     if (openRegisters.isNotEmpty) {
-      topRegister = openRegisters.reduce((a, b) => a.totalSales >= b.totalSales ? a : b);
+      topRegister = openRegisters.reduce(
+        (a, b) => a.totalSales >= b.totalSales ? a : b,
+      );
     }
     if (closings.isNotEmpty) {
-      final topClosing = closings.reduce((a, b) => a.totalSales >= b.totalSales ? a : b);
-      if (topRegister == null || topClosing.totalSales > topRegister.totalSales) {
+      final topClosing = closings.reduce(
+        (a, b) => a.totalSales >= b.totalSales ? a : b,
+      );
+      if (topRegister == null ||
+          topClosing.totalSales > topRegister.totalSales) {
         topRegister = RegisterSession(
           id: topClosing.id,
           registerName: topClosing.registerName,
@@ -167,7 +186,9 @@ class CashRegisterDataService {
     }
   }
 
-  Future<Map<String, _SessionTx>> _transactionsBySession(List<String> sessionIds) async {
+  Future<Map<String, _SessionTx>> _transactionsBySession(
+    List<String> sessionIds,
+  ) async {
     if (sessionIds.isEmpty) return const {};
 
     final rows = await _client
@@ -201,15 +222,22 @@ class CashRegisterDataService {
     return result;
   }
 
-  Future<Map<String, _SessionPay>> _paymentsBySession(List<String> sessionIds) async {
+  Future<Map<String, _SessionPay>> _paymentsBySession(
+    List<String> sessionIds,
+  ) async {
     if (sessionIds.isEmpty) return const {};
 
     final result = <String, _SessionPay>{};
     for (var i = 0; i < sessionIds.length; i += 50) {
-      final chunk = sessionIds.sublist(i, i + 50 > sessionIds.length ? sessionIds.length : i + 50);
+      final chunk = sessionIds.sublist(
+        i,
+        i + 50 > sessionIds.length ? sessionIds.length : i + 50,
+      );
       final rows = await _client
           .from('payments')
-          .select('session_id, amount, change_amount, status, payment_methods(code)')
+          .select(
+            'session_id, amount, change_amount, status, payment_methods(code)',
+          )
           .inFilter('session_id', chunk)
           .not('status', 'in', '(void,cancelled)');
 
@@ -256,7 +284,9 @@ class CashRegisterDataService {
     return RegisterSession(
       id: row['id']?.toString() ?? '',
       registerName: registerName,
-      openedAt: DateTime.tryParse(row['opened_at']?.toString() ?? '') ?? DateTime.now(),
+      openedAt:
+          DateTime.tryParse(row['opened_at']?.toString() ?? '') ??
+          DateTime.now(),
       openedByName: usersById[userId] ?? 'Desconocido',
       closedAt: DateTime.tryParse(row['closed_at']?.toString() ?? ''),
       deviceName: row['device_name']?.toString(),
@@ -282,12 +312,139 @@ class CashRegisterDataService {
     required String reason,
     double? endAmount,
   }) async {
-    await _client.rpc('fn_force_close_cash_session', params: {
-      'p_session_id': sessionId,
-      'p_end_amount': endAmount,
-      'p_reason': reason,
-      'p_forced_by': _client.auth.currentUser?.id,
+    await _client.rpc(
+      'fn_force_close_cash_session',
+      params: {
+        'p_session_id': sessionId,
+        'p_end_amount': endAmount,
+        'p_reason': reason,
+        'p_forced_by': _client.auth.currentUser?.id,
+      },
+    );
+  }
+
+  /// Cajas ABIERTAS del negocio con lo mínimo para elegir a cuál entra un
+  /// movimiento manual. No calcula ventas ni esperados (eso es [loadSummary]),
+  /// así el diálogo de ingreso abre con una sola consulta.
+  Future<List<RegisterSession>> loadOpenSessions(String businessId) async {
+    final raw = await _client
+        .from('cash_register_sessions')
+        .select('''
+          id,
+          opened_at,
+          start_amount,
+          device_name,
+          user_id,
+          cash_registers!inner(business_id, name)
+        ''')
+        .eq('cash_registers.business_id', businessId)
+        .eq('status', 'open')
+        .isFilter('closed_at', null)
+        .order('opened_at', ascending: false);
+
+    final rows = List<Map<String, dynamic>>.from(raw);
+    final usersById = await _profilesByUserId(
+      rows
+          .map((row) => row['user_id']?.toString())
+          .whereType<String>()
+          .toList(growable: false),
+    );
+
+    return rows
+        .map((row) {
+          final register = row['cash_registers'];
+          return RegisterSession(
+            id: row['id']?.toString() ?? '',
+            registerName: register is Map<String, dynamic>
+                ? register['name']?.toString() ?? 'Caja'
+                : 'Caja',
+            openedAt:
+                DateTime.tryParse(row['opened_at']?.toString() ?? '') ??
+                DateTime.now(),
+            openedByName:
+                usersById[row['user_id']?.toString()] ?? 'Desconocido',
+            deviceName: row['device_name']?.toString(),
+            openingAmount: _toDouble(row['start_amount']),
+          );
+        })
+        .toList(growable: false);
+  }
+
+  /// Catálogo activo de razones del negocio (ingresos, retiros y gastos, más
+  /// las universales con `applies_to` null). Se trae completo de una vez para
+  /// que el diálogo pueda cambiar de tipo sin volver a consultar; el orden es
+  /// por tipo y luego alfabético, con "Otro (especificar)" de último.
+  ///
+  /// Backend sin el módulo pro de caja (sin tabla de razones) → lista vacía:
+  /// el RPC de creación tampoco existiría, y la UI lo explica en vez de
+  /// reventar.
+  Future<List<CashMovementReason>> loadMovementReasons({
+    required String businessId,
+  }) async {
+    List<dynamic> rows;
+    try {
+      rows = await _client
+          .from('cash_transaction_reasons')
+          .select('code, label, applies_to, requires_pin')
+          .eq('business_id', businessId)
+          .eq('is_active', true);
+    } on PostgrestException {
+      return const [];
+    }
+
+    final reasons = List<Map<String, dynamic>>.from(rows)
+        .map(
+          (row) => CashMovementReason(
+            code: row['code']?.toString() ?? '',
+            label: row['label']?.toString() ?? row['code']?.toString() ?? '',
+            appliesTo: row['applies_to']?.toString(),
+            requiresPin: row['requires_pin'] == true,
+          ),
+        )
+        .where((reason) => reason.code.isNotEmpty)
+        .toList();
+
+    reasons.sort((a, b) {
+      if (a.code == 'other') return 1;
+      if (b.code == 'other') return -1;
+      // Las propias de un tipo antes que las universales.
+      final aSpecific = a.appliesTo != null;
+      final bSpecific = b.appliesTo != null;
+      if (aSpecific != bSpecific) return aSpecific ? -1 : 1;
+      return a.label.toLowerCase().compareTo(b.label.toLowerCase());
     });
+    return reasons;
+  }
+
+  /// Crea un movimiento manual de caja vía `fn_cash_transaction_create`. El
+  /// RPC valida que la sesión esté ABIERTA, que la razón exista en el catálogo
+  /// del negocio y que venga aprobación cuando la razón o el monto la exigen.
+  ///
+  /// [approveAsSupervisor] manda al usuario del dashboard como `approved_by`:
+  /// es la contraparte del PIN de supervisor del POS — acá el owner/admin ya
+  /// está autenticado, así que aprueba firmando con su propio user_id, y queda
+  /// en la auditoría del movimiento.
+  Future<void> createCashMovement({
+    required String sessionId,
+    required String type,
+    required double amount,
+    required String reasonCode,
+    String? description,
+    bool approveAsSupervisor = false,
+  }) async {
+    final userId = _client.auth.currentUser?.id;
+    await _client.rpc(
+      'fn_cash_transaction_create',
+      params: {
+        'p_session_id': sessionId,
+        'p_type': type,
+        'p_amount': amount,
+        'p_reason_code': reasonCode,
+        'p_description': description,
+        'p_created_by': userId,
+        'p_approved_by': approveAsSupervisor ? userId : null,
+      },
+    );
   }
 
   RegisterClosing _toClosing(
@@ -304,13 +461,16 @@ class CashRegisterDataService {
 
     final openingAmount = _toDouble(row['start_amount']);
     final closingAmount = _toDouble(row['end_amount']);
-    final expectedAmount = openingAmount + tx.sales + tx.deposits - tx.withdrawals - tx.expenses;
+    final expectedAmount =
+        openingAmount + tx.sales + tx.deposits - tx.withdrawals - tx.expenses;
     final reported = parseCashCloseNotes(row['notes']?.toString());
 
     return RegisterClosing(
       id: row['id']?.toString() ?? '',
       registerName: registerName,
-      closedAt: DateTime.tryParse(row['closed_at']?.toString() ?? '') ?? DateTime.now(),
+      closedAt:
+          DateTime.tryParse(row['closed_at']?.toString() ?? '') ??
+          DateTime.now(),
       closedByName: usersById[userId] ?? 'Desconocido',
       openedAt: DateTime.tryParse(row['opened_at']?.toString() ?? ''),
       deviceName: row['device_name']?.toString(),
@@ -355,8 +515,9 @@ class CashRegisterDataService {
 
   /// Individual cash movements of an OPEN session (with their notes), for the
   /// same Depósitos/Retiros/Gastos drill-down that closed sessions already have.
-  Future<List<CashTransactionEntry>> loadSessionTransactions(String sessionId) =>
-      _loadTransactions(sessionId);
+  Future<List<CashTransactionEntry>> loadSessionTransactions(
+    String sessionId,
+  ) => _loadTransactions(sessionId);
 
   /// Manual cash movements (deposit/withdrawal/expense) of the whole business
   /// in a period, with structured reason + free note + register and user —
@@ -405,31 +566,36 @@ class CashRegisterDataService {
     ];
     final namesById = await _profilesByUserId(userIds);
 
-    return data.map((row) {
-      final session = row['cash_register_sessions'];
-      final register =
-          session is Map<String, dynamic> ? session['cash_registers'] : null;
-      final userId = session is Map<String, dynamic>
-          ? session['user_id']?.toString()
-          : null;
-      final reason = row['cash_transaction_reasons'];
-      final reasonLabel = reason is Map<String, dynamic>
-          ? reason['label']?.toString()
-          : null;
-      return CashMovement(
-        id: row['id']?.toString() ?? '',
-        type: row['type']?.toString() ?? '',
-        amount: _toDouble(row['amount']),
-        description: (row['description']?.toString().trim().isNotEmpty ?? false)
-            ? row['description'].toString().trim()
-            : null,
-        reasonLabel: reasonLabel ?? row['reason_code']?.toString(),
-        createdAt: DateTime.tryParse(row['created_at']?.toString() ?? ''),
-        registerName:
-            register is Map<String, dynamic> ? register['name']?.toString() : null,
-        userName: userId != null ? namesById[userId] : null,
-      );
-    }).toList(growable: false);
+    return data
+        .map((row) {
+          final session = row['cash_register_sessions'];
+          final register = session is Map<String, dynamic>
+              ? session['cash_registers']
+              : null;
+          final userId = session is Map<String, dynamic>
+              ? session['user_id']?.toString()
+              : null;
+          final reason = row['cash_transaction_reasons'];
+          final reasonLabel = reason is Map<String, dynamic>
+              ? reason['label']?.toString()
+              : null;
+          return CashMovement(
+            id: row['id']?.toString() ?? '',
+            type: row['type']?.toString() ?? '',
+            amount: _toDouble(row['amount']),
+            description:
+                (row['description']?.toString().trim().isNotEmpty ?? false)
+                ? row['description'].toString().trim()
+                : null,
+            reasonLabel: reasonLabel ?? row['reason_code']?.toString(),
+            createdAt: DateTime.tryParse(row['created_at']?.toString() ?? ''),
+            registerName: register is Map<String, dynamic>
+                ? register['name']?.toString()
+                : null,
+            userName: userId != null ? namesById[userId] : null,
+          );
+        })
+        .toList(growable: false);
   }
 
   Future<List<CashTransactionEntry>> _loadTransactions(String sessionId) async {
@@ -440,8 +606,10 @@ class CashRegisterDataService {
       // catálogo cash_transaction_reasons).
       rows = await _client
           .from('cash_transactions')
-          .select('id, type, amount, description, reason_code, related_order_id, '
-              'created_at, cash_transaction_reasons(label)')
+          .select(
+            'id, type, amount, description, reason_code, related_order_id, '
+            'created_at, cash_transaction_reasons(label)',
+          )
           .eq('session_id', sessionId)
           .order('created_at', ascending: true);
     } on PostgrestException {
@@ -453,21 +621,23 @@ class CashRegisterDataService {
           .order('created_at', ascending: true);
     }
 
-    return List<Map<String, dynamic>>.from(rows).map((row) {
-      final reason = row['cash_transaction_reasons'];
-      final reasonLabel = reason is Map<String, dynamic>
-          ? reason['label']?.toString()
-          : null;
-      return CashTransactionEntry(
-        id: row['id']?.toString() ?? '',
-        type: row['type']?.toString() ?? '',
-        amount: _toDouble(row['amount']),
-        description: row['description']?.toString(),
-        reasonLabel: reasonLabel ?? row['reason_code']?.toString(),
-        createdAt: DateTime.tryParse(row['created_at']?.toString() ?? ''),
-        relatedOrderId: row['related_order_id']?.toString(),
-      );
-    }).toList(growable: false);
+    return List<Map<String, dynamic>>.from(rows)
+        .map((row) {
+          final reason = row['cash_transaction_reasons'];
+          final reasonLabel = reason is Map<String, dynamic>
+              ? reason['label']?.toString()
+              : null;
+          return CashTransactionEntry(
+            id: row['id']?.toString() ?? '',
+            type: row['type']?.toString() ?? '',
+            amount: _toDouble(row['amount']),
+            description: row['description']?.toString(),
+            reasonLabel: reasonLabel ?? row['reason_code']?.toString(),
+            createdAt: DateTime.tryParse(row['created_at']?.toString() ?? ''),
+            relatedOrderId: row['related_order_id']?.toString(),
+          );
+        })
+        .toList(growable: false);
   }
 
   /// Loads NCFs (fiscal documents) issued during a cash session, grouped by type.
@@ -502,16 +672,19 @@ class CashRegisterDataService {
       }
     }
 
-    final result = grouped.entries
-        .map((e) => NcfTypeSummary(
-              type: e.key,
-              count: e.value.count,
-              total: e.value.total,
-              firstNumber: e.value.firstNumber,
-              lastNumber: e.value.lastNumber,
-            ))
-        .toList()
-      ..sort((a, b) => a.type.compareTo(b.type));
+    final result =
+        grouped.entries
+            .map(
+              (e) => NcfTypeSummary(
+                type: e.key,
+                count: e.value.count,
+                total: e.value.total,
+                firstNumber: e.value.firstNumber,
+                lastNumber: e.value.lastNumber,
+              ),
+            )
+            .toList()
+          ..sort((a, b) => a.type.compareTo(b.type));
     return result;
   }
 

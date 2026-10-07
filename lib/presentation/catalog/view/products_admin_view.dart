@@ -7,6 +7,7 @@ import '../../../domain/catalog/admin_product.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
 import '../viewmodel/products_admin_view_model.dart';
+import 'categories_admin_view.dart';
 import 'product_form_view.dart';
 
 /// Pantalla para administrar productos (tabla `menu_items`): crear, editar,
@@ -37,6 +38,15 @@ class _ProductsAdminViewState extends ConsumerState<ProductsAdminView> {
     if (id != null) await ref.read(productsAdminViewModelProvider.notifier).refresh(id);
   }
 
+  /// Al volver se recarga: los productos se agrupan por categoría y el
+  /// formulario las ofrece.
+  Future<void> _openCategories() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const CategoriesAdminView()),
+    );
+    await _refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
@@ -56,7 +66,17 @@ class _ProductsAdminViewState extends ConsumerState<ProductsAdminView> {
             .toList(growable: false);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Productos')),
+      appBar: AppBar(
+        title: const Text('Productos'),
+        actions: [
+          if (id != null)
+            TextButton.icon(
+              onPressed: _openCategories,
+              icon: Icon(Icons.category_outlined, size: dpi.icon(18)),
+              label: const Text('Categorías'),
+            ),
+        ],
+      ),
       floatingActionButton: id == null
           ? null
           : FloatingActionButton.extended(

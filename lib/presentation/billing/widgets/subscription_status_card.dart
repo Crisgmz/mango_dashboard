@@ -87,12 +87,15 @@ class SubscriptionStatusCard extends StatelessWidget {
           ),
           if (s.plan != null) ...[
             SizedBox(height: dpi.space(14)),
-            _row(
-              context,
-              dpi,
-              'Precio mensual',
-              '${MangoFormatters.currency(s.plan!.priceMonthly)} / mes',
-            ),
+            if (s.hasSpecialPrice)
+              _specialPrice(context, dpi, s)
+            else
+              _row(
+                context,
+                dpi,
+                'Precio mensual',
+                '${MangoFormatters.currency(s.plan!.priceMonthly)} / mes',
+              ),
           ],
           ..._statusDetails(context, dpi, s),
         ],
@@ -161,6 +164,72 @@ class SubscriptionStatusCard extends StatelessWidget {
         break;
     }
     return widgets;
+  }
+
+  /// Precio con descuento: lo que paga, la lista tachada, cuánto se ahorra y
+  /// hasta cuándo. Sin esto el primer cobro menor al plan parecería un error.
+  Widget _specialPrice(BuildContext context, DpiScale dpi, BillingState s) {
+    final endsOn = s.priceOverrideEndsOn;
+    return Container(
+      padding: EdgeInsets.all(dpi.space(12)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.success.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(dpi.radius(12)),
+        border: Border.all(
+          color: MangoThemeFactory.success.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text('Precio mensual', style: _labelStyle(context, dpi)),
+              ),
+              BillingStatusBadge(
+                label: 'Precio especial',
+                color: MangoThemeFactory.success,
+              ),
+            ],
+          ),
+          SizedBox(height: dpi.space(6)),
+          Wrap(
+            spacing: dpi.space(8),
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                '${MangoFormatters.currency(s.effectivePriceMonthly!)} / mes',
+                style: TextStyle(
+                  fontSize: dpi.font(16),
+                  fontWeight: FontWeight.w800,
+                  color: MangoThemeFactory.textColor(context),
+                ),
+              ),
+              Text(
+                MangoFormatters.currency(s.plan!.priceMonthly),
+                style: TextStyle(
+                  fontSize: dpi.font(12),
+                  color: MangoThemeFactory.mutedText(context),
+                  decoration: TextDecoration.lineThrough,
+                  decorationColor: MangoThemeFactory.mutedText(context),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: dpi.space(4)),
+          Text(
+            'Descuento de ${MangoFormatters.currency(s.monthlyDiscount)} al mes'
+            '${endsOn != null ? ' · vigente hasta el ${MangoFormatters.date(endsOn)}' : ''}',
+            style: TextStyle(
+              fontSize: dpi.font(12),
+              fontWeight: FontWeight.w600,
+              color: MangoThemeFactory.success,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Bloque destacado con el día de cobro recurrente + la próxima fecha.

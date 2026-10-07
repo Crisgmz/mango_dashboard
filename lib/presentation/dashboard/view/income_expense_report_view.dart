@@ -10,6 +10,7 @@ import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../widgets/cash_movement_dialog.dart';
 import '../widgets/period_filter_bar.dart';
 
 /// Reporte de ingresos y egresos manuales de caja (depósitos, retiros y
@@ -33,7 +34,11 @@ class IncomeExpenseReportView extends ConsumerStatefulWidget {
 }
 
 class _IncomeExpenseReportViewState
-    extends ConsumerState<IncomeExpenseReportView> {
+    extends ConsumerState<IncomeExpenseReportView>
+    with SingleTickerProviderStateMixin {
+  /// Controlador propio (en vez de DefaultTabController) para que el botón de
+  /// nuevo movimiento abra en el tipo de la pestaña que se está viendo.
+  late final TabController _tabs = TabController(length: 2, vsync: this);
   late Future<List<CashMovement>> _future;
   late DateTime _start;
   late DateTime _end;
@@ -52,16 +57,18 @@ class _IncomeExpenseReportViewState
     _future = _load();
   }
 
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
   Future<List<CashMovement>> _load() async {
-    final businessId =
-        ref.read(authGateViewModelProvider).profile?.businessId;
+    final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
     if (businessId == null) return const [];
-    final movements =
-        await ref.read(cashRegisterDataServiceProvider).loadCashMovements(
-              businessId: businessId,
-              start: _start,
-              end: _end,
-            );
+    final movements = await ref
+        .read(cashRegisterDataServiceProvider)
+        .loadCashMovements(businessId: businessId, start: _start, end: _end);
     if (mounted) setState(() => _loaded = movements);
     return movements;
   }
@@ -77,7 +84,11 @@ class _IncomeExpenseReportViewState
       });
       return;
     }
-    final range = rangeForDetailPeriod(period, DateTime.now(), cutoffHour: _cutoffHour);
+    final range = rangeForDetailPeriod(
+      period,
+      DateTime.now(),
+      cutoffHour: _cutoffHour,
+    );
     if (range == null) return;
     setState(() {
       _period = period;
@@ -92,7 +103,10 @@ class _IncomeExpenseReportViewState
   void _applyCutoff(int hour) {
     setState(() => _cutoffHour = hour);
     if (_period == DetailPeriod.custom && _customRange != null) {
-      final range = operativeRangeForPickedDays(_customRange!, cutoffHour: hour);
+      final range = operativeRangeForPickedDays(
+        _customRange!,
+        cutoffHour: hour,
+      );
       setState(() {
         _start = range.start;
         _end = range.end;
@@ -120,8 +134,10 @@ class _IncomeExpenseReportViewState
       initialDateRange: seed,
     );
     if (picked == null || !mounted) return;
-    final pickedRange =
-        operativeRangeForPickedDays(picked, cutoffHour: _cutoffHour);
+    final pickedRange = operativeRangeForPickedDays(
+      picked,
+      cutoffHour: _cutoffHour,
+    );
     final start = pickedRange.start;
     final end = pickedRange.end;
     setState(() {
@@ -129,7 +145,10 @@ class _IncomeExpenseReportViewState
       _customRange = picked;
       _start = start;
       _end = end;
-      _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
+      _periodLabel = labelForDetailPeriod(
+        DetailPeriod.custom,
+        customRange: picked,
+      );
       _future = _load();
     });
   }
@@ -139,10 +158,8 @@ class _IncomeExpenseReportViewState
   List<CashMovement> get _expenses =>
       _loaded.where((m) => !m.isIncome).toList(growable: false);
 
-  double get _incomeTotal =>
-      _incomes.fold(0.0, (sum, m) => sum + m.amount);
-  double get _expenseTotal =>
-      _expenses.fold(0.0, (sum, m) => sum + m.amount);
+  double get _incomeTotal => _incomes.fold(0.0, (sum, m) => sum + m.amount);
+  double get _expenseTotal => _expenses.fold(0.0, (sum, m) => sum + m.amount);
 
   List<List<String>> _rowsForExport() {
     return [
@@ -180,91 +197,122 @@ class _IncomeExpenseReportViewState
     );
   }
 
+  /// Registrar un movimiento manual (ingreso, retiro o gasto) en una caja
+  /// abierta del negocio. Abre en el tipo de la pestaña visible y, al volver
+  /// con éxito, recarga el período para que el movimiento aparezca en la lista
+  /// y en el neto del encabezado.
+  Future<void> _registerMovement() async {
+    final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
+    if (businessId == null) return;
+    final registered = await showCashMovementDialog(
+      context: context,
+      businessId: businessId,
+      initialType: _tabs.index == 0
+          ? cashMovementDeposit
+          : cashMovementWithdrawal,
+    );
+    if (registered == null || !mounted) return;
+    setState(() => _future = _load());
+    final label = cashMovementTypeLabel(registered);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${label[0].toUpperCase()}${label.substring(1)} registrado en caja.',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final dpi = DpiScale.of(context);
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Ingresos y egresos'),
-          centerTitle: false,
-          actions: [
-            ExportMenuButton(
-              enabled: _loaded.isNotEmpty,
-              onExportCsv: _exportCsv,
-              onExportPdf: _exportPdf,
-            ),
-          ],
-          bottom: const TabBar(
-            indicatorColor: MangoThemeFactory.mango,
-            labelColor: MangoThemeFactory.mango,
-            tabs: [
-              Tab(icon: Icon(Icons.south_west_rounded), text: 'Ingresos'),
-              Tab(icon: Icon(Icons.north_east_rounded), text: 'Egresos'),
-            ],
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Ingresos y egresos'),
+        centerTitle: false,
+        actions: [
+          IconButton(
+            onPressed: _registerMovement,
+            tooltip: 'Registrar movimiento',
+            color: MangoThemeFactory.mango,
+            icon: const Icon(Icons.add_rounded),
           ),
+          ExportMenuButton(
+            enabled: _loaded.isNotEmpty,
+            onExportCsv: _exportCsv,
+            onExportPdf: _exportPdf,
+          ),
+        ],
+        bottom: TabBar(
+          controller: _tabs,
+          indicatorColor: MangoThemeFactory.mango,
+          labelColor: MangoThemeFactory.mango,
+          tabs: const [
+            Tab(icon: Icon(Icons.south_west_rounded), text: 'Ingresos'),
+            Tab(icon: Icon(Icons.north_east_rounded), text: 'Egresos'),
+          ],
         ),
-        body: FutureBuilder<List<CashMovement>>(
-          future: _future,
-          builder: (context, snapshot) {
-            final loading = snapshot.connectionState == ConnectionState.waiting;
-            if (snapshot.hasError) {
-              return Center(
-                child: Padding(
-                  padding: EdgeInsets.all(dpi.space(20)),
-                  child: Text(
-                    'No se pudieron cargar los movimientos.',
-                    style: TextStyle(color: MangoThemeFactory.danger),
-                    textAlign: TextAlign.center,
-                  ),
+      ),
+      body: FutureBuilder<List<CashMovement>>(
+        future: _future,
+        builder: (context, snapshot) {
+          final loading = snapshot.connectionState == ConnectionState.waiting;
+          if (snapshot.hasError) {
+            return Center(
+              child: Padding(
+                padding: EdgeInsets.all(dpi.space(20)),
+                child: Text(
+                  'No se pudieron cargar los movimientos.',
+                  style: TextStyle(color: MangoThemeFactory.danger),
+                  textAlign: TextAlign.center,
                 ),
-              );
-            }
-
-            return Column(
-              children: [
-                _Header(
-                  periodLabel: _periodLabel,
-                  incomeTotal: _incomeTotal,
-                  incomeCount: _incomes.length,
-                  expenseTotal: _expenseTotal,
-                  expenseCount: _expenses.length,
-                ),
-                SizedBox(height: dpi.space(8)),
-                PeriodFilterBar(
-                  selected: _period,
-                  customRange: _customRange,
-                  initialLabel: widget.periodLabel,
-                  onSelected: _applyPeriod,
-                  onPickCustom: _pickCustomRange,
-                  cutoffHour: _cutoffHour,
-                  onCutoffChanged: _applyCutoff,
-                  accent: MangoThemeFactory.success,
-                ),
-                SizedBox(height: dpi.space(8)),
-                Expanded(
-                  child: loading
-                      ? const Center(child: CircularProgressIndicator())
-                      : TabBarView(
-                          children: [
-                            _MovementList(
-                              items: _incomes,
-                              emptyMessage:
-                                  'Sin ingresos de caja en este periodo.',
-                            ),
-                            _MovementList(
-                              items: _expenses,
-                              emptyMessage:
-                                  'Sin egresos de caja en este periodo.',
-                            ),
-                          ],
-                        ),
-                ),
-              ],
+              ),
             );
-          },
-        ),
+          }
+
+          return Column(
+            children: [
+              _Header(
+                periodLabel: _periodLabel,
+                incomeTotal: _incomeTotal,
+                incomeCount: _incomes.length,
+                expenseTotal: _expenseTotal,
+                expenseCount: _expenses.length,
+              ),
+              SizedBox(height: dpi.space(8)),
+              PeriodFilterBar(
+                selected: _period,
+                customRange: _customRange,
+                initialLabel: widget.periodLabel,
+                onSelected: _applyPeriod,
+                onPickCustom: _pickCustomRange,
+                cutoffHour: _cutoffHour,
+                onCutoffChanged: _applyCutoff,
+                accent: MangoThemeFactory.success,
+              ),
+              SizedBox(height: dpi.space(8)),
+              Expanded(
+                child: loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : TabBarView(
+                        controller: _tabs,
+                        children: [
+                          _MovementList(
+                            items: _incomes,
+                            emptyMessage:
+                                'Sin ingresos de caja en este periodo.',
+                          ),
+                          _MovementList(
+                            items: _expenses,
+                            emptyMessage:
+                                'Sin egresos de caja en este periodo.',
+                          ),
+                        ],
+                      ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -290,7 +338,12 @@ class _Header extends StatelessWidget {
     final dpi = DpiScale.of(context);
     final net = incomeTotal - expenseTotal;
     return Container(
-      margin: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), dpi.space(8)),
+      margin: EdgeInsets.fromLTRB(
+        dpi.space(16),
+        dpi.space(16),
+        dpi.space(16),
+        dpi.space(8),
+      ),
       padding: EdgeInsets.all(dpi.space(18)),
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -306,11 +359,19 @@ class _Header extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.swap_vert_rounded, color: Colors.white, size: dpi.icon(18)),
+              Icon(
+                Icons.swap_vert_rounded,
+                color: Colors.white,
+                size: dpi.icon(18),
+              ),
               SizedBox(width: dpi.space(6)),
               Text(
                 'Ingresos y egresos · $periodLabel',
-                style: TextStyle(color: Colors.white, fontSize: dpi.font(12), fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: dpi.font(12),
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           ),
@@ -325,7 +386,11 @@ class _Header extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: Text(
               '${net < 0 ? '−' : ''}${MangoFormatters.currency(net.abs())}',
-              style: TextStyle(color: Colors.white, fontSize: dpi.font(24), fontWeight: FontWeight.w800),
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: dpi.font(24),
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
           SizedBox(height: dpi.space(10)),
@@ -359,7 +424,11 @@ class _Header extends StatelessWidget {
 }
 
 class _MiniStat extends StatelessWidget {
-  const _MiniStat({required this.label, required this.value, required this.amount});
+  const _MiniStat({
+    required this.label,
+    required this.value,
+    required this.amount,
+  });
   final String label;
   final String value;
   final String amount;
@@ -371,11 +440,18 @@ class _MiniStat extends StatelessWidget {
       padding: EdgeInsets.symmetric(horizontal: dpi.space(4)),
       child: Column(
         children: [
-          Text(label, style: TextStyle(color: Colors.white70, fontSize: dpi.font(10))),
+          Text(
+            label,
+            style: TextStyle(color: Colors.white70, fontSize: dpi.font(10)),
+          ),
           SizedBox(height: dpi.space(2)),
           Text(
             value,
-            style: TextStyle(color: Colors.white, fontSize: dpi.font(15), fontWeight: FontWeight.w800),
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: dpi.font(15),
+              fontWeight: FontWeight.w800,
+            ),
           ),
           SizedBox(height: dpi.space(2)),
           FittedBox(
@@ -407,8 +483,11 @@ class _MovementList extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.account_balance_wallet_outlined,
-                  size: dpi.icon(48), color: MangoThemeFactory.mutedText(context)),
+              Icon(
+                Icons.account_balance_wallet_outlined,
+                size: dpi.icon(48),
+                color: MangoThemeFactory.mutedText(context),
+              ),
               SizedBox(height: dpi.space(12)),
               Text(
                 emptyMessage,
@@ -422,7 +501,11 @@ class _MovementList extends StatelessWidget {
     }
     return ListView.separated(
       padding: EdgeInsets.fromLTRB(
-          dpi.space(16), dpi.space(8), dpi.space(16), dpi.space(16) + MediaQuery.of(context).padding.bottom),
+        dpi.space(16),
+        dpi.space(8),
+        dpi.space(16),
+        dpi.space(16) + MediaQuery.of(context).padding.bottom,
+      ),
       itemCount: items.length,
       separatorBuilder: (_, _) => SizedBox(height: dpi.space(8)),
       itemBuilder: (context, index) => _MovementTile(movement: items[index]),
@@ -443,8 +526,8 @@ class _MovementTile extends StatelessWidget {
     final accent = m.isIncome
         ? MangoThemeFactory.success
         : (m.type == 'expense'
-            ? MangoThemeFactory.danger
-            : MangoThemeFactory.warning);
+              ? MangoThemeFactory.danger
+              : MangoThemeFactory.warning);
     final subtitleParts = <String>[
       m.typeLabel,
       if (m.registerName != null) m.registerName!,
@@ -474,8 +557,8 @@ class _MovementTile extends StatelessWidget {
                   m.isIncome
                       ? Icons.add_circle_outline_rounded
                       : (m.type == 'expense'
-                          ? Icons.receipt_long_rounded
-                          : Icons.remove_circle_outline_rounded),
+                            ? Icons.receipt_long_rounded
+                            : Icons.remove_circle_outline_rounded),
                   color: accent,
                   size: dpi.icon(20),
                 ),
@@ -487,10 +570,9 @@ class _MovementTile extends StatelessWidget {
                   children: [
                     Text(
                       m.reasonLabel ?? m.typeLabel,
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleSmall
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -498,8 +580,9 @@ class _MovementTile extends StatelessWidget {
                     Text(
                       subtitleParts.join(' · '),
                       style: TextStyle(
-                          fontSize: dpi.font(11),
-                          color: MangoThemeFactory.mutedText(context)),
+                        fontSize: dpi.font(11),
+                        color: MangoThemeFactory.mutedText(context),
+                      ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),

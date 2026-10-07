@@ -5,6 +5,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../domain/notifications/dashboard_notification.dart';
 import '../../firebase_options.dart';
 import 'local_notification_helper.dart';
 
@@ -48,9 +49,13 @@ class FcmService {
       FirebaseMessaging.onMessage.listen((message) {
         final n = message.notification;
         if (n == null) return;
+        final eventId = message.data['event_id']?.toString();
         LocalNotificationHelper.show(
           title: n.title ?? 'Mango Dashboard',
           body: n.body ?? '',
+          dedupeKey: eventId == null || eventId.isEmpty
+              ? null
+              : DashboardNotification.eventKey(eventId),
         );
       });
 

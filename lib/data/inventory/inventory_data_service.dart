@@ -83,6 +83,32 @@ class InventoryDataService {
         .toList(growable: false);
   }
 
+  /// Merma de los últimos [daysBack] días: salidas del kardex con motivo de
+  /// pérdida (rotura/vencimiento/robo/donación) valoradas a costo. 'correction'
+  /// y 'physical_count' NO cuentan como merma (son correcciones, no pérdidas).
+  Future<List<WasteEntry>> loadWasteMovements(String businessId,
+      {int daysBack = 30}) async {
+    final since = DateTime.now()
+        .subtract(Duration(days: daysBack))
+        .toUtc()
+        .toIso8601String();
+    final rows = await _client
+        .from('v_inventory_movements_with_balance')
+        .select(
+            'item_id, item_name, item_unit, quantity, total_value, '
+            'reason_code, created_at')
+        .eq('business_id', businessId)
+        .inFilter(
+            'reason_code', ['breakage', 'expiration', 'theft', 'donation'])
+        .lt('quantity', 0)
+        .gte('created_at', since)
+        .order('created_at', ascending: false)
+        .limit(2000);
+    return List<Map<String, dynamic>>.from(rows)
+        .map(WasteEntry.fromJson)
+        .toList(growable: false);
+  }
+
   /// Rotación por artículo en los últimos [daysBack] días
   /// (`fn_inventory_rotation_analysis`): velocidad de salida, días de
   /// cobertura y clase star/active/slow/dormant.

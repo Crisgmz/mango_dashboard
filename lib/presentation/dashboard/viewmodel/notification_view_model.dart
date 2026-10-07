@@ -36,6 +36,7 @@ class NotificationViewModel extends StateNotifier<NotificationState> {
       LocalNotificationHelper.show(
         title: notification.title,
         body: notification.message,
+        dedupeKey: notification.id,
       );
     });
   }

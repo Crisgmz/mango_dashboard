@@ -6,12 +6,15 @@ import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/date/date_range_utils.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/dashboard/business_day_service.dart';
+import '../../../data/dashboard/report_result_cache.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../viewmodel/report_load_controller.dart';
 import '../widgets/cash_movement_dialog.dart';
 import '../widgets/period_filter_bar.dart';
+import '../widgets/report_loading.dart';
 
 /// Reporte de ingresos y egresos manuales de caja (depósitos, retiros y
 /// gastos) del período, con la razón estructurada y la nota de cada
@@ -39,14 +42,15 @@ class _IncomeExpenseReportViewState
   /// Controlador propio (en vez de DefaultTabController) para que el botón de
   /// nuevo movimiento abra en el tipo de la pestaña que se está viendo.
   late final TabController _tabs = TabController(length: 2, vsync: this);
-  late Future<List<CashMovement>> _future;
+  late final ReportLoadController<List<CashMovement>> _report =
+      ReportLoadController<List<CashMovement>>()..addListener(_onReportChanged);
   late DateTime _start;
   late DateTime _end;
   late String _periodLabel;
   DetailPeriod _period = DetailPeriod.initial;
   DateTimeRange? _customRange;
   int _cutoffHour = BusinessDayService.cachedCutoffHour;
-  List<CashMovement> _loaded = const [];
+  List<CashMovement> get _loaded => _report.data ?? const [];
 
   @override
   void initState() {
@@ -54,23 +58,33 @@ class _IncomeExpenseReportViewState
     _start = widget.start;
     _end = widget.end;
     _periodLabel = widget.periodLabel ?? 'Periodo';
-    _future = _load();
+    _load();
   }
 
   @override
   void dispose() {
+    _report.dispose();
     _tabs.dispose();
     super.dispose();
   }
 
-  Future<List<CashMovement>> _load() async {
+  void _onReportChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// [force] salta la caché: tras registrar un movimiento hay que verlo ya.
+  void _load({bool force = false}) {
     final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
-    if (businessId == null) return const [];
-    final movements = await ref
-        .read(cashRegisterDataServiceProvider)
-        .loadCashMovements(businessId: businessId, start: _start, end: _end);
-    if (mounted) setState(() => _loaded = movements);
-    return movements;
+    if (businessId == null) return;
+    final start = _start;
+    final end = _end;
+    _report.load(
+      key: reportCacheKey('cash_movements', businessId, start, end),
+      force: force,
+      fetch: () => ref
+          .read(cashRegisterDataServiceProvider)
+          .loadCashMovements(businessId: businessId, start: start, end: end),
+    );
   }
 
   void _applyPeriod(DetailPeriod period) {
@@ -80,7 +94,7 @@ class _IncomeExpenseReportViewState
         _start = widget.start;
         _end = widget.end;
         _periodLabel = widget.periodLabel ?? 'Periodo';
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -95,7 +109,7 @@ class _IncomeExpenseReportViewState
       _start = range.start;
       _end = range.end;
       _periodLabel = labelForDetailPeriod(period);
-      _future = _load();
+      _load();
     });
   }
 
@@ -110,7 +124,7 @@ class _IncomeExpenseReportViewState
       setState(() {
         _start = range.start;
         _end = range.end;
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -149,7 +163,7 @@ class _IncomeExpenseReportViewState
         DetailPeriod.custom,
         customRange: picked,
       );
-      _future = _load();
+      _load();
     });
   }
 
@@ -212,7 +226,7 @@ class _IncomeExpenseReportViewState
           : cashMovementWithdrawal,
     );
     if (registered == null || !mounted) return;
-    setState(() => _future = _load());
+    _load(force: true);
     final label = cashMovementTypeLabel(registered);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -238,7 +252,7 @@ class _IncomeExpenseReportViewState
             icon: const Icon(Icons.add_rounded),
           ),
           ExportMenuButton(
-            enabled: _loaded.isNotEmpty,
+            enabled: !_report.isStale && _loaded.isNotEmpty,
             onExportCsv: _exportCsv,
             onExportPdf: _exportPdf,
           ),
@@ -253,31 +267,19 @@ class _IncomeExpenseReportViewState
           ],
         ),
       ),
-      body: FutureBuilder<List<CashMovement>>(
-        future: _future,
-        builder: (context, snapshot) {
-          final loading = snapshot.connectionState == ConnectionState.waiting;
-          if (snapshot.hasError) {
-            return Center(
-              child: Padding(
-                padding: EdgeInsets.all(dpi.space(20)),
-                child: Text(
-                  'No se pudieron cargar los movimientos.',
-                  style: TextStyle(color: MangoThemeFactory.danger),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            );
-          }
-
+      body: Builder(
+        builder: (context) {
           return Column(
             children: [
-              _Header(
-                periodLabel: _periodLabel,
-                incomeTotal: _incomeTotal,
-                incomeCount: _incomes.length,
-                expenseTotal: _expenseTotal,
-                expenseCount: _expenses.length,
+              ReportStaleFade(
+                controller: _report,
+                child: _Header(
+                  periodLabel: _periodLabel,
+                  incomeTotal: _incomeTotal,
+                  incomeCount: _incomes.length,
+                  expenseTotal: _expenseTotal,
+                  expenseCount: _expenses.length,
+                ),
               ),
               SizedBox(height: dpi.space(8)),
               PeriodFilterBar(
@@ -292,23 +294,23 @@ class _IncomeExpenseReportViewState
               ),
               SizedBox(height: dpi.space(8)),
               Expanded(
-                child: loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : TabBarView(
-                        controller: _tabs,
-                        children: [
-                          _MovementList(
-                            items: _incomes,
-                            emptyMessage:
-                                'Sin ingresos de caja en este periodo.',
-                          ),
-                          _MovementList(
-                            items: _expenses,
-                            emptyMessage:
-                                'Sin egresos de caja en este periodo.',
-                          ),
-                        ],
+                child: ReportBody<List<CashMovement>>(
+                  controller: _report,
+                  errorMessage: 'No se pudieron cargar los movimientos.',
+                  builder: (context, _) => TabBarView(
+                    controller: _tabs,
+                    children: [
+                      _MovementList(
+                        items: _incomes,
+                        emptyMessage: 'Sin ingresos de caja en este periodo.',
                       ),
+                      _MovementList(
+                        items: _expenses,
+                        emptyMessage: 'Sin egresos de caja en este periodo.',
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ],
           );

@@ -19,10 +19,12 @@ import '../../theme/theme_data_factory.dart';
 import '../../../domain/notifications/dashboard_notification.dart';
 import '../../../data/dashboard/business_day_service.dart';
 import '../../../data/dashboard/sales_layout_service.dart';
+import '../../../data/dashboard/working_days.dart';
 import '../viewmodel/cash_register_view_model.dart';
 import '../viewmodel/dashboard_data_view_model.dart';
 import '../viewmodel/notification_view_model.dart';
 import '../viewmodel/sales_layout_view_model.dart';
+import '../viewmodel/working_days_controller.dart';
 import '../widgets/dashboard_kpi_cards.dart';
 import '../widgets/dashboard_sales_chart.dart';
 import '../widgets/dashboard_skeleton.dart';
@@ -31,6 +33,8 @@ import '../widgets/dashboard_top_seller.dart';
 import '../widgets/growth_chip.dart';
 import '../widgets/month_projection_card.dart';
 import '../widgets/product_projection_card.dart';
+import '../widgets/sales_note_settings_card.dart';
+import '../widgets/working_days_picker.dart';
 import '../widgets/audit_card.dart';
 import '../widgets/cashier_performance_card.dart';
 import '../widgets/commands_card.dart';
@@ -45,6 +49,7 @@ import '../../notifications/view/notification_settings_view.dart';
 import '../../catalog/view/products_admin_view.dart';
 import '../../catalog/view/offers_admin_view.dart';
 import '../../floor/view/floor_admin_view.dart';
+import '../../history/view/change_history_view.dart';
 import '../../billing/viewmodel/billing_reminder.dart';
 import '../../billing/widgets/billing_reminder_banner.dart';
 import '../../../data/billing/billing_reminder_prefs.dart';
@@ -887,12 +892,16 @@ class _NotificationsSheet extends ConsumerWidget {
 
   static const _typeIcons = <NotificationType, IconData>{
     NotificationType.itemVoided: Icons.remove_circle_rounded,
+    NotificationType.itemCourtesy: Icons.card_giftcard_rounded,
+    NotificationType.itemDiscount: Icons.local_offer_rounded,
     NotificationType.orderVoided: Icons.block_rounded,
     NotificationType.cashClosed: Icons.point_of_sale_rounded,
     NotificationType.tableOpened: Icons.table_restaurant_rounded,
   };
   static const _typeColors = <NotificationType, Color>{
     NotificationType.itemVoided: MangoThemeFactory.warning,
+    NotificationType.itemCourtesy: MangoThemeFactory.payTransfer,
+    NotificationType.itemDiscount: MangoThemeFactory.mango,
     NotificationType.orderVoided: MangoThemeFactory.danger,
     NotificationType.cashClosed: MangoThemeFactory.payCard,
     NotificationType.tableOpened: MangoThemeFactory.success,
@@ -1866,13 +1875,18 @@ class SalesView extends ConsumerWidget {
           body = MonthProjectionCard(
             currentMonthSales: summary.totalSales,
             previousMonthSales: summary.previousDaySales,
+            workingDays: ref.watch(workingDaysProvider(profile.businessId)),
+            onEditWorkingDays: () => editWorkingDays(context, ref, profile.businessId),
           );
         }
         break;
 
       case SalesCard.productProjection:
         if (summary.filter == SalesDateFilter.month && summary.topProducts.isNotEmpty) {
-          body = ProductProjectionCard(products: summary.topProducts);
+          body = ProductProjectionCard(
+            products: summary.topProducts,
+            workingDays: ref.watch(workingDaysProvider(profile.businessId)),
+          );
         }
         break;
 
@@ -4428,6 +4442,20 @@ class _MainDrawerState extends ConsumerState<MainDrawer> {
                         );
                       },
                     ),
+                    // Historial: la RLS de change_history solo deja leer a
+                    // dueño y administradores (is_admin_of_business).
+                    _DrawerTile(
+                      icon: Icons.history_rounded,
+                      accent: MangoThemeFactory.mangoDeep,
+                      label: 'Historial',
+                      subtitle: 'Quién creó, cambió o borró qué, y cuándo',
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const ChangeHistoryView()),
+                        );
+                      },
+                    ),
                   ],
                   _DrawerTile(
                     icon: Icons.assessment_rounded,
@@ -4710,6 +4738,14 @@ class SettingsView extends ConsumerWidget {
         SizedBox(height: dpi.space(12)),
 
         _BusinessDayCutoffSection(profile: profile, onChanged: onRefresh),
+        SizedBox(height: dpi.space(12)),
+        _WorkingDaysSection(businessId: profile.businessId),
+
+        SizedBox(height: dpi.space(32)),
+        _SettingsHeader(title: 'Facturación'),
+        SizedBox(height: dpi.space(12)),
+
+        SalesNoteSettingsCard(businessId: profile.businessId),
 
         SizedBox(height: dpi.space(40)),
       ],
@@ -5265,6 +5301,100 @@ class _BusinessDayCutoffSectionState
                     Icon(Icons.edit_rounded,
                         color: MangoThemeFactory.mango,
                         size: dpi.icon(18)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Días que abre el negocio: las proyecciones del mes solo cuentan esos días.
+class _WorkingDaysSection extends ConsumerWidget {
+  const _WorkingDaysSection({required this.businessId});
+
+  final String businessId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dpi = DpiScale.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final days = ref.watch(workingDaysProvider(businessId));
+
+    return Container(
+      padding: EdgeInsets.all(dpi.space(16)),
+      decoration: BoxDecoration(
+        color: MangoThemeFactory.cardColor(context),
+        borderRadius: BorderRadius.circular(dpi.radius(20)),
+        border: Border.all(color: MangoThemeFactory.borderColor(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: dpi.scale(44),
+                height: dpi.scale(44),
+                decoration: BoxDecoration(
+                  color: MangoThemeFactory.info.withValues(alpha: isDark ? 0.2 : 0.12),
+                  borderRadius: BorderRadius.circular(dpi.radius(12)),
+                ),
+                child: Icon(Icons.event_available_rounded,
+                    color: MangoThemeFactory.info, size: dpi.icon(24)),
+              ),
+              SizedBox(width: dpi.space(12)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Días laborables',
+                      style: TextStyle(fontSize: dpi.font(14), fontWeight: FontWeight.w700),
+                    ),
+                    SizedBox(height: dpi.space(2)),
+                    Text(
+                      'La proyección de fin de mes y la meta diaria solo cuentan los días que abre el negocio.',
+                      style: TextStyle(
+                        fontSize: dpi.font(11),
+                        color: MangoThemeFactory.mutedText(context),
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: dpi.space(14)),
+          InkWell(
+            onTap: () => editWorkingDays(context, ref, businessId),
+            borderRadius: BorderRadius.circular(dpi.radius(12)),
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: dpi.space(14), vertical: dpi.space(12)),
+              decoration: BoxDecoration(
+                color: MangoThemeFactory.mango.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(dpi.radius(12)),
+                border: Border.all(color: MangoThemeFactory.mango.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.calendar_month_rounded,
+                      color: MangoThemeFactory.mango, size: dpi.icon(20)),
+                  SizedBox(width: dpi.space(10)),
+                  Expanded(
+                    child: Text(
+                      workingDaysLabel(days),
+                      style: TextStyle(
+                        fontSize: dpi.font(15),
+                        fontWeight: FontWeight.w800,
+                        color: MangoThemeFactory.mango,
+                      ),
+                    ),
+                  ),
+                  Icon(Icons.edit_rounded, color: MangoThemeFactory.mango, size: dpi.icon(18)),
                 ],
               ),
             ),

@@ -1,8 +1,8 @@
 import '../../domain/dashboard/dashboard_models.dart';
 
-/// Pure aggregation for the sales-trend report. Given the raw paid `orders`
-/// (id + closed_at) and their `payments` (amount, change, order_id) over
-/// [rangeStart, rangeEnd), produces:
+/// Pure aggregation for the sales-trend report. Given the sale `payments`
+/// (amount, change, order_id, created_at) over [rangeStart, rangeEnd) — a sale
+/// is the payment, placed when it was collected (sale_scope.dart) — produces:
 ///  - contiguous time buckets (weeks or months), filling gaps with zero so the
 ///    trend chart has no holes; gross per bucket = payments net of change;
 ///  - a weekday×hour heatmap of the same sales.
@@ -11,7 +11,6 @@ import '../../domain/dashboard/dashboard_models.dart';
 /// unit-testable. All times are converted to local before bucketing, matching
 /// the other reports.
 SalesTrendReport aggregateSalesTrend({
-  required List<Map<String, dynamic>> orderRows,
   required List<Map<String, dynamic>> payRows,
   required DateTime rangeStart, // inclusive
   required DateTime rangeEnd, // exclusive
@@ -29,30 +28,20 @@ SalesTrendReport aggregateSalesTrend({
       ? DateTime(b.year, b.month + 1, 1)
       : b.add(const Duration(days: 7));
 
-  // order id → local time, plus per-bucket order counts.
-  final orderTime = <String, DateTime>{};
-  final counts = <DateTime, int>{};
-  for (final row in orderRows) {
-    final id = row['id']?.toString();
-    final ts = DateTime.tryParse(row['closed_at']?.toString() ?? '');
-    if (id == null || id.isEmpty || ts == null) continue;
-    final local = ts.toLocal();
-    orderTime[id] = local;
-    final b = bucketStartFor(local);
-    counts[b] = (counts[b] ?? 0) + 1;
-  }
-
-  // payments → bucket totals + heatmap (keyed by weekday*100 + hour).
+  // payments → bucket totals, distinct orders per bucket and the heatmap
+  // (keyed by weekday*100 + hour), all at the moment of the payment.
   final totals = <DateTime, double>{};
+  final orders = <DateTime, Set<String>>{};
   final heat = <int, double>{};
   for (final row in payRows) {
     final oid = row['order_id']?.toString();
-    if (oid == null) continue;
-    final t = orderTime[oid];
-    if (t == null) continue; // payment for an order outside this paid set
+    final ts = DateTime.tryParse(row['created_at']?.toString() ?? '');
+    if (oid == null || oid.isEmpty || ts == null) continue;
+    final t = ts.toLocal();
     final net = _toDouble(row['amount']) - _toDouble(row['change_amount']);
     final b = bucketStartFor(t);
     totals[b] = (totals[b] ?? 0) + net;
+    orders.putIfAbsent(b, () => <String>{}).add(oid);
     final hk = t.weekday * 100 + t.hour;
     heat[hk] = (heat[hk] ?? 0) + net;
   }
@@ -67,7 +56,7 @@ SalesTrendReport aggregateSalesTrend({
       buckets.add(TrendBucket(
         start: b,
         total: totals[b] ?? 0,
-        orderCount: counts[b] ?? 0,
+        orderCount: orders[b]?.length ?? 0,
       ));
       b = nextBucket(b);
     }

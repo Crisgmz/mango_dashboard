@@ -6,11 +6,14 @@ import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/date/date_range_utils.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/dashboard/business_day_service.dart';
+import '../../../data/dashboard/report_result_cache.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../viewmodel/report_load_controller.dart';
 import '../widgets/period_filter_bar.dart';
+import '../widgets/report_loading.dart';
 
 /// "Ventas por día" — for a date range, the gross sales of each day, the range
 /// total, and the tax breakdown (venta sin impuestos · ITBIS · propina · total
@@ -32,7 +35,8 @@ class DailySalesReportView extends ConsumerStatefulWidget {
 }
 
 class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
-  late Future<DailySalesReport> _future;
+  late final ReportLoadController<DailySalesReport> _report =
+      ReportLoadController<DailySalesReport>()..addListener(_onReportChanged);
   late DateTime _start;
   late DateTime _end;
   late String _periodLabel;
@@ -40,7 +44,7 @@ class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
   DateTimeRange? _customRange;
   int _cutoffHour = BusinessDayService.cachedCutoffHour;
 
-  DailySalesReport _loaded = const DailySalesReport();
+  DailySalesReport get _loaded => _report.data ?? const DailySalesReport();
 
   @override
   void initState() {
@@ -48,21 +52,36 @@ class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
     _start = widget.start;
     _end = widget.end;
     _periodLabel = widget.periodLabel ?? 'Periodo';
-    _future = _load();
+    _load();
   }
 
-  Future<DailySalesReport> _load() async {
-    final profile = ref.read(authGateViewModelProvider).profile;
-    final businessId = profile?.businessId;
-    if (businessId == null) return const DailySalesReport();
-    final report = await ref.read(dashboardDataServiceProvider).loadDailySales(
-          businessId: businessId,
-          start: _start,
-          end: _end,
-          cutoffHour: _cutoffHour,
-        );
-    if (mounted) setState(() => _loaded = report);
-    return report;
+  @override
+  void dispose() {
+    _report.dispose();
+    super.dispose();
+  }
+
+  void _onReportChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Carga en segundo plano (ver [ReportLoadController]): cancela la anterior
+  /// y usa la caché si el periodo se vio hace poco.
+  void _load() {
+    final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
+    if (businessId == null) return;
+    final start = _start;
+    final end = _end;
+    final cutoffHour = _cutoffHour;
+    _report.load(
+      key: reportCacheKey('daily_sales', businessId, start, end, [cutoffHour]),
+      fetch: () => ref.read(dashboardDataServiceProvider).loadDailySales(
+            businessId: businessId,
+            start: start,
+            end: end,
+            cutoffHour: cutoffHour,
+          ),
+    );
   }
 
   void _applyPeriod(DetailPeriod period) {
@@ -72,7 +91,7 @@ class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
         _start = widget.start;
         _end = widget.end;
         _periodLabel = widget.periodLabel ?? 'Periodo';
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -83,7 +102,7 @@ class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
       _start = range.start;
       _end = range.end;
       _periodLabel = labelForDetailPeriod(period);
-      _future = _load();
+      _load();
     });
   }
 
@@ -95,7 +114,7 @@ class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
       setState(() {
         _start = range.start;
         _end = range.end;
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -131,7 +150,7 @@ class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
       _start = start;
       _end = end;
       _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
-      _future = _load();
+      _load();
     });
   }
 
@@ -188,18 +207,15 @@ class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
         centerTitle: false,
         actions: [
           ExportMenuButton(
-            enabled: _loaded.days.isNotEmpty,
+            enabled: !_report.isStale && _loaded.days.isNotEmpty,
             onExportCsv: _exportCsv,
             onExportPdf: _exportPdf,
           ),
         ],
       ),
-      body: FutureBuilder<DailySalesReport>(
-        future: _future,
-        builder: (context, snapshot) {
-          final loading = snapshot.connectionState == ConnectionState.waiting;
-          final hasError = snapshot.hasError;
-          final report = snapshot.data ?? const DailySalesReport();
+      body: Builder(
+        builder: (context) {
+          final report = _loaded;
           final maxDay = report.days.fold<double>(
               0, (m, d) => d.total > m ? d.total : m);
 
@@ -207,11 +223,14 @@ class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
             children: [
               Padding(
                 padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), 0),
-                child: _Header(
-                  total: report.grossTotal,
-                  days: report.days.length,
-                  orders: report.orderCount,
-                  periodLabel: _periodLabel,
+                child: ReportStaleFade(
+                  controller: _report,
+                  child: _Header(
+                    total: report.grossTotal,
+                    days: report.days.length,
+                    orders: report.orderCount,
+                    periodLabel: _periodLabel,
+                  ),
                 ),
               ),
               SizedBox(height: dpi.space(12)),
@@ -226,22 +245,7 @@ class _DailySalesReportViewState extends ConsumerState<DailySalesReportView> {
               ),
               SizedBox(height: dpi.space(10)),
               Expanded(
-                child: Builder(builder: (context) {
-                  if (loading) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (hasError) {
-                    return Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(dpi.space(20)),
-                        child: Text(
-                          'No se pudo cargar el reporte.',
-                          style: TextStyle(color: MangoThemeFactory.danger),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    );
-                  }
+                child: ReportBody<DailySalesReport>(controller: _report, builder: (context, report) {
                   if (report.days.isEmpty) {
                     return Center(
                       child: Padding(

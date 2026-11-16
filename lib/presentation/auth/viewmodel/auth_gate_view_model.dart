@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../app/di/providers.dart';
 import '../../../core/auth/biometric_auth_service.dart';
 import '../../../core/notifications/fcm_service.dart';
+import '../../../data/dashboard/report_result_cache.dart';
 import '../../../domain/auth/admin_access_profile.dart';
 import '../../../domain/auth/saved_account.dart';
 
@@ -481,6 +482,7 @@ class AuthGateViewModel extends StateNotifier<AuthGateState> {
     // the business's alerts (best-effort, before the session is gone).
     await FcmService.unregisterToken();
     await _ref.read(adminAccessServiceProvider).signOut();
+    ReportResultCache.clear();
     state = const AuthGateState.initial().copyWith(isLoading: false);
   }
 

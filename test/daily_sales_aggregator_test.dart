@@ -3,21 +3,18 @@ import 'package:mango_dashboard/data/dashboard/daily_sales_aggregator.dart';
 
 void main() {
   // Naive (no 'Z') timestamps so day bucketing is timezone-independent in tests.
+  // A sale is the payment (sale_scope.dart): it lands on the day it was
+  // collected, even if its table is still open.
   final report = aggregateDailySales(
-    orderRows: [
-      {'id': 'o1', 'closed_at': '2026-05-01T12:00:00'},
-      {'id': 'o2', 'closed_at': '2026-05-01T18:00:00'},
-      {'id': 'o3', 'closed_at': '2026-05-02T10:00:00'},
-      {'id': 'o4', 'closed_at': '2026-05-03T10:00:00'}, // no payment
-      {'id': '', 'closed_at': '2026-05-04T10:00:00'}, // bad id → ignored
-      {'id': 'o5', 'closed_at': 'not-a-date'}, // bad date → ignored
-    ],
     payRows: [
-      {'order_id': 'o1', 'amount': 100, 'change_amount': 0},
-      {'order_id': 'o1', 'amount': '50', 'change_amount': '0'}, // string parse
-      {'order_id': 'o2', 'amount': 200, 'change_amount': 20}, // net 180
-      {'order_id': 'o3', 'amount': 300, 'change_amount': 0},
-      {'order_id': 'zzz', 'amount': 999, 'change_amount': 0}, // unknown → ignored
+      {'order_id': 'o1', 'amount': 100, 'change_amount': 0, 'created_at': '2026-05-01T12:00:00'},
+      {'order_id': 'o1', 'amount': '50', 'change_amount': '0', 'created_at': '2026-05-01T12:05:00'}, // string parse
+      {'order_id': 'o2', 'amount': 200, 'change_amount': 20, 'created_at': '2026-05-01T18:00:00'}, // net 180
+      // Open table: one check paid on 05-02, another on 05-03.
+      {'order_id': 'o3', 'amount': 300, 'change_amount': 0, 'created_at': '2026-05-02T10:00:00'},
+      {'order_id': 'o3', 'amount': 40, 'change_amount': 0, 'created_at': '2026-05-03T10:00:00'},
+      {'order_id': '', 'amount': 999, 'change_amount': 0, 'created_at': '2026-05-04T10:00:00'}, // no order → ignored
+      {'order_id': 'o5', 'amount': 999, 'change_amount': 0, 'created_at': 'not-a-date'}, // bad date → ignored
     ],
     taxRows: [
       {'tax_name': 'ITBIS', 'tax_rate': 0.18, 'amount': 50},
@@ -27,13 +24,13 @@ void main() {
     ],
   );
 
-  test('counts only orders with a valid id and date', () {
-    expect(report.orderCount, 4); // o1..o4
+  test('counts distinct orders with a valid sale payment', () {
+    expect(report.orderCount, 3); // o1, o2, o3 (o3 once, paid on two days)
   });
 
-  test('gross total = payments net of change, unknown orders ignored', () {
-    // 100 + 50 + (200-20) + 300 = 630
-    expect(report.grossTotal, closeTo(630, 1e-9));
+  test('gross total = payments net of change, invalid rows ignored', () {
+    // 100 + 50 + (200-20) + 300 + 40 = 670
+    expect(report.grossTotal, closeTo(670, 1e-9));
   });
 
   test('per-day totals are bucketed by local calendar day and sorted', () {
@@ -45,7 +42,7 @@ void main() {
     expect(report.days[0].orderCount, 2);
     expect(report.days[0].total, closeTo(330, 1e-9)); // 100+50+180
     expect(report.days[1].total, closeTo(300, 1e-9));
-    expect(report.days[2].total, closeTo(0, 1e-9)); // counted, but unpaid
+    expect(report.days[2].total, closeTo(40, 1e-9)); // second check, next day
     expect(report.days[2].orderCount, 1);
   });
 
@@ -59,11 +56,11 @@ void main() {
 
   test('netTotal = grossTotal − Σ taxes', () {
     expect(report.taxTotal, closeTo(120, 1e-9));
-    expect(report.netTotal, closeTo(510, 1e-9)); // 630 − 120
+    expect(report.netTotal, closeTo(550, 1e-9)); // 670 − 120
   });
 
   test('empty input yields an empty, zeroed report', () {
-    final empty = aggregateDailySales(orderRows: [], payRows: [], taxRows: []);
+    final empty = aggregateDailySales(payRows: [], taxRows: []);
     expect(empty.days, isEmpty);
     expect(empty.taxes, isEmpty);
     expect(empty.grossTotal, 0);

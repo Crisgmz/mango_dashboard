@@ -6,11 +6,22 @@ import 'dashboard_notification.dart';
 /// in-app [NotificationService] (gating).
 enum NotificationEventType {
   // Clave histórica 'item_voided': se conserva para no perder las preferencias
-  // ya guardadas. Los borradores (no enviados a cocina) nunca avisan.
+  // ya guardadas. Cubre borrar y bajar la cantidad; los borradores (no
+  // enviados a cocina) nunca avisan.
   itemVoided(
     'item_voided',
-    'Producto eliminado',
-    'Cuando se quita de una cuenta un producto ya enviado a cocina.',
+    'Producto eliminado o reducido',
+    'Cuando se quita un producto ya enviado a cocina o se le baja la cantidad.',
+  ),
+  itemCourtesy(
+    'item_courtesy',
+    'Cortesía',
+    'Cuando se regala un producto de una cuenta.',
+  ),
+  itemDiscount(
+    'item_discount',
+    'Descuento',
+    'Cuando se le aplica un descuento a un producto o a la cuenta.',
   ),
   orderVoided(
     'order_voided',
@@ -62,6 +73,10 @@ enum NotificationEventType {
     switch (type) {
       case NotificationType.itemVoided:
         return itemVoided.key;
+      case NotificationType.itemCourtesy:
+        return itemCourtesy.key;
+      case NotificationType.itemDiscount:
+        return itemDiscount.key;
       case NotificationType.orderVoided:
         return orderVoided.key;
       case NotificationType.cashClosed:

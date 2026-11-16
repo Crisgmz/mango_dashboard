@@ -15,12 +15,14 @@ import '../../data/dashboard/dashboard_data_service.dart';
 import '../../data/dashboard/dashboard_summary_cache.dart';
 import '../../data/dashboard/sales_layout_service.dart';
 import '../../data/floor/floor_admin_service.dart';
+import '../../data/history/change_history_service.dart';
 import '../../data/inventory/inventory_data_service.dart';
 import '../../data/inventory/physical_count_service.dart';
 import '../../data/inventory/stock_transfer_service.dart';
 import '../../data/notifications/notification_preferences_service.dart';
 import '../../data/notifications/notification_service.dart';
 import '../../data/purchasing/purchasing_data_service.dart';
+import '../../data/settings/sales_note_settings_service.dart';
 
 final supabaseClientProvider = Provider<SupabaseClient>((ref) {
   return Supabase.instance.client;
@@ -50,6 +52,11 @@ final businessDayServiceProvider = Provider<BusinessDayService>((ref) {
   return BusinessDayService();
 });
 
+/// Nota de venta del negocio (switch + prefijo). Se maneja solo desde aquí.
+final salesNoteSettingsServiceProvider = Provider<SalesNoteSettingsService>((ref) {
+  return SalesNoteSettingsService(ref.read(supabaseClientProvider));
+});
+
 final inventoryDataServiceProvider = Provider<InventoryDataService>((ref) {
   return InventoryDataService(ref.read(supabaseClientProvider));
 });
@@ -72,6 +79,11 @@ final floorAdminServiceProvider = Provider<FloorAdminService>((ref) {
 
 final purchasingDataServiceProvider = Provider<PurchasingDataService>((ref) {
   return PurchasingDataService(ref.read(supabaseClientProvider));
+});
+
+/// Historial de cambios (quién creó, cambió o borró qué). Solo lectura.
+final changeHistoryServiceProvider = Provider<ChangeHistoryService>((ref) {
+  return ChangeHistoryService(ref.read(supabaseClientProvider));
 });
 
 /// Solicitud de facturación electrónica: habla con la Edge Function

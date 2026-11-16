@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../data/dashboard/working_days.dart';
 import '../../theme/theme_data_factory.dart';
+import 'working_days_picker.dart';
 
 /// Projects the end-of-month total at the current pace, compares it to last
 /// month, and shows progress through the month.
@@ -10,17 +12,23 @@ import '../../theme/theme_data_factory.dart';
 /// Inputs:
 ///   - [currentMonthSales]: month-to-date total
 ///   - [previousMonthSales]: previous month's total (for comparison)
+///   - [workingDays]: weekdays the business opens; only those count as days
+///   - [onEditWorkingDays]: opens the working-days picker (null = read-only pill)
 ///   - [now]: current date (testable; defaults to DateTime.now())
 class MonthProjectionCard extends StatelessWidget {
   const MonthProjectionCard({
     super.key,
     required this.currentMonthSales,
     required this.previousMonthSales,
+    this.workingDays = kAllWeekdays,
+    this.onEditWorkingDays,
     DateTime? now,
   }) : _nowOverride = now;
 
   final double currentMonthSales;
   final double previousMonthSales;
+  final Set<int> workingDays;
+  final VoidCallback? onEditWorkingDays;
   final DateTime? _nowOverride;
 
   @override
@@ -29,12 +37,20 @@ class MonthProjectionCard extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final now = _nowOverride ?? DateTime.now();
 
-    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
-    final daysElapsed = now.day; // 1..daysInMonth
+    final allDays = workingDays.length == 7;
+    final days = monthWorkingDays(
+      year: now.year,
+      month: now.month,
+      workingDays: workingDays,
+      throughDay: now.day,
+    );
+    final daysInMonth = days.total;
+    final daysElapsed = days.elapsed; // working days so far, today included
     final daysRemaining = (daysInMonth - daysElapsed).clamp(0, daysInMonth);
-    final monthProgress = daysElapsed / daysInMonth;
+    final monthProgress = daysInMonth > 0 ? daysElapsed / daysInMonth : 0.0;
 
-    final pace = daysElapsed > 0 ? currentMonthSales / daysElapsed : 0.0;
+    // Sales on a closed day still count; clamp to 1 so it never divides by 0.
+    final pace = currentMonthSales / (daysElapsed < 1 ? 1 : daysElapsed);
     final projection = pace * daysInMonth;
 
     final hasPrev = previousMonthSales > 0;
@@ -88,6 +104,8 @@ class MonthProjectionCard extends StatelessWidget {
                       'Al ritmo actual',
                       style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
                     ),
+                    SizedBox(height: dpi.space(4)),
+                    WorkingDaysPill(workingDays: workingDays, onTap: onEditWorkingDays),
                   ],
                 ),
               ),
@@ -171,13 +189,15 @@ class MonthProjectionCard extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'Día $daysElapsed de $daysInMonth',
+                '${allDays ? 'Día' : 'Día laborable'} $daysElapsed de $daysInMonth',
                 style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
               ),
               Text(
                 daysRemaining == 0
                     ? 'último día'
-                    : '$daysRemaining ${daysRemaining == 1 ? 'día restante' : 'días restantes'}',
+                    : daysRemaining == 1
+                        ? '1 día${allDays ? '' : ' laborable'} restante'
+                        : '$daysRemaining días${allDays ? '' : ' laborables'} restantes',
                 style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context), fontWeight: FontWeight.w600),
               ),
             ],

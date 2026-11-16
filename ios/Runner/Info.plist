@@ -36,6 +36,8 @@
 	<string>Usamos Face ID para iniciar sesión rápidamente en tu cuenta.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Permite guardar reportes y comprobantes en tu galería.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Permite adjuntar archivos desde tu galería, como el certificado de firma digital para la facturación electrónica.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

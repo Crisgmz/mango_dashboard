@@ -1,47 +1,39 @@
 import '../../domain/dashboard/dashboard_models.dart';
 import 'tax_lines_aggregator.dart';
 
-/// Pure aggregation for the "Ventas por día" report. Given the raw `orders`,
-/// `payments` and `order_item_tax_lines` rows already fetched for the range,
+/// Pure aggregation for the "Ventas por día" report. Given the sale
+/// `payments` (amount, change_amount, order_id, created_at) and the sold
+/// `order_item_tax_lines` already fetched for the range (sale_scope.dart),
 /// computes per-day gross sales, the range-wide tax breakdown, and totals.
 ///
 /// Kept separate from the Supabase query so the money math is unit-testable:
-///  - gross per day = its paid orders' payments, net of change;
+///  - gross per day = the payments collected that day, net of change (a sale
+///    is the payment, not the table closing);
+///  - orders per day = distinct orders paid that day;
 ///  - `netTotal = grossTotal − Σ taxes` (see [DailySalesReport]);
 ///  - taxes aggregated by name, with the average rate when one is recorded.
 DailySalesReport aggregateDailySales({
-  required List<Map<String, dynamic>> orderRows,
   required List<Map<String, dynamic>> payRows,
   required List<Map<String, dynamic>> taxRows,
   int cutoffHour = 0,
 }) {
-  // ── Map each paid order to its local OPERATIVE day + per-day count ──
+  // ── Gross per local OPERATIVE day of the payment ──
   // The business day starts at [cutoffHour] (e.g. 5 AM): a sale at 2 AM
   // belongs to the previous day's bucket, matching the dashboard's Hoy/Ayer.
-  final orderDay = <String, DateTime>{};
   final byDay = <DateTime, _DayAgg>{};
-  var orderCount = 0;
-
-  for (final row in orderRows) {
-    final id = row['id']?.toString();
-    final closedAt = DateTime.tryParse(row['closed_at']?.toString() ?? '');
-    if (id == null || id.isEmpty || closedAt == null) continue;
-    final local = closedAt.toLocal().subtract(Duration(hours: cutoffHour));
-    final day = DateTime(local.year, local.month, local.day);
-    orderDay[id] = day;
-    byDay.putIfAbsent(day, _DayAgg.new).count += 1;
-    orderCount += 1;
-  }
-
-  // ── Gross per day = those orders' payments (net of change) ──
+  final orders = <String>{};
   double grossTotal = 0;
   for (final row in payRows) {
     final oid = row['order_id']?.toString();
-    if (oid == null) continue;
-    final day = orderDay[oid];
-    if (day == null) continue; // not a paid order closed in this range
+    final paidAt = DateTime.tryParse(row['created_at']?.toString() ?? '');
+    if (oid == null || oid.isEmpty || paidAt == null) continue;
+    final local = paidAt.toLocal().subtract(Duration(hours: cutoffHour));
+    final day = DateTime(local.year, local.month, local.day);
     final net = _netAmount(row['amount'], row['change_amount']);
-    byDay[day]!.total += net;
+    final agg = byDay.putIfAbsent(day, _DayAgg.new);
+    agg.total += net;
+    agg.orders.add(oid);
+    orders.add(oid);
     grossTotal += net;
   }
 
@@ -49,7 +41,7 @@ DailySalesReport aggregateDailySales({
       .map((e) => DailySalesEntry(
             date: e.key,
             total: e.value.total,
-            orderCount: e.value.count,
+            orderCount: e.value.orders.length,
           ))
       .toList()
     ..sort((a, b) => a.date.compareTo(b.date));
@@ -61,7 +53,7 @@ DailySalesReport aggregateDailySales({
     days: days,
     grossTotal: grossTotal,
     taxes: taxes,
-    orderCount: orderCount,
+    orderCount: orders.length,
   );
 }
 
@@ -75,5 +67,5 @@ double _toDouble(dynamic value) {
 
 class _DayAgg {
   double total = 0;
-  int count = 0;
+  final orders = <String>{};
 }

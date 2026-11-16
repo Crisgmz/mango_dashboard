@@ -6,11 +6,14 @@ import '../../../core/date/date_range_utils.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/dashboard/business_day_service.dart';
+import '../../../data/dashboard/report_result_cache.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../viewmodel/report_load_controller.dart';
 import '../widgets/period_filter_bar.dart';
+import '../widgets/report_loading.dart';
 
 /// "Menú": menu-engineering view. Surfaces the active dishes that did NOT sell
 /// in the period (dead items) and classifies the ones that did into
@@ -32,7 +35,8 @@ class MenuEngineeringView extends ConsumerStatefulWidget {
 }
 
 class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
-  late Future<MenuEngineeringReport> _future;
+  late final ReportLoadController<MenuEngineeringReport> _report =
+      ReportLoadController<MenuEngineeringReport>()..addListener(_onReportChanged);
   late DateTime _start;
   late DateTime _end;
   late String _periodLabel;
@@ -40,7 +44,7 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
   DateTimeRange? _customRange;
   int _cutoffHour = BusinessDayService.cachedCutoffHour;
 
-  MenuEngineeringReport _loaded = const MenuEngineeringReport();
+  MenuEngineeringReport get _loaded => _report.data ?? const MenuEngineeringReport();
 
   @override
   void initState() {
@@ -48,20 +52,32 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
     _start = widget.start;
     _end = widget.end;
     _periodLabel = widget.periodLabel ?? 'Periodo';
-    _future = _load();
+    _load();
   }
 
-  Future<MenuEngineeringReport> _load() async {
-    final profile = ref.read(authGateViewModelProvider).profile;
-    final businessId = profile?.businessId;
-    if (businessId == null) return const MenuEngineeringReport();
-    final report = await ref.read(dashboardDataServiceProvider).loadMenuEngineering(
-          businessId: businessId,
-          start: _start,
-          end: _end,
-        );
-    if (mounted) setState(() => _loaded = report);
-    return report;
+  @override
+  void dispose() {
+    _report.dispose();
+    super.dispose();
+  }
+
+  void _onReportChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _load() {
+    final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
+    if (businessId == null) return;
+    final start = _start;
+    final end = _end;
+    _report.load(
+      key: reportCacheKey('menu_engineering', businessId, start, end),
+      fetch: () => ref.read(dashboardDataServiceProvider).loadMenuEngineering(
+            businessId: businessId,
+            start: start,
+            end: end,
+          ),
+    );
   }
 
   void _applyPeriod(DetailPeriod period) {
@@ -71,7 +87,7 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
         _start = widget.start;
         _end = widget.end;
         _periodLabel = widget.periodLabel ?? 'Periodo';
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -82,7 +98,7 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
       _start = range.start;
       _end = range.end;
       _periodLabel = labelForDetailPeriod(period);
-      _future = _load();
+      _load();
     });
   }
 
@@ -94,7 +110,7 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
       setState(() {
         _start = range.start;
         _end = range.end;
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -128,7 +144,7 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
       _start = start;
       _end = end;
       _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
-      _future = _load();
+      _load();
     });
   }
 
@@ -175,22 +191,23 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
         centerTitle: false,
         actions: [
           ExportMenuButton(
-            enabled: _loaded.selling.isNotEmpty || _loaded.deadItems.isNotEmpty,
+            enabled: !_report.isStale && (_loaded.selling.isNotEmpty || _loaded.deadItems.isNotEmpty),
             onExportCsv: _exportCsv,
             onExportPdf: _exportPdf,
           ),
         ],
       ),
-      body: FutureBuilder<MenuEngineeringReport>(
-        future: _future,
-        builder: (context, snapshot) {
-          final loading = snapshot.connectionState == ConnectionState.waiting;
-          final report = snapshot.data ?? const MenuEngineeringReport();
+      body: Builder(
+        builder: (context) {
+          final report = _loaded;
           return Column(
             children: [
               Padding(
                 padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), 0),
-                child: _Header(report: report, periodLabel: _periodLabel),
+                child: ReportStaleFade(
+                  controller: _report,
+                  child: _Header(report: report, periodLabel: _periodLabel),
+                ),
               ),
               SizedBox(height: dpi.space(12)),
               PeriodFilterBar(
@@ -204,13 +221,7 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
               ),
               SizedBox(height: dpi.space(10)),
               Expanded(
-                child: Builder(builder: (context) {
-                  if (loading) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (snapshot.hasError) {
-                    return _centered(context, 'No se pudo cargar el análisis de menú.', danger: true);
-                  }
+                child: ReportBody<MenuEngineeringReport>(controller: _report, errorMessage: 'No se pudo cargar el análisis de menú.', builder: (context, report) {
                   if (report.menuSize == 0 && report.selling.isEmpty) {
                     return _centered(context, 'No hay datos de menú en este periodo.');
                   }
@@ -233,7 +244,7 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
     );
   }
 
-  Widget _centered(BuildContext context, String text, {bool danger = false}) {
+  Widget _centered(BuildContext context, String text) {
     final dpi = DpiScale.of(context);
     return Center(
       child: Padding(
@@ -241,9 +252,7 @@ class _MenuEngineeringViewState extends ConsumerState<MenuEngineeringView> {
         child: Text(
           text,
           textAlign: TextAlign.center,
-          style: danger
-              ? TextStyle(color: MangoThemeFactory.danger)
-              : Theme.of(context).textTheme.bodySmall,
+          style: Theme.of(context).textTheme.bodySmall,
         ),
       ),
     );

@@ -6,11 +6,14 @@ import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/date/date_range_utils.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/dashboard/business_day_service.dart';
+import '../../../data/dashboard/report_result_cache.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../viewmodel/report_load_controller.dart';
 import '../widgets/period_filter_bar.dart';
+import '../widgets/report_loading.dart';
 
 /// Ranking of modifiers (extras / opciones) sold in the period: how many
 /// times each one was added and how much revenue it generated.
@@ -31,7 +34,8 @@ class ModifiersBreakdownView extends ConsumerStatefulWidget {
 }
 
 class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView> {
-  late Future<List<ModifierSummary>> _future;
+  late final ReportLoadController<List<ModifierSummary>> _report =
+      ReportLoadController<List<ModifierSummary>>()..addListener(_onReportChanged);
   late DateTime _start;
   late DateTime _end;
   late String _periodLabel;
@@ -46,22 +50,34 @@ class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView>
     _start = widget.start;
     _end = widget.end;
     _periodLabel = widget.periodLabel ?? 'Periodo';
-    _future = _load();
+    _load();
   }
 
-  List<ModifierSummary> _loaded = const [];
+  @override
+  void dispose() {
+    _report.dispose();
+    super.dispose();
+  }
 
-  Future<List<ModifierSummary>> _load() async {
-    final profile = ref.read(authGateViewModelProvider).profile;
-    final businessId = profile?.businessId;
-    if (businessId == null) return const [];
-    final rows = await ref.read(dashboardDataServiceProvider).loadModifiersBreakdown(
-          businessId: businessId,
-          start: _start,
-          end: _end,
-        );
-    if (mounted) setState(() => _loaded = rows);
-    return rows;
+  List<ModifierSummary> get _loaded => _report.data ?? const [];
+
+  void _onReportChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _load() {
+    final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
+    if (businessId == null) return;
+    final start = _start;
+    final end = _end;
+    _report.load(
+      key: reportCacheKey('modifiers', businessId, start, end),
+      fetch: () => ref.read(dashboardDataServiceProvider).loadModifiersBreakdown(
+            businessId: businessId,
+            start: start,
+            end: end,
+          ),
+    );
   }
 
   List<List<String>> _rowsForExport() {
@@ -104,7 +120,7 @@ class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView>
         _start = widget.start;
         _end = widget.end;
         _periodLabel = widget.periodLabel ?? 'Periodo';
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -115,7 +131,7 @@ class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView>
       _start = range.start;
       _end = range.end;
       _periodLabel = labelForDetailPeriod(period);
-      _future = _load();
+      _load();
     });
   }
 
@@ -127,7 +143,7 @@ class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView>
       setState(() {
         _start = range.start;
         _end = range.end;
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -163,7 +179,7 @@ class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView>
       _start = start;
       _end = end;
       _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
-      _future = _load();
+      _load();
     });
   }
 
@@ -176,18 +192,15 @@ class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView>
         centerTitle: false,
         actions: [
           ExportMenuButton(
-            enabled: _loaded.isNotEmpty,
+            enabled: !_report.isStale && _loaded.isNotEmpty,
             onExportCsv: _exportCsv,
             onExportPdf: _exportPdf,
           ),
         ],
       ),
-      body: FutureBuilder<List<ModifierSummary>>(
-        future: _future,
-        builder: (context, snapshot) {
-          final loading = snapshot.connectionState == ConnectionState.waiting;
-          final hasError = snapshot.hasError;
-          final all = snapshot.data ?? const <ModifierSummary>[];
+      body: Builder(
+        builder: (context) {
+          final all = _loaded;
           final q = _query.trim().toLowerCase();
           final modifiers = q.isEmpty
               ? all
@@ -204,11 +217,14 @@ class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView>
             children: [
               Padding(
                 padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), 0),
-                child: _Header(
-                  totalUses: totalUses,
-                  totalRevenue: totalRevenue,
-                  uniqueModifiers: modifiers.length,
-                  periodLabel: _periodLabel,
+                child: ReportStaleFade(
+                  controller: _report,
+                  child: _Header(
+                    totalUses: totalUses,
+                    totalRevenue: totalRevenue,
+                    uniqueModifiers: modifiers.length,
+                    periodLabel: _periodLabel,
+                  ),
                 ),
               ),
               SizedBox(height: dpi.space(12)),
@@ -239,22 +255,7 @@ class _ModifiersBreakdownViewState extends ConsumerState<ModifiersBreakdownView>
               ),
               SizedBox(height: dpi.space(10)),
               Expanded(
-                child: Builder(builder: (context) {
-                  if (loading) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (hasError) {
-                    return Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(dpi.space(20)),
-                        child: Text(
-                          'No se pudo cargar el reporte.',
-                          style: TextStyle(color: MangoThemeFactory.danger),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    );
-                  }
+                child: ReportBody<List<ModifierSummary>>(controller: _report, errorMessage: 'No se pudo cargar el reporte.', builder: (context, _) {
                   if (modifiers.isEmpty) {
                     return Center(
                       child: Padding(

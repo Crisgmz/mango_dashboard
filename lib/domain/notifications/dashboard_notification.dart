@@ -1,6 +1,13 @@
 import 'package:flutter/material.dart';
 
-enum NotificationType { itemVoided, orderVoided, cashClosed, tableOpened }
+enum NotificationType {
+  itemVoided,
+  itemCourtesy,
+  itemDiscount,
+  orderVoided,
+  cashClosed,
+  tableOpened,
+}
 
 @immutable
 class DashboardNotification {

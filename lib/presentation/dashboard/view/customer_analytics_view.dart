@@ -6,11 +6,14 @@ import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/date/date_range_utils.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/dashboard/business_day_service.dart';
+import '../../../data/dashboard/report_result_cache.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../viewmodel/report_load_controller.dart';
 import '../widgets/period_filter_bar.dart';
+import '../widgets/report_loading.dart';
 import 'customer_detail_view.dart';
 
 /// Customer analytics: ranks customers (RNC or named) by spend in the
@@ -34,7 +37,8 @@ class CustomerAnalyticsView extends ConsumerStatefulWidget {
 enum _Filter { all, recurring, firstTime }
 
 class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
-  late Future<List<CustomerSummary>> _future;
+  late final ReportLoadController<List<CustomerSummary>> _report =
+      ReportLoadController<List<CustomerSummary>>()..addListener(_onReportChanged);
   late DateTime _start;
   late DateTime _end;
   late String _periodLabel;
@@ -50,22 +54,34 @@ class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
     _start = widget.start;
     _end = widget.end;
     _periodLabel = widget.periodLabel ?? 'Periodo';
-    _future = _load();
+    _load();
   }
 
-  List<CustomerSummary> _loaded = const [];
+  @override
+  void dispose() {
+    _report.dispose();
+    super.dispose();
+  }
 
-  Future<List<CustomerSummary>> _load() async {
-    final profile = ref.read(authGateViewModelProvider).profile;
-    final businessId = profile?.businessId;
-    if (businessId == null) return const [];
-    final rows = await ref.read(dashboardDataServiceProvider).loadCustomerAnalytics(
-          businessId: businessId,
-          start: _start,
-          end: _end,
-        );
-    if (mounted) setState(() => _loaded = rows);
-    return rows;
+  List<CustomerSummary> get _loaded => _report.data ?? const [];
+
+  void _onReportChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _load() {
+    final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
+    if (businessId == null) return;
+    final start = _start;
+    final end = _end;
+    _report.load(
+      key: reportCacheKey('customers', businessId, start, end),
+      fetch: () => ref.read(dashboardDataServiceProvider).loadCustomerAnalytics(
+            businessId: businessId,
+            start: start,
+            end: end,
+          ),
+    );
   }
 
   List<CustomerSummary> get _filteredForExport {
@@ -128,7 +144,7 @@ class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
         _start = widget.start;
         _end = widget.end;
         _periodLabel = widget.periodLabel ?? 'Periodo';
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -139,7 +155,7 @@ class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
       _start = range.start;
       _end = range.end;
       _periodLabel = labelForDetailPeriod(period);
-      _future = _load();
+      _load();
     });
   }
 
@@ -151,7 +167,7 @@ class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
       setState(() {
         _start = range.start;
         _end = range.end;
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -187,7 +203,7 @@ class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
       _start = start;
       _end = end;
       _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
-      _future = _load();
+      _load();
     });
   }
 
@@ -200,18 +216,15 @@ class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
         centerTitle: false,
         actions: [
           ExportMenuButton(
-            enabled: _loaded.isNotEmpty,
+            enabled: !_report.isStale && _loaded.isNotEmpty,
             onExportCsv: _exportCsv,
             onExportPdf: _exportPdf,
           ),
         ],
       ),
-      body: FutureBuilder<List<CustomerSummary>>(
-        future: _future,
-        builder: (context, snapshot) {
-          final loading = snapshot.connectionState == ConnectionState.waiting;
-          final hasError = snapshot.hasError;
-          final all = snapshot.data ?? const <CustomerSummary>[];
+      body: Builder(
+        builder: (context) {
+          final all = _loaded;
           final totalSpent = all.fold<double>(0, (s, c) => s + c.totalSpent);
           final totalVisits = all.fold<int>(0, (s, c) => s + c.visitCount);
           final recurringCount = all.where((c) => c.isRecurring).length;
@@ -236,12 +249,15 @@ class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
 
           return Column(
             children: [
-              _Header(
-                customerCount: all.length,
-                totalSpent: totalSpent,
-                totalVisits: totalVisits,
-                recurringCount: recurringCount,
-                periodLabel: _periodLabel,
+              ReportStaleFade(
+                controller: _report,
+                child: _Header(
+                  customerCount: all.length,
+                  totalSpent: totalSpent,
+                  totalVisits: totalVisits,
+                  recurringCount: recurringCount,
+                  periodLabel: _periodLabel,
+                ),
               ),
               PeriodFilterBar(
                 selected: _period,
@@ -297,22 +313,7 @@ class _CustomerAnalyticsViewState extends ConsumerState<CustomerAnalyticsView> {
               ),
               SizedBox(height: dpi.space(8)),
               Expanded(
-                child: Builder(builder: (context) {
-                  if (loading) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (hasError) {
-                    return Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(dpi.space(20)),
-                        child: Text(
-                          'No se pudo cargar la información de clientes.',
-                          style: TextStyle(color: MangoThemeFactory.danger),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    );
-                  }
+                child: ReportBody<List<CustomerSummary>>(controller: _report, errorMessage: 'No se pudo cargar la información de clientes.', builder: (context, _) {
                   if (filtered.isEmpty) {
                     return Center(
                       child: Text(

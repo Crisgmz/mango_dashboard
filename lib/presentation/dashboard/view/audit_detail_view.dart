@@ -6,11 +6,16 @@ import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/date/date_range_utils.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/dashboard/business_day_service.dart';
+import '../../../data/dashboard/report_result_cache.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../viewmodel/report_load_controller.dart';
 import '../widgets/period_filter_bar.dart';
+import '../widgets/report_loading.dart';
+
+typedef _AuditResult = ({AuditSummary summary, AuditDetail detail});
 
 /// Loss-prevention view: lists voided items, cancelled payments, and
 /// discounted orders for a period in three tabs.
@@ -31,7 +36,8 @@ class AuditDetailView extends ConsumerStatefulWidget {
 }
 
 class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
-  late Future<({AuditSummary summary, AuditDetail detail})> _future;
+  late final ReportLoadController<_AuditResult> _report =
+      ReportLoadController<_AuditResult>()..addListener(_onReportChanged);
   late DateTime _start;
   late DateTime _end;
   late String _periodLabel;
@@ -39,7 +45,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
   DateTimeRange? _customRange;
   int _cutoffHour = BusinessDayService.cachedCutoffHour;
   String _query = '';
-  AuditDetail _loaded = const AuditDetail();
+  AuditDetail get _loaded => _report.data?.detail ?? const AuditDetail();
 
   @override
   void initState() {
@@ -47,25 +53,32 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
     _start = widget.start;
     _end = widget.end;
     _periodLabel = widget.periodLabel ?? 'Periodo';
-    _future = _load();
+    _load();
   }
 
-  Future<({AuditSummary summary, AuditDetail detail})> _load() async {
-    final profile = ref.read(authGateViewModelProvider).profile;
-    final businessId = profile?.businessId;
-    if (businessId == null) {
-      return (
-        summary: const AuditSummary(),
-        detail: const AuditDetail(),
-      );
-    }
-    final result = await ref.read(dashboardDataServiceProvider).loadAuditDetail(
-          businessId: businessId,
-          start: _start,
-          end: _end,
-        );
-    if (mounted) setState(() => _loaded = result.detail);
-    return result;
+  @override
+  void dispose() {
+    _report.dispose();
+    super.dispose();
+  }
+
+  void _onReportChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _load() {
+    final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
+    if (businessId == null) return;
+    final start = _start;
+    final end = _end;
+    _report.load(
+      key: reportCacheKey('audit', businessId, start, end),
+      fetch: () => ref.read(dashboardDataServiceProvider).loadAuditDetail(
+            businessId: businessId,
+            start: start,
+            end: end,
+          ),
+    );
   }
 
   void _applyPeriod(DetailPeriod period) {
@@ -75,7 +88,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
         _start = widget.start;
         _end = widget.end;
         _periodLabel = widget.periodLabel ?? 'Periodo';
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -86,7 +99,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
       _start = range.start;
       _end = range.end;
       _periodLabel = labelForDetailPeriod(period);
-      _future = _load();
+      _load();
     });
   }
 
@@ -98,7 +111,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
       setState(() {
         _start = range.start;
         _end = range.end;
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -134,7 +147,7 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
       _start = start;
       _end = end;
       _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
-      _future = _load();
+      _load();
     });
   }
 
@@ -255,10 +268,11 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
           centerTitle: false,
           actions: [
             ExportMenuButton(
-              enabled: _loaded.voidedItems.isNotEmpty ||
-                  _loaded.cancelledPayments.isNotEmpty ||
-                  _loaded.discountedOrders.isNotEmpty ||
-                  _loaded.cancelledOrders.isNotEmpty,
+              enabled: !_report.isStale &&
+                  (_loaded.voidedItems.isNotEmpty ||
+                      _loaded.cancelledPayments.isNotEmpty ||
+                      _loaded.discountedOrders.isNotEmpty ||
+                      _loaded.cancelledOrders.isNotEmpty),
               onExportCsv: _exportCsv,
               onExportPdf: _exportPdf,
             ),
@@ -278,28 +292,16 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
             ],
           ),
         ),
-        body: FutureBuilder<({AuditSummary summary, AuditDetail detail})>(
-          future: _future,
-          builder: (context, snapshot) {
-            final loading = snapshot.connectionState == ConnectionState.waiting;
-            if (snapshot.hasError) {
-              return Center(
-                child: Padding(
-                  padding: EdgeInsets.all(dpi.space(20)),
-                  child: Text(
-                    'No se pudo cargar la auditoría.',
-                    style: TextStyle(color: MangoThemeFactory.danger),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              );
-            }
-
-            final summary = snapshot.data?.summary ?? const AuditSummary();
+        body: Builder(
+          builder: (context) {
+            final summary = _report.data?.summary ?? const AuditSummary();
 
             return Column(
               children: [
-                _AuditHeader(summary: summary, periodLabel: _periodLabel),
+                ReportStaleFade(
+                  controller: _report,
+                  child: _AuditHeader(summary: summary, periodLabel: _periodLabel),
+                ),
                 SizedBox(height: dpi.space(8)),
                 PeriodFilterBar(
                   selected: _period,
@@ -329,16 +331,18 @@ class _AuditDetailViewState extends ConsumerState<AuditDetailView> {
                 ),
                 SizedBox(height: dpi.space(8)),
                 Expanded(
-                  child: loading
-                      ? const Center(child: CircularProgressIndicator())
-                      : TabBarView(
-                          children: [
-                            _VoidedItemsTab(items: _filteredVoids),
-                            _CancelledPaymentsTab(items: _filteredCancellations),
-                            _DiscountedOrdersTab(items: _filteredDiscounts),
-                            _CancelledOrdersTab(items: _filteredCancelledOrders),
-                          ],
-                        ),
+                  child: ReportBody<_AuditResult>(
+                    controller: _report,
+                    errorMessage: 'No se pudo cargar la auditoría.',
+                    builder: (context, _) => TabBarView(
+                      children: [
+                        _VoidedItemsTab(items: _filteredVoids),
+                        _CancelledPaymentsTab(items: _filteredCancellations),
+                        _DiscountedOrdersTab(items: _filteredDiscounts),
+                        _CancelledOrdersTab(items: _filteredCancelledOrders),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             );

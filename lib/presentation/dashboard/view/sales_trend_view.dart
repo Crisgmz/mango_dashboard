@@ -5,11 +5,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../data/dashboard/report_result_cache.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../viewmodel/report_load_controller.dart';
 import '../widgets/growth_chip.dart';
+import '../widgets/report_loading.dart';
 
 const _monthsEs = [
   'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
@@ -31,13 +34,24 @@ class _SalesTrendViewState extends ConsumerState<SalesTrendView> {
   static const _bucketsBack = 12;
 
   TrendGranularity _granularity = TrendGranularity.week;
-  late Future<SalesTrendReport> _future;
-  SalesTrendReport _loaded = const SalesTrendReport();
+  late final ReportLoadController<SalesTrendReport> _report =
+      ReportLoadController<SalesTrendReport>()..addListener(_onReportChanged);
+  SalesTrendReport get _loaded => _report.data ?? const SalesTrendReport();
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _report.dispose();
+    super.dispose();
+  }
+
+  void _onReportChanged() {
+    if (mounted) setState(() {});
   }
 
   ({DateTime start, DateTime end}) _range() {
@@ -51,26 +65,27 @@ class _SalesTrendViewState extends ConsumerState<SalesTrendView> {
     return (start: monday.subtract(Duration(days: (_bucketsBack - 1) * 7)), end: end);
   }
 
-  Future<SalesTrendReport> _load() async {
-    final profile = ref.read(authGateViewModelProvider).profile;
-    final businessId = profile?.businessId;
-    if (businessId == null) return const SalesTrendReport();
+  void _load() {
+    final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
+    if (businessId == null) return;
     final r = _range();
-    final report = await ref.read(dashboardDataServiceProvider).loadSalesTrend(
-          businessId: businessId,
-          start: r.start,
-          end: r.end,
-          granularity: _granularity,
-        );
-    if (mounted) setState(() => _loaded = report);
-    return report;
+    final granularity = _granularity;
+    _report.load(
+      key: reportCacheKey('sales_trend', businessId, r.start, r.end, [granularity.name]),
+      fetch: () => ref.read(dashboardDataServiceProvider).loadSalesTrend(
+            businessId: businessId,
+            start: r.start,
+            end: r.end,
+            granularity: granularity,
+          ),
+    );
   }
 
   void _setGranularity(TrendGranularity g) {
     if (g == _granularity) return;
     setState(() {
       _granularity = g;
-      _future = _load();
+      _load();
     });
   }
 
@@ -118,43 +133,50 @@ class _SalesTrendViewState extends ConsumerState<SalesTrendView> {
         centerTitle: false,
         actions: [
           ExportMenuButton(
-            enabled: _loaded.buckets.any((b) => b.total > 0),
+            enabled: !_report.isStale && _loaded.buckets.any((b) => b.total > 0),
             onExportCsv: _exportCsv,
             onExportPdf: _exportPdf,
           ),
         ],
       ),
-      body: FutureBuilder<SalesTrendReport>(
-        future: _future,
-        builder: (context, snapshot) {
-          final loading = snapshot.connectionState == ConnectionState.waiting;
-          final report = snapshot.data ?? const SalesTrendReport();
-          return ListView(
-            physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-            padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16),
-                dpi.space(16) + MediaQuery.of(context).padding.bottom),
-            children: [
-              _GranularityToggle(value: _granularity, onChanged: _setGranularity),
-              SizedBox(height: dpi.space(14)),
-              _Header(report: report, isWeek: _isWeek),
-              SizedBox(height: dpi.space(14)),
-              if (loading)
-                Padding(
-                  padding: EdgeInsets.only(top: dpi.space(40)),
-                  child: const Center(child: CircularProgressIndicator()),
-                )
-              else if (snapshot.hasError)
-                _Empty(text: 'No se pudo cargar la tendencia.', danger: true)
-              else if (!report.buckets.any((b) => b.total > 0))
-                _Empty(text: 'No hubo ventas en este periodo.')
-              else ...[
-                _TrendCard(report: report, bucketLabel: _bucketLabel),
+      body: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), 0),
+            child: Column(
+              children: [
+                _GranularityToggle(value: _granularity, onChanged: _setGranularity),
                 SizedBox(height: dpi.space(14)),
-                _HeatmapCard(cells: report.heat),
+                ReportStaleFade(
+                  controller: _report,
+                  child: _Header(report: _loaded, isWeek: _isWeek),
+                ),
               ],
-            ],
-          );
-        },
+            ),
+          ),
+          SizedBox(height: dpi.space(14)),
+          Expanded(
+            child: ReportBody<SalesTrendReport>(
+              controller: _report,
+              errorMessage: 'No se pudo cargar la tendencia.',
+              skeleton: const ReportSkeleton(rows: 3),
+              builder: (context, report) => ListView(
+                physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+                padding: EdgeInsets.fromLTRB(dpi.space(16), 0, dpi.space(16),
+                    dpi.space(16) + MediaQuery.of(context).padding.bottom),
+                children: [
+                  if (!report.buckets.any((b) => b.total > 0))
+                    const _Empty(text: 'No hubo ventas en este periodo.')
+                  else ...[
+                    _TrendCard(report: report, bucketLabel: _bucketLabel),
+                    SizedBox(height: dpi.space(14)),
+                    _HeatmapCard(cells: report.heat),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -512,9 +534,8 @@ class _HeatmapCard extends StatelessWidget {
 }
 
 class _Empty extends StatelessWidget {
-  const _Empty({required this.text, this.danger = false});
+  const _Empty({required this.text});
   final String text;
-  final bool danger;
 
   @override
   Widget build(BuildContext context) {
@@ -525,9 +546,7 @@ class _Empty extends StatelessWidget {
         child: Text(
           text,
           textAlign: TextAlign.center,
-          style: danger
-              ? TextStyle(color: MangoThemeFactory.danger)
-              : Theme.of(context).textTheme.bodySmall,
+          style: Theme.of(context).textTheme.bodySmall,
         ),
       ),
     );

@@ -5,9 +5,15 @@ import '../../../app/di/providers.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/dashboard/goal_projection.dart';
+import '../../../data/dashboard/report_result_cache.dart';
 import '../../../data/dashboard/sales_goal_service.dart';
+import '../../../data/dashboard/working_days.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../viewmodel/report_load_controller.dart';
+import '../viewmodel/working_days_controller.dart';
+import '../widgets/report_loading.dart';
+import '../widgets/working_days_picker.dart';
 
 const _monthsEs = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -30,8 +36,9 @@ class _SalesGoalViewState extends ConsumerState<SalesGoalView> {
 
   late int _year;
   late int _month;
-  late Future<_Loaded> _future;
-  _Loaded _loaded = (goal: null, actual: 0.0);
+  late final ReportLoadController<_Loaded> _report =
+      ReportLoadController<_Loaded>()..addListener(_onReportChanged);
+  _Loaded get _loaded => _report.data ?? (goal: null, actual: 0.0);
 
   @override
   void initState() {
@@ -39,35 +46,50 @@ class _SalesGoalViewState extends ConsumerState<SalesGoalView> {
     final now = DateTime.now();
     _year = now.year;
     _month = now.month;
-    _future = _load();
+    _load();
   }
 
-  int get _daysInMonth => DateTime(_year, _month + 1, 0).day;
+  @override
+  void dispose() {
+    _report.dispose();
+    super.dispose();
+  }
+
+  void _onReportChanged() {
+    if (mounted) setState(() {});
+  }
+
   bool get _isCurrentMonth {
     final now = DateTime.now();
     return _year == now.year && _month == now.month;
   }
 
-  int get _dayOfMonth => _isCurrentMonth ? DateTime.now().day : _daysInMonth;
-
-  Future<_Loaded> _load() async {
-    final profile = ref.read(authGateViewModelProvider).profile;
-    final businessId = profile?.businessId;
-    if (businessId == null) return (goal: null, actual: 0.0);
-
-    final goal = await _service.getGoal(businessId, _year, _month);
-    final monthStart = DateTime(_year, _month, 1);
+  /// [goalChanged]: solo cambió la meta (vive en el teléfono), así que se
+  /// reusa la venta del mes ya cargada en vez de volver a pedirla.
+  void _load({bool goalChanged = false}) {
+    final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
+    if (businessId == null) return;
+    final year = _year;
+    final month = _month;
+    final monthStart = DateTime(year, month, 1);
     final now = DateTime.now();
     final end = _isCurrentMonth
         ? DateTime(now.year, now.month, now.day).add(const Duration(days: 1))
-        : DateTime(_year, _month + 1, 1);
-    final report = await ref
-        .read(dashboardDataServiceProvider)
-        .loadDailySales(businessId: businessId, start: monthStart, end: end);
-
-    final loaded = (goal: goal, actual: report.grossTotal);
-    if (mounted) setState(() => _loaded = loaded);
-    return loaded;
+        : DateTime(year, month + 1, 1);
+    final keepActual = goalChanged ? _report.data?.actual : null;
+    _report.load(
+      key: reportCacheKey('sales_goal', businessId, monthStart, end),
+      force: goalChanged,
+      fetch: () async {
+        final goal = await _service.getGoal(businessId, year, month);
+        final actual = keepActual ??
+            (await ref
+                    .read(dashboardDataServiceProvider)
+                    .loadDailySales(businessId: businessId, start: monthStart, end: end))
+                .grossTotal;
+        return (goal: goal, actual: actual);
+      },
+    );
   }
 
   Future<void> _editGoal() async {
@@ -104,11 +126,15 @@ class _SalesGoalViewState extends ConsumerState<SalesGoalView> {
     final businessId = profile?.businessId;
     if (businessId == null) return;
     await _service.setGoal(businessId, _year, _month, amount);
-    if (mounted) setState(() => _future = _load());
+    if (mounted) _load(goalChanged: true);
   }
 
   @override
   Widget build(BuildContext context) {
+    final dpi = DpiScale.of(context);
+    final businessId =
+        ref.watch(authGateViewModelProvider.select((s) => s.profile?.businessId)) ?? '';
+    final workingDays = ref.watch(workingDaysProvider(businessId));
     return Scaffold(
       appBar: AppBar(
         title: const Text('Meta de venta'),
@@ -121,17 +147,16 @@ class _SalesGoalViewState extends ConsumerState<SalesGoalView> {
           ),
         ],
       ),
-      body: FutureBuilder<_Loaded>(
-        future: _future,
-        builder: (context, snapshot) {
-          final dpi = DpiScale.of(context);
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final data = snapshot.data ?? _loaded;
+      body: Padding(
+        padding: EdgeInsets.only(top: dpi.space(12)),
+        child: ReportBody<_Loaded>(
+          controller: _report,
+          errorMessage: 'No se pudo cargar la venta del mes.',
+          skeleton: const ReportSkeleton(rows: 3),
+          builder: (context, data) {
           return ListView(
             physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-            padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16),
+            padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(4), dpi.space(16),
                 dpi.space(16) + MediaQuery.of(context).padding.bottom),
             children: [
               if (data.goal == null)
@@ -141,21 +166,34 @@ class _SalesGoalViewState extends ConsumerState<SalesGoalView> {
                   onSet: _editGoal,
                 )
               else
-                ..._goalContent(context, data.goal!, data.actual),
+                ..._goalContent(context, data.goal!, data.actual, businessId, workingDays),
             ],
           );
-        },
+          },
+        ),
       ),
     );
   }
 
-  List<Widget> _goalContent(BuildContext context, double goal, double actual) {
+  List<Widget> _goalContent(
+    BuildContext context,
+    double goal,
+    double actual,
+    String businessId,
+    Set<int> workingDays,
+  ) {
     final dpi = DpiScale.of(context);
+    final days = monthWorkingDays(
+      year: _year,
+      month: _month,
+      workingDays: workingDays,
+      throughDay: _isCurrentMonth ? DateTime.now().day : null,
+    );
     final p = projectGoal(
       goal: goal,
       actual: actual,
-      dayOfMonth: _dayOfMonth,
-      daysInMonth: _daysInMonth,
+      daysElapsed: days.elapsed,
+      daysTotal: days.total,
     );
     return [
       _ProgressHeader(
@@ -164,6 +202,24 @@ class _SalesGoalViewState extends ConsumerState<SalesGoalView> {
         actual: actual,
         progress: p.progress,
         onTrack: p.onTrack,
+      ),
+      SizedBox(height: dpi.space(10)),
+      Row(
+        children: [
+          Flexible(
+            child: WorkingDaysPill(
+              workingDays: workingDays,
+              onTap: () => editWorkingDays(context, ref, businessId),
+            ),
+          ),
+          SizedBox(width: dpi.space(8)),
+          Text(
+            _isCurrentMonth
+                ? '${days.elapsed} de ${days.total} días laborables'
+                : '${days.total} días laborables',
+            style: TextStyle(fontSize: dpi.font(11), color: MangoThemeFactory.mutedText(context)),
+          ),
+        ],
       ),
       SizedBox(height: dpi.space(14)),
       Row(

@@ -6,11 +6,14 @@ import '../../../core/date/date_range_utils.dart';
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/dashboard/business_day_service.dart';
+import '../../../data/dashboard/report_result_cache.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../../theme/theme_data_factory.dart';
+import '../viewmodel/report_load_controller.dart';
 import '../widgets/period_filter_bar.dart';
+import '../widgets/report_loading.dart';
 
 /// "Fiscal": NCF issued by type, e-CF DGII status (accepted / pending /
 /// rejected) and consolidated ITBIS for the period — the compliance view for
@@ -32,7 +35,8 @@ class FiscalView extends ConsumerStatefulWidget {
 }
 
 class _FiscalViewState extends ConsumerState<FiscalView> {
-  late Future<FiscalReport> _future;
+  late final ReportLoadController<FiscalReport> _report =
+      ReportLoadController<FiscalReport>()..addListener(_onReportChanged);
   late DateTime _start;
   late DateTime _end;
   late String _periodLabel;
@@ -40,7 +44,7 @@ class _FiscalViewState extends ConsumerState<FiscalView> {
   DateTimeRange? _customRange;
   int _cutoffHour = BusinessDayService.cachedCutoffHour;
 
-  FiscalReport _loaded = const FiscalReport();
+  FiscalReport get _loaded => _report.data ?? const FiscalReport();
 
   @override
   void initState() {
@@ -48,20 +52,32 @@ class _FiscalViewState extends ConsumerState<FiscalView> {
     _start = widget.start;
     _end = widget.end;
     _periodLabel = widget.periodLabel ?? 'Periodo';
-    _future = _load();
+    _load();
   }
 
-  Future<FiscalReport> _load() async {
-    final profile = ref.read(authGateViewModelProvider).profile;
-    final businessId = profile?.businessId;
-    if (businessId == null) return const FiscalReport();
-    final report = await ref.read(dashboardDataServiceProvider).loadFiscal(
-          businessId: businessId,
-          start: _start,
-          end: _end,
-        );
-    if (mounted) setState(() => _loaded = report);
-    return report;
+  @override
+  void dispose() {
+    _report.dispose();
+    super.dispose();
+  }
+
+  void _onReportChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _load() {
+    final businessId = ref.read(authGateViewModelProvider).profile?.businessId;
+    if (businessId == null) return;
+    final start = _start;
+    final end = _end;
+    _report.load(
+      key: reportCacheKey('fiscal', businessId, start, end),
+      fetch: () => ref.read(dashboardDataServiceProvider).loadFiscal(
+            businessId: businessId,
+            start: start,
+            end: end,
+          ),
+    );
   }
 
   void _applyPeriod(DetailPeriod period) {
@@ -71,7 +87,7 @@ class _FiscalViewState extends ConsumerState<FiscalView> {
         _start = widget.start;
         _end = widget.end;
         _periodLabel = widget.periodLabel ?? 'Periodo';
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -82,7 +98,7 @@ class _FiscalViewState extends ConsumerState<FiscalView> {
       _start = range.start;
       _end = range.end;
       _periodLabel = labelForDetailPeriod(period);
-      _future = _load();
+      _load();
     });
   }
 
@@ -94,7 +110,7 @@ class _FiscalViewState extends ConsumerState<FiscalView> {
       setState(() {
         _start = range.start;
         _end = range.end;
-        _future = _load();
+        _load();
       });
       return;
     }
@@ -128,7 +144,7 @@ class _FiscalViewState extends ConsumerState<FiscalView> {
       _start = start;
       _end = end;
       _periodLabel = labelForDetailPeriod(DetailPeriod.custom, customRange: picked);
-      _future = _load();
+      _load();
     });
   }
 
@@ -178,22 +194,23 @@ class _FiscalViewState extends ConsumerState<FiscalView> {
         centerTitle: false,
         actions: [
           ExportMenuButton(
-            enabled: _loaded.documentCount > 0,
+            enabled: !_report.isStale && _loaded.documentCount > 0,
             onExportCsv: _exportCsv,
             onExportPdf: _exportPdf,
           ),
         ],
       ),
-      body: FutureBuilder<FiscalReport>(
-        future: _future,
-        builder: (context, snapshot) {
-          final loading = snapshot.connectionState == ConnectionState.waiting;
-          final report = snapshot.data ?? const FiscalReport();
+      body: Builder(
+        builder: (context) {
+          final report = _loaded;
           return Column(
             children: [
               Padding(
                 padding: EdgeInsets.fromLTRB(dpi.space(16), dpi.space(16), dpi.space(16), 0),
-                child: _Header(report: report, periodLabel: _periodLabel),
+                child: ReportStaleFade(
+                  controller: _report,
+                  child: _Header(report: report, periodLabel: _periodLabel),
+                ),
               ),
               SizedBox(height: dpi.space(12)),
               PeriodFilterBar(
@@ -207,13 +224,7 @@ class _FiscalViewState extends ConsumerState<FiscalView> {
               ),
               SizedBox(height: dpi.space(10)),
               Expanded(
-                child: Builder(builder: (context) {
-                  if (loading) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (snapshot.hasError) {
-                    return _centered(context, 'No se pudo cargar el reporte fiscal.', danger: true);
-                  }
+                child: ReportBody<FiscalReport>(controller: _report, errorMessage: 'No se pudo cargar el reporte fiscal.', builder: (context, report) {
                   if (report.documentCount == 0 && report.cancelledCount == 0) {
                     return _centered(context, 'No se emitieron comprobantes en este periodo.');
                   }
@@ -242,7 +253,7 @@ class _FiscalViewState extends ConsumerState<FiscalView> {
     );
   }
 
-  Widget _centered(BuildContext context, String text, {bool danger = false}) {
+  Widget _centered(BuildContext context, String text) {
     final dpi = DpiScale.of(context);
     return Center(
       child: Padding(
@@ -250,9 +261,7 @@ class _FiscalViewState extends ConsumerState<FiscalView> {
         child: Text(
           text,
           textAlign: TextAlign.center,
-          style: danger
-              ? TextStyle(color: MangoThemeFactory.danger)
-              : Theme.of(context).textTheme.bodySmall,
+          style: Theme.of(context).textTheme.bodySmall,
         ),
       ),
     );

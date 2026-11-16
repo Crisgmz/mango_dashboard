@@ -2,23 +2,26 @@ import 'package:flutter/material.dart';
 
 import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/responsive/dpi_scale.dart';
+import '../../../data/dashboard/working_days.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../theme/theme_data_factory.dart';
 
 /// Projects month-end performance per product based on month-to-date pace.
 ///
-/// Math: `projected = current * (daysInMonth / daysElapsed)` for both
-/// [TopProduct.amount] and [TopProduct.quantity].
+/// Math: `projected = current * (workingDaysInMonth / workingDaysElapsed)` for
+/// both [TopProduct.amount] and [TopProduct.quantity]; only [workingDays] count.
 class ProductProjectionCard extends StatelessWidget {
   const ProductProjectionCard({
     super.key,
     required this.products,
     this.maxItems = 5,
+    this.workingDays = kAllWeekdays,
     DateTime? now,
   }) : _nowOverride = now;
 
   final List<TopProduct> products;
   final int maxItems;
+  final Set<int> workingDays;
   final DateTime? _nowOverride;
 
   @override
@@ -27,9 +30,13 @@ class ProductProjectionCard extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final now = _nowOverride ?? DateTime.now();
 
-    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
-    final daysElapsed = now.day;
-    final scale = daysElapsed > 0 ? daysInMonth / daysElapsed : 1.0;
+    final days = monthWorkingDays(
+      year: now.year,
+      month: now.month,
+      workingDays: workingDays,
+      throughDay: now.day,
+    );
+    final scale = days.total / (days.elapsed < 1 ? 1 : days.elapsed);
 
     if (products.isEmpty) return const SizedBox.shrink();
 

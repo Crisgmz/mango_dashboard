@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../domain/dashboard/dashboard_models.dart';
+import '../dashboard/report_load.dart';
 import 'cash_close_notes.dart';
 
 class CashRegisterDataService {
@@ -535,7 +536,7 @@ class CashRegisterDataService {
 
     List<dynamic> rows;
     try {
-      rows = await _client
+      rows = await ReportRequestThrottle.run(() => _client
           .from('cash_transactions')
           .select('$baseSelect, reason_code, cash_transaction_reasons(label)')
           .eq('cash_register_sessions.cash_registers.business_id', businessId)
@@ -543,10 +544,10 @@ class CashRegisterDataService {
           .gte('created_at', startIso)
           .lt('created_at', endIso)
           .order('created_at', ascending: false)
-          .limit(1000);
+          .limit(1000));
     } on PostgrestException {
       // Backend sin la migración del módulo pro de caja.
-      rows = await _client
+      rows = await ReportRequestThrottle.run(() => _client
           .from('cash_transactions')
           .select(baseSelect)
           .eq('cash_register_sessions.cash_registers.business_id', businessId)
@@ -554,7 +555,7 @@ class CashRegisterDataService {
           .gte('created_at', startIso)
           .lt('created_at', endIso)
           .order('created_at', ascending: false)
-          .limit(1000);
+          .limit(1000));
     }
 
     final data = List<Map<String, dynamic>>.from(rows);

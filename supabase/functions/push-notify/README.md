@@ -97,6 +97,9 @@ en `mangospos`; prueba local `mangospos/supabase/tests/notification_events_local
   - orden anulada con algo en cocina → "Orden anulada"; venta cobrada anulada
     → "Venta anulada" (uno por orden). Mesa vacía liberada → sin aviso.
   - anulación parcial (una subcuenta / un NCF) → "Venta anulada".
+  - cortesía o descuento que pone una persona (20261020_0003) → "Cortesía" /
+    "Descuento aplicado"; un descuento repartido en la cuenta es un solo
+    aviso. Promos automáticas y ofertas no avisan.
 - El INSERT llama a esta función por `pg_net` con
   `{"kind":"notification_event","event_id":…}` y el bearer service_role de
   `private.dashboard_cron_config` (sección 6; sin esa config no hay push, pero
@@ -107,7 +110,9 @@ en `mangospos`; prueba local `mangospos/supabase/tests/notification_events_local
 - Reintento: el cron `notification_events_push_retry` (cada 2 min) manda
   `{"kind":"notification_event_sweep"}` si hay avisos de más de 1 minuto sin
   `pushed_at` (llamada perdida, función reiniciando).
-- Preferencias: `item_voided` (producto eliminado) y `order_voided` (orden o
-  venta anulada).
+- Preferencias: `item_voided` (producto eliminado o reducido), `order_voided`
+  (orden o venta anulada), `item_courtesy` (cortesía) e `item_discount`
+  (descuento). Tipos nuevos no requieren redeploy: la función toma título,
+  cuerpo y clave de la fila.
 - La migración elimina el trigger viejo `push_order_item_void` (un push por
   cada ítem en 'void').

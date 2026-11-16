@@ -50,9 +50,10 @@ class NotificationService {
 
     dev.log('[NotificationService] Subscribing for business: $businessId');
 
-    // 1. Productos quitados después de cocina y anulaciones. La base decide
-    //    qué avisa (triggers de notification_events, migración
-    //    20261007_0001): los borradores y las mesas vacías no llegan aquí.
+    // 1. Productos quitados o reducidos después de cocina, cortesías,
+    //    descuentos y anulaciones. La base decide qué avisa (triggers de
+    //    notification_events, migraciones 20261007_0001 y 20261020_0003): los
+    //    borradores y las mesas vacías no llegan aquí.
     final eventsCh = _client.channel('notif_events_$businessId');
     eventsCh.onPostgresChanges(
       event: PostgresChangeEvent.insert,
@@ -188,6 +189,10 @@ class NotificationService {
     switch (NotificationEventType.fromKey(key ?? '')) {
       case NotificationEventType.itemVoided:
         return NotificationType.itemVoided;
+      case NotificationEventType.itemCourtesy:
+        return NotificationType.itemCourtesy;
+      case NotificationEventType.itemDiscount:
+        return NotificationType.itemDiscount;
       case NotificationEventType.orderVoided:
         return NotificationType.orderVoided;
       default:

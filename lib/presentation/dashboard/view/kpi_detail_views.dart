@@ -7,16 +7,21 @@ import '../../../core/formatters/mango_formatters.dart';
 import '../../../core/date/date_range_utils.dart';
 import '../../../core/responsive/dpi_scale.dart';
 import '../../../data/dashboard/business_day_service.dart';
+import '../../../data/dashboard/report_result_cache.dart';
 import '../../../data/cash_register/reporte_z_pdf_builder.dart';
 import '../../../data/export/report_export_service.dart';
 import '../../../domain/dashboard/dashboard_models.dart';
 import '../../../core/auth/role_mapper.dart';
 import '../../auth/viewmodel/auth_gate_view_model.dart';
 import '../viewmodel/cash_register_view_model.dart';
+import '../viewmodel/report_load_controller.dart';
 import '../../theme/theme_data_factory.dart';
 import '../widgets/cash_movement_dialog.dart';
 import '../widgets/growth_chip.dart';
 import '../widgets/period_filter_bar.dart';
+import '../widgets/report_loading.dart';
+
+typedef _TicketsResult = ({double totalSales, List<TicketItem> tickets});
 
 /// Ventas del día - lista de todos los tickets/pagos
 class SalesDetailView extends ConsumerStatefulWidget {
@@ -37,10 +42,11 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
   int _cutoffHour = BusinessDayService.cachedCutoffHour;
   String _query = '';
 
-  late List<TicketItem> _tickets;
-  late double _totalSales;
-  bool _loading = false;
-  String? _error;
+  late final ReportLoadController<_TicketsResult> _report =
+      ReportLoadController<_TicketsResult>()..addListener(_onReportChanged);
+
+  List<TicketItem> get _tickets => _report.data?.tickets ?? const [];
+  double get _totalSales => _report.data?.totalSales ?? 0;
 
   @override
   void initState() {
@@ -50,37 +56,33 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
         DateTime.now().subtract(const Duration(days: 1));
     _end = widget.summary.periodEnd ?? DateTime.now();
     _periodLabel = periodLabelFor(widget.summary.filter);
-    _tickets = widget.summary.tickets;
-    _totalSales = widget.summary.totalSales;
+    // El periodo inicial ya viene del dashboard: no se consulta.
+    _report.seed(
+      reportCacheKey('tickets', widget.summary.profile.businessId, _start, _end),
+      (totalSales: widget.summary.totalSales, tickets: widget.summary.tickets),
+    );
   }
 
-  Future<void> _reload() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final businessId = widget.summary.profile.businessId;
-      final result = await ref
+  @override
+  void dispose() {
+    _report.dispose();
+    super.dispose();
+  }
+
+  void _onReportChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _reload() {
+    final businessId = widget.summary.profile.businessId;
+    final start = _start;
+    final end = _end;
+    _report.load(
+      key: reportCacheKey('tickets', businessId, start, end),
+      fetch: () => ref
           .read(dashboardDataServiceProvider)
-          .loadTicketsForPeriod(
-            businessId: businessId,
-            start: _start,
-            end: _end,
-          );
-      if (!mounted) return;
-      setState(() {
-        _tickets = result.tickets;
-        _totalSales = result.totalSales;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = 'No se pudo cargar las ventas.';
-      });
-    }
+          .loadTicketsForPeriod(businessId: businessId, start: start, end: end),
+    );
   }
 
   void _applyPeriod(DetailPeriod period) {
@@ -223,7 +225,7 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
         centerTitle: false,
         actions: [
           ExportMenuButton(
-            enabled: _tickets.isNotEmpty,
+            enabled: !_report.isStale && _tickets.isNotEmpty,
             onExportCsv: _exportCsv,
             onExportPdf: _exportPdf,
           ),
@@ -238,10 +240,13 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
               dpi.space(16),
               0,
             ),
-            child: _SalesSummaryHeader(
-              totalSales: _totalSales,
-              totalTickets: tickets.length,
-              periodLabel: _periodLabel,
+            child: ReportStaleFade(
+              controller: _report,
+              child: _SalesSummaryHeader(
+                totalSales: _totalSales,
+                totalTickets: tickets.length,
+                periodLabel: _periodLabel,
+              ),
             ),
           ),
           SizedBox(height: dpi.space(12)),
@@ -276,23 +281,10 @@ class _SalesDetailViewState extends ConsumerState<SalesDetailView> {
           ),
           SizedBox(height: dpi.space(10)),
           Expanded(
-            child: Builder(
-              builder: (context) {
-                if (_loading) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (_error != null) {
-                  return Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(dpi.space(20)),
-                      child: Text(
-                        _error!,
-                        style: TextStyle(color: MangoThemeFactory.danger),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  );
-                }
+            child: ReportBody<_TicketsResult>(
+              controller: _report,
+              errorMessage: 'No se pudo cargar las ventas.',
+              builder: (context, _) {
                 if (tickets.isEmpty) {
                   return Center(
                     child: Text(
@@ -3189,9 +3181,10 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
   DetailPeriod _period = DetailPeriod.initial;
   DateTimeRange? _customRange;
   int _cutoffHour = BusinessDayService.cachedCutoffHour;
-  late List<TopProduct> _products;
-  bool _loading = false;
-  String? _error;
+  late final ReportLoadController<List<TopProduct>> _report =
+      ReportLoadController<List<TopProduct>>()..addListener(_onReportChanged);
+
+  List<TopProduct> get _products => _report.data ?? const [];
 
   @override
   void initState() {
@@ -3201,34 +3194,33 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
         DateTime.now().subtract(const Duration(days: 1));
     _end = widget.summary.periodEnd ?? DateTime.now();
     _periodLabel = periodLabelFor(widget.summary.filter);
-    _products = widget.summary.topProducts;
+    // El periodo inicial ya viene del dashboard: no se consulta.
+    _report.seed(
+      reportCacheKey('top_products', widget.summary.profile.businessId, _start, _end),
+      widget.summary.topProducts,
+    );
   }
 
-  Future<void> _reload() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final result = await ref
+  @override
+  void dispose() {
+    _report.dispose();
+    super.dispose();
+  }
+
+  void _onReportChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _reload() {
+    final businessId = widget.summary.profile.businessId;
+    final start = _start;
+    final end = _end;
+    _report.load(
+      key: reportCacheKey('top_products', businessId, start, end),
+      fetch: () => ref
           .read(dashboardDataServiceProvider)
-          .loadTopProductsForPeriod(
-            businessId: widget.summary.profile.businessId,
-            start: _start,
-            end: _end,
-          );
-      if (!mounted) return;
-      setState(() {
-        _products = result;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _error = 'No se pudo cargar los productos.';
-      });
-    }
+          .loadTopProductsForPeriod(businessId: businessId, start: start, end: end),
+    );
   }
 
   void _applyPeriod(DetailPeriod period) {
@@ -3386,7 +3378,7 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
         centerTitle: false,
         actions: [
           ExportMenuButton(
-            enabled: _products.isNotEmpty,
+            enabled: !_report.isStale && _products.isNotEmpty,
             onExportCsv: _exportCsv,
             onExportPdf: _exportPdf,
           ),
@@ -3394,11 +3386,14 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
       ),
       body: Column(
         children: [
-          _TopProductsHeader(
-            totalProducts: _products.length,
-            totalAmount: totalAmount,
-            totalUnits: totalUnits,
-            filterLabel: _periodLabel,
+          ReportStaleFade(
+            controller: _report,
+            child: _TopProductsHeader(
+              totalProducts: _products.length,
+              totalAmount: totalAmount,
+              totalUnits: totalUnits,
+              filterLabel: _periodLabel,
+            ),
           ),
           PeriodFilterBar(
             selected: _period,
@@ -3467,23 +3462,10 @@ class _TopProductsDetailViewState extends ConsumerState<TopProductsDetailView> {
             ),
           ),
           Expanded(
-            child: Builder(
-              builder: (context) {
-                if (_loading) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (_error != null) {
-                  return Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(dpi.space(20)),
-                      child: Text(
-                        _error!,
-                        style: TextStyle(color: MangoThemeFactory.danger),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  );
-                }
+            child: ReportBody<List<TopProduct>>(
+              controller: _report,
+              errorMessage: 'No se pudo cargar los productos.',
+              builder: (context, _) {
                 if (filtered.isEmpty) {
                   return Center(
                     child: Text(
